@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  M09 Android 网络验收策略：Legado 兼容书源可能仍使用 HTTP，因此基础配置允许明文流量。
+  仅调试构建额外信任用户安装证书，便于用户自行抓包；正式构建仍只使用系统信任证书。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+            <certificates src="system" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

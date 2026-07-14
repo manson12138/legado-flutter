@@ -1,0 +1,9 @@
+# M1 不引入外部 lint 包，避免仅为工程骨架增加第三方依赖。
+analyzer:
+  exclude:
+    - build/**
+
+linter:
+  rules:
+    avoid_print: true
+    prefer_final_locals: true
