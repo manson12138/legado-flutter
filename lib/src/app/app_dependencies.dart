@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../api/cookie/cookie_manager.dart';
 import '../api/http/dio_http_client.dart';
+import '../api/http/app_dio_log_interceptor.dart';
 import '../api/http/http_contract.dart';
 import '../api/http/response_decoder.dart';
 import '../api/http/source_url_resolver.dart';
@@ -46,6 +47,7 @@ import '../domain/usecase/replace_books_group_use_case.dart';
 import '../domain/usecase/save_book_chapters_use_case.dart';
 import '../domain/usecase/save_reading_progress_use_case.dart';
 import '../help/logging/app_logger.dart';
+import '../help/logging/app_log_manager.dart';
 import '../model/web_book/standard_source_parser.dart';
 import '../model/web_book/standard_source_service.dart';
 import '../model/web_book/book_detail_service.dart';
@@ -71,6 +73,7 @@ final class AppDependencies {
   /// 创建不可变的应用依赖容器。
   const AppDependencies({
     required this.logger,
+    required this.logManager,
     required this.bookSourceGateway,
     required this.bookshelfGateway,
     required this.bookGroupGateway,
@@ -99,9 +102,12 @@ final class AppDependencies {
   });
 
   /// 根据启动阶段已经创建的基础设施实例组装应用依赖。
-  factory AppDependencies.create({required AppLogger logger}) {
+  factory AppDependencies.create({
+    required AppLogger logger,
+    required AppLogManager logManager,
+  }) {
     /// M2 Flutter 独立数据库，首次数据操作时惰性打开。
-    final LegadoDatabase database = LegadoDatabase();
+    final LegadoDatabase database = LegadoDatabase(logger: logger);
     /// 书籍表 DAO，只在数据组合根内创建，不向 UI 暴露。
     final BookDao bookDao = BookDao(database);
     /// 章节表 DAO，只在数据组合根内创建，不向 UI 暴露。
@@ -130,9 +136,10 @@ final class AppDependencies {
     final BookSourceRepository bookSourceRepository = BookSourceRepository(
       database,
       bookSourceDao,
+      cacheDao,
       const BookSourceImportDecoder(),
     );
-    /// 不安装敏感日志拦截器的统一 Dio 实例。
+    /// 统一 Dio 实例；随后安装会遮盖认证信息的应用日志拦截器。
     final Dio dio = Dio(
       BaseOptions(
         connectTimeout: const Duration(seconds: 15),
@@ -140,6 +147,8 @@ final class AppDependencies {
         receiveTimeout: const Duration(seconds: 60),
       ),
     );
+    /// 全部 Dio 请求、响应和异常统一写入网络专用 Tag。
+    dio.interceptors.add(AppDioLogInterceptor(logger: logger));
     /// 共享 Cookie 管理器；WebView 桥在 M4 替换。
     final LegadoCookieManager cookieManager = LegadoCookieManager(
       cookieDao,
@@ -154,13 +163,6 @@ final class AppDependencies {
           responseDecoder: const HttpResponseDecoder(),
           logger: logger,
         );
-    /// 普通书源四段链路服务。
-    final StandardBookSourceService standardBookSourceService = StandardBookSourceService(
-      httpClient,
-      const HttpResponseDecoder(),
-      const SourceUrlResolver(),
-      const StandardBookSourceParser(),
-    );
     /// M4 Legado、网络、Cookie、缓存与 Java 白名单统一桥。
     final LegadoScriptBridge scriptBridge = LegadoScriptBridge(
       httpClient,
@@ -175,6 +177,15 @@ final class AppDependencies {
     final JsEnginePool jsEnginePool = JsEnginePool(JsfJsEngineFactory(scriptBridge));
     /// M4 规则层 JavaScript 统一服务。
     final LegadoJavaScriptService javaScriptService = LegadoJavaScriptService(jsEnginePool);
+    /// 普通规则保持 isolate 快路径，脚本规则按 Android 顺序接入 M4 QuickJS 的四段链路服务。
+    final StandardBookSourceService standardBookSourceService = StandardBookSourceService(
+      httpClient,
+      const HttpResponseDecoder(),
+      const SourceUrlResolver(),
+      StandardBookSourceParser(javaScriptService: javaScriptService),
+      javaScriptService,
+      logger,
+    );
     /// M06 搜索历史 Repository，通过缓存表保持独立数据边界。
     final SearchHistoryRepository searchHistoryRepository = SearchHistoryRepository(cacheDao);
     /// M08 正文缓存、稳定锚点、显示配置、书签和替换规则 Repository。
@@ -210,10 +221,12 @@ final class AppDependencies {
     final BookDetailService bookDetailService = BookDetailService(
       sourceGateway: bookSourceRepository,
       standardService: standardBookSourceService,
+      logger: logger,
     );
 
     return AppDependencies(
       logger: logger,
+      logManager: logManager,
       bookSourceGateway: bookSourceRepository,
       bookshelfGateway: bookRepository,
       bookGroupGateway: bookGroupRepository,
@@ -244,6 +257,9 @@ final class AppDependencies {
 
   /// 应用统一日志接口，页面和领域代码只依赖抽象而不依赖输出实现。
   final AppLogger logger;
+
+  /// 设置页使用的日志文件查看、删除和 ADB 回显能力。
+  final AppLogManager logManager;
 
   /// 书源领域边界，供后续网络和规则 UseCase 通过构造参数使用。
   final BookSourceGateway bookSourceGateway;
@@ -323,6 +339,7 @@ final class AppDependencies {
       sourceGateway: bookSourceGateway,
       standardService: standardBookSourceService,
       cancellationTokenFactory: createHttpCancellationToken,
+      logger: logger,
     );
   }
 
@@ -345,6 +362,7 @@ final class AppDependencies {
       localBookContentService: localBookContentService,
       textProcessor: const ReaderTextProcessor(),
       cancellationTokenFactory: createHttpCancellationToken,
+      logger: logger,
     );
   }
 

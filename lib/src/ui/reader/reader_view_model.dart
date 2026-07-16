@@ -13,6 +13,7 @@ import '../../domain/usecase/load_book_chapters_use_case.dart';
 import '../../domain/usecase/restore_reading_progress_use_case.dart';
 import '../../domain/usecase/save_reading_progress_use_case.dart';
 import '../../help/error/app_result.dart';
+import '../../help/logging/app_logger.dart';
 import '../../model/reader/read_book_coordinator.dart';
 import 'reader_contract.dart';
 
@@ -21,6 +22,7 @@ final class ReaderViewModel {
   /// 创建页面生命周期独占的阅读器 ViewModel。
   ReaderViewModel({
     required this.bookUrl,
+    this.initialChapterIndex,
     required BookshelfGateway bookshelfGateway,
     required LoadBookChaptersUseCase loadBookChapters,
     required RestoreReadingProgressUseCase restoreReadingProgress,
@@ -28,16 +30,21 @@ final class ReaderViewModel {
     required BookmarkGateway bookmarkGateway,
     required ReaderCacheGateway cacheGateway,
     required ReadBookCoordinator coordinator,
+    required AppLogger logger,
   }) : _bookshelfGateway = bookshelfGateway,
        _loadBookChapters = loadBookChapters,
        _restoreReadingProgress = restoreReadingProgress,
        _saveReadingProgress = saveReadingProgress,
        _bookmarkGateway = bookmarkGateway,
        _cacheGateway = cacheGateway,
-       _coordinator = coordinator;
+       _coordinator = coordinator,
+       _logger = logger;
 
   /// 路由提供的稳定书籍 URL。
   final String bookUrl;
+
+  /// 详情目录入口指定的初始章节索引；为空时恢复稳定锚点或旧进度。
+  final int? initialChapterIndex;
 
   /// 书架书读取边界。
   final BookshelfGateway _bookshelfGateway;
@@ -59,6 +66,9 @@ final class ReaderViewModel {
 
   /// 对应 Android ReadBook 的正文加载协调器。
   final ReadBookCoordinator _coordinator;
+
+  /// 【搜书诊断日志】项目统一日志接口，用于记录阅读入口和章节状态。
+  final AppLogger _logger;
 
   /// 当前完整页面状态。
   ReaderUiState _state = ReaderUiState();
@@ -140,7 +150,13 @@ final class ReaderViewModel {
 
   /// 初始化书籍、目录、配置、稳定锚点和兼容进度。
   Future<void> _initialize() async {
+    /// 【搜书诊断日志】阅读器初始化不可逆书籍标识。
+    final String bookId = appLogDiagnosticId(bookUrl);
+    /// 【搜书诊断日志】阅读器初始化耗时计时器。
+    final Stopwatch stopwatch = Stopwatch()..start();
+    _logger.info(tag: bookReaderEntryLogTag, message: '阅读器初始化开始 bookId=$bookId');
     if (bookUrl.isEmpty) {
+      _logger.error(tag: bookReaderEntryLogTag, message: '阅读器初始化失败 reason=emptyBookUrl');
       _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '阅读入口缺少书籍 URL'));
       return;
     }
@@ -148,18 +164,31 @@ final class ReaderViewModel {
       /// 当前书架书。
       final Book? book = await _bookshelfGateway.getBook(bookUrl);
       if (book == null) {
+        _logger.warning(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器初始化终止 bookId=$bookId reason=bookNotInBookshelf',
+        );
         _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '书籍已不在书架中'));
         return;
       }
       /// 持久目录读取结果。
       final AppResult<List<BookChapter>> chaptersResult = await _loadBookChapters.execute(bookUrl);
       if (chaptersResult is AppFailure<List<BookChapter>>) {
+        _logger.error(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器目录读取失败 bookId=$bookId',
+          error: chaptersResult.error,
+        );
         _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: chaptersResult.error.message));
         return;
       }
       /// 已确认成功的目录。
       final List<BookChapter> chapters = (chaptersResult as AppSuccess<List<BookChapter>>).value;
       if (chapters.isEmpty) {
+        _logger.warning(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器初始化终止 bookId=$bookId reason=emptyToc',
+        );
         _emit(_state.copyWith(book: book, loadState: ReaderLoadState.error, errorMessage: '书籍目录为空，请先在详情页刷新目录'));
         return;
       }
@@ -168,6 +197,11 @@ final class ReaderViewModel {
         (BookChapter chapter) => !chapter.isVolume,
       );
       if (!hasReadableChapter) {
+        _logger.warning(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器初始化终止 bookId=$bookId reason=noReadableChapter '
+              'chapterCount=${chapters.length}',
+        );
         _emit(_state.copyWith(book: book, loadState: ReaderLoadState.error, errorMessage: '目录中没有可阅读章节'));
         return;
       }
@@ -181,10 +215,26 @@ final class ReaderViewModel {
       final ReadingProgress? progress = progressResult is AppSuccess<ReadingProgress?>
           ? progressResult.value
           : null;
-      /// 优先通过章节 URL 恢复，找不到时回退章节索引。
-      final int chapterIndex = _resolveInitialChapter(chapters, stableAnchor, progress);
+      /// 优先使用路由指定章节，其次通过章节 URL 恢复，最后回退旧索引。
+      final int chapterIndex = _resolveInitialChapter(
+        chapters,
+        stableAnchor,
+        progress,
+        initialChapterIndex,
+      );
       /// 初始字符位置。
-      final int characterOffset = stableAnchor?.characterOffset ?? progress?.chapterPos ?? 0;
+      final int characterOffset = initialChapterIndex == null
+          ? stableAnchor?.characterOffset ?? progress?.chapterPos ?? 0
+          : 0;
+      /// 【搜书诊断日志】记录恢复策略和位置，不记录附近正文摘要。
+      _logger.info(
+        tag: bookReaderEntryLogTag,
+        message: '阅读位置解析完成 bookId=$bookId chapterCount=${chapters.length} '
+            'chapterIndex=$chapterIndex characterOffset=$characterOffset '
+            'usedRouteInitialChapter=${initialChapterIndex != null} '
+            'usedStableAnchor=${initialChapterIndex == null && stableAnchor != null} '
+            'usedLegacyProgress=${initialChapterIndex == null && stableAnchor == null && progress != null}',
+      );
       _pendingCharacterOffset = math.max(0, characterOffset);
       _emit(
         _state.copyWith(
@@ -205,7 +255,18 @@ final class ReaderViewModel {
       _subscribeBookmarks(book);
       _effectController.add(EnterReaderSystemEffect(config.keepScreenOn));
       await _loadCurrentChapter();
-    } on Object {
+      _logger.info(
+        tag: bookReaderEntryLogTag,
+        message: '阅读器初始化完成 bookId=$bookId chapterIndex=${_state.currentChapterIndex} '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    } on Object catch (error, stackTrace) {
+      _logger.error(
+        tag: bookReaderEntryLogTag,
+        message: '阅读器初始化异常 bookId=$bookId elapsedMs=${stopwatch.elapsedMilliseconds}',
+        error: error,
+        stackTrace: stackTrace,
+      );
       _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '初始化阅读器失败'));
     }
   }
@@ -215,7 +276,22 @@ final class ReaderViewModel {
     List<BookChapter> chapters,
     ReaderPositionAnchor? anchor,
     ReadingProgress? progress,
+    int? routeChapterIndex,
   ) {
+    if (routeChapterIndex != null) {
+      /// 路由指定章节越界时夹取到目录范围内，避免异常中断阅读入口。
+      final int routePreferred = routeChapterIndex.clamp(0, chapters.length - 1).toInt();
+      if (!chapters[routePreferred].isVolume) {
+        return routePreferred;
+      }
+      /// 路由落到卷标题时，打开其后的第一个可阅读章节。
+      final int routeNext = chapters.indexWhere(
+        (BookChapter chapter) => chapter.index >= routePreferred && !chapter.isVolume,
+      );
+      if (routeNext >= 0) {
+        return routeNext;
+      }
+    }
     if (anchor != null) {
       /// 与稳定章节地址完全一致的位置。
       final int stableIndex = chapters.indexWhere(
@@ -261,11 +337,24 @@ final class ReaderViewModel {
     /// 当前章节。
     final BookChapter? chapter = _state.currentChapter;
     if (book == null || chapter == null) {
+      _logger.warning(
+        tag: bookReaderContentLogTag,
+        message: '章节加载被拒绝 hasBook=${book != null} hasChapter=${chapter != null}',
+      );
       return;
     }
     _loadGeneration += 1;
     /// 本次章节加载世代。
     final int generation = _loadGeneration;
+    /// 【搜书诊断日志】当前章节不可逆标识。
+    final String chapterId = appLogDiagnosticId(chapter.url);
+    /// 【搜书诊断日志】当前章节从 ViewModel 发起到可渲染的耗时计时器。
+    final Stopwatch stopwatch = Stopwatch()..start();
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '可见章节加载开始 generation=$generation chapterId=$chapterId '
+          'chapterIndex=${_state.currentChapterIndex} forceRefresh=$forceRefresh',
+    );
     _emit(
       _state.copyWith(
         loadState: ReaderLoadState.loading,
@@ -283,6 +372,11 @@ final class ReaderViewModel {
         forceRefresh: forceRefresh,
       );
       if (_disposed || generation != _loadGeneration || _state.currentChapter?.url != chapter.url) {
+        _logger.debug(
+          tag: bookReaderContentLogTag,
+          message: '忽略旧章节结果 generation=$generation currentGeneration=$_loadGeneration '
+              'chapterId=$chapterId disposed=$_disposed',
+        );
         return;
       }
       /// 根据附近正文修正正文变化后的字符位置。
@@ -299,6 +393,12 @@ final class ReaderViewModel {
           clearError: true,
         ),
       );
+      _logger.info(
+        tag: bookReaderContentLogTag,
+        message: '可见章节加载完成 generation=$generation chapterId=$chapterId '
+            'textLength=${content.text.length} fromCache=${content.fromCache} '
+            'restoredOffset=$restoredOffset elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
       unawaited(_cacheGateway.savePositionAnchor(bookUrl, anchor));
       unawaited(
         _coordinator.preloadAdjacent(
@@ -310,10 +410,23 @@ final class ReaderViewModel {
       );
     } on ReadBookException catch (error) {
       if (generation == _loadGeneration) {
+        _logger.error(
+          tag: bookReaderContentLogTag,
+          message: '可见章节加载失败 generation=$generation chapterId=$chapterId '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+          error: error,
+        );
         _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: error.message));
       }
-    } on Object {
+    } on Object catch (error, stackTrace) {
       if (generation == _loadGeneration) {
+        _logger.error(
+          tag: bookReaderContentLogTag,
+          message: '可见章节加载异常 generation=$generation chapterId=$chapterId '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+          error: error,
+          stackTrace: stackTrace,
+        );
         _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '加载章节正文失败'));
       }
     }
@@ -382,6 +495,11 @@ final class ReaderViewModel {
 
   /// 切换到指定方向的下一可阅读章节。
   Future<void> _openRelativeChapter(int direction) async {
+    /// 【搜书诊断日志】记录上下章操作和当前索引。
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '用户切换相邻章节 direction=$direction currentIndex=${_state.currentChapterIndex}',
+    );
     /// 查找中的章节索引。
     int index = _state.currentChapterIndex + direction;
     while (index >= 0 && index < _state.chapters.length) {
@@ -397,16 +515,30 @@ final class ReaderViewModel {
   /// 保存当前章后打开目标章节，切换时字符位置默认从章首开始。
   Future<void> _openChapter(int chapterIndex, {int characterOffset = 0}) async {
     if (chapterIndex < 0 || chapterIndex >= _state.chapters.length) {
+      _logger.warning(
+        tag: bookReaderContentLogTag,
+        message: '打开章节被拒绝 reason=indexOutOfRange targetIndex=$chapterIndex '
+            'chapterCount=${_state.chapters.length}',
+      );
       _effectController.add(const ShowReaderMessageEffect('目标章节不存在'));
       return;
     }
     /// 目标章节。
     final BookChapter chapter = _state.chapters[chapterIndex];
     if (chapter.isVolume) {
+      _logger.warning(
+        tag: bookReaderContentLogTag,
+        message: '打开章节被拒绝 reason=volumeTitle targetIndex=$chapterIndex',
+      );
       _effectController.add(const ShowReaderMessageEffect('卷标题不能直接阅读'));
       return;
     }
     await _saveProgress();
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '打开目标章节 targetIndex=$chapterIndex '
+          'chapterId=${appLogDiagnosticId(chapter.url)} characterOffset=$characterOffset',
+    );
     _pendingCharacterOffset = math.max(0, characterOffset);
     _emit(
       _state.copyWith(
@@ -452,7 +584,20 @@ final class ReaderViewModel {
     );
     await _cacheGateway.savePositionAnchor(bookUrl, anchor);
     if (result is AppFailure<bool>) {
+      _logger.error(
+        tag: bookReaderEntryLogTag,
+        message: '阅读进度保存失败 bookId=${appLogDiagnosticId(bookUrl)} '
+            'chapterIndex=${_state.currentChapterIndex}',
+        error: result.error,
+      );
       _effectController.add(ShowReaderMessageEffect(result.error.message));
+    } else {
+      /// 【搜书诊断日志】滚动节流后只记录稳定位置，不记录正文摘要。
+      _logger.debug(
+        tag: bookReaderEntryLogTag,
+        message: '阅读进度保存成功 bookId=${appLogDiagnosticId(bookUrl)} '
+            'chapterIndex=${_state.currentChapterIndex} characterOffset=${anchor.characterOffset}',
+      );
     }
   }
 
@@ -535,6 +680,11 @@ final class ReaderViewModel {
       return;
     }
     _disposed = true;
+    _logger.info(
+      tag: bookReaderEntryLogTag,
+      message: '阅读器资源释放 bookId=${appLogDiagnosticId(bookUrl)} '
+          'chapterIndex=${_state.currentChapterIndex}',
+    );
     _anchorUpdateTimer?.cancel();
     _progressSaveTimer?.cancel();
     _bookmarkSubscription?.cancel();

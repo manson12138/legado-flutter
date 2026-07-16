@@ -94,6 +94,18 @@ final class JsfJsEngine implements JsEngine {
         scriptName: request.scriptName,
       );
     }
+    if (hostContext is LegadoScriptContext) {
+      try {
+        await _bridge.prepareContext(hostContext);
+      } catch (_) {
+        throw JsEngineException(
+          kind: JsFailureKind.bridge,
+          message: '读取书源脚本运行变量失败',
+          scriptName: request.scriptName,
+          bridgeCalls: List<String>.unmodifiable(hostContext.bridgeCalls),
+        );
+      }
+    }
     _running = true;
     _activeContext = hostContext is LegadoScriptContext ? hostContext : null;
     _activeCancellationToken = request.cancellationToken;
@@ -121,8 +133,23 @@ final class JsfJsEngine implements JsEngine {
         );
       }
       return _convertResult(value);
-    } on JsEngineException {
-      rethrow;
+    } on JsEngineException catch (error) {
+      /// 【FLUTTER_JS_COMPAT_LOG】宿主桥执行期间累计的方法名和参数类型轨迹。
+      final List<String>? activeBridgeCalls = _activeContext?.bridgeCalls;
+      if (error.bridgeCalls.isNotEmpty ||
+          activeBridgeCalls == null ||
+          activeBridgeCalls.isEmpty) {
+        rethrow;
+      }
+      throw JsEngineException(
+        kind: error.kind,
+        message: error.message,
+        scriptName: error.scriptName,
+        line: error.line,
+        column: error.column,
+        stack: error.stack,
+        bridgeCalls: List<String>.unmodifiable(activeBridgeCalls),
+      );
     } on JsException catch (error) {
       throw _mapJsException(error, request.scriptName, request.cancellationToken);
     } catch (error) {
@@ -201,13 +228,54 @@ final class JsfJsEngine implements JsEngine {
     final List<Object?> methodArguments = arguments[2] is List
         ? List<Object?>.from(arguments[2] as List)
         : <Object?>[];
-    return _bridge.invoke(
-      context,
-      surface,
-      method,
-      methodArguments,
-      cancellationToken: _activeCancellationToken,
-    );
+    try {
+      /// 宿主桥原始返回值；同步 helper 保持同步，网络和数据库能力仍返回 Future。
+      final Object? value = _bridge.invoke(
+        context,
+        surface,
+        method,
+        methodArguments,
+        cancellationToken: _activeCancellationToken,
+      );
+      if (value is Future<dynamic>) {
+        return value.then<Map<String, Object?>>(
+          _bridgeSuccessEnvelope,
+          onError: (Object error, StackTrace _) {
+            return _bridgeFailureEnvelope(error);
+          },
+        );
+      }
+      return _bridgeSuccessEnvelope(value);
+    } catch (error) {
+      return _bridgeFailureEnvelope(error);
+    }
+  }
+
+  /// 把同步或异步宿主桥成功值包装为不会与普通业务 Map 混淆的结构化结果。
+  Map<String, Object?> _bridgeSuccessEnvelope(Object? value) {
+    return <String, Object?>{
+      '_legadoBridgeEnvelope': true,
+      'ok': true,
+      'value': value,
+    };
+  }
+
+  /// 把宿主桥异常收敛为安全错误分类，禁止 JSF 将 DartError 对象继续当业务值使用。
+  Map<String, Object?> _bridgeFailureEnvelope(Object error) {
+    if (error is JsEngineException) {
+      return <String, Object?>{
+        '_legadoBridgeEnvelope': true,
+        'ok': false,
+        'kind': error.kind.name,
+        'message': error.message,
+      };
+    }
+    return <String, Object?>{
+      '_legadoBridgeEnvelope': true,
+      'ok': false,
+      'kind': JsFailureKind.bridge.name,
+      'message': '宿主桥执行失败',
+    };
   }
 
   /// 包装脚本并安装 Legado 代理对象。
@@ -245,9 +313,42 @@ final class JsfJsEngine implements JsEngine {
       }
     });
   };
+  const __hostValue = (value) => {
+    if (Array.isArray(value)) return value.map(__hostValue);
+    if (!value || typeof value !== 'object' || !value._legadoHostType) return value;
+    return new Proxy(value, {
+      get: (target, property) => {
+        if (property === 'then') return undefined;
+        if (property in target) return target[property];
+        return (...args) => __callBridge(
+          'host:' + String(target._legadoHostType),
+          String(property),
+          [target, ...args],
+        );
+      }
+    });
+  };
+  const __unwrapBridge = (envelope) => {
+    if (!envelope || envelope._legadoBridgeEnvelope !== true) {
+      throw new Error('__LEGADO_BRIDGE_ERROR__bridge:宿主桥返回结构无效');
+    }
+    if (envelope.ok !== true) {
+      const kind = String(envelope.kind || 'bridge');
+      const message = String(envelope.message || '宿主桥执行失败');
+      throw new Error('__LEGADO_BRIDGE_ERROR__' + kind + ':' + message);
+    }
+    return __hostValue(envelope.value);
+  };
+  const __callBridge = (surface, method, args) => {
+    const envelope = __legadoBridge(surface, method, args);
+    if (envelope && typeof envelope.then === 'function') {
+      return envelope.then(__unwrapBridge);
+    }
+    return __unwrapBridge(envelope);
+  };
   const __proxy = (surface) => new Proxy({}, {
     get: (_, method) => (...args) => {
-      const value = __legadoBridge(surface, String(method), args);
+      const value = __callBridge(surface, String(method), args);
       if (surface === 'java' && ['connect', 'get', 'head', 'post'].includes(String(method))) {
         return Promise.resolve(value).then(__response);
       }
@@ -261,7 +362,7 @@ final class JsfJsEngine implements JsEngine {
     get: (target, property) => {
       if (['getVariable', 'setVariable', 'putVariable', 'getLoginHeader', 'putLoginHeader',
            'getLoginInfo', 'putLoginInfo', 'getKey', 'getTag'].includes(String(property))) {
-        return (...args) => __legadoBridge('source', String(property), args);
+        return (...args) => __callBridge('source', String(property), args);
       }
       const name = String(property);
       if (name.startsWith('get') && name.length > 3) {
@@ -275,7 +376,7 @@ final class JsfJsEngine implements JsEngine {
         throw new Error('source 只允许修改 variable');
       }
       target[property] = value;
-      __legadoBridge('source', 'setVariable', ['variable', String(value)]);
+      __callBridge('source', 'setVariable', [String(value)]);
       return true;
     }
   });
@@ -301,6 +402,20 @@ final class JsfJsEngine implements JsEngine {
   globalThis.Java = Object.freeze({
     type: (className) => __proxy('class:' + String(className))
   });
+  const __package = (parts) => new Proxy(function () {}, {
+    get: (_, property) => {
+      if (property === 'then') return undefined;
+      return __package([...parts, String(property)]);
+    },
+    apply: (_, __, args) => {
+      if (parts.length < 2) throw new Error('Packages 调用缺少类名或方法名');
+      const method = parts[parts.length - 1];
+      const className = parts.slice(0, -1).join('.');
+      return __callBridge('class:' + className, method, args);
+    }
+  });
+  globalThis.Packages = __package([]);
+  globalThis.org = __package(['org']);
   const __value = (0, eval)($encodedSource);
   return await __value;
 })()
@@ -342,12 +457,23 @@ final class JsfJsEngine implements JsEngine {
     JsCancellationToken? cancellationToken,
   ) {
     /// 经裁剪的小写错误文本。
-    final String text = _safeErrorText(error);
+    /// 【FLUTTER_JS_COMPAT_LOG】使用 JSF 原始消息，避免异常包装前缀干扰分类和行列定位。
+    final String text = _safeErrorText(error.message);
     /// 错误分类文本。
     final String lower = text.toLowerCase();
+    /// 结构化宿主桥错误标记；只包含固定分类和桥自身生成的安全消息。
+    final RegExpMatch? bridgeFailure = RegExp(
+      r'__LEGADO_BRIDGE_ERROR__([A-Za-z]+):',
+    ).firstMatch(text);
+    /// 宿主桥返回的固定失败分类；未知分类统一收敛为 bridge。
+    final JsFailureKind? bridgeFailureKind = bridgeFailure == null
+        ? null
+        : _bridgeFailureKind(bridgeFailure.group(1));
     /// 错误分类。
     final JsFailureKind kind = cancellationToken?.isCancelled == true
         ? JsFailureKind.cancelled
+        : bridgeFailureKind != null
+        ? bridgeFailureKind
         : lower.contains('timeout') || lower.contains('interrupt')
         ? JsFailureKind.timeout
         : lower.contains('memory')
@@ -357,12 +483,29 @@ final class JsfJsEngine implements JsEngine {
         : lower.contains('syntax')
         ? JsFailureKind.syntax
         : JsFailureKind.runtime;
+    /// 【FLUTTER_JS_COMPAT_LOG】QuickJS 错误文本中可选的脚本行列位置，供统一诊断日志定位。
+    final RegExpMatch? sourcePosition = RegExp(r':(\d+)(?::(\d+))?(?:\D|$)').firstMatch(text);
     return JsEngineException(
       kind: kind,
       message: kind == JsFailureKind.cancelled ? '脚本执行已取消' : 'JavaScript 执行失败',
       scriptName: scriptName,
+      line: int.tryParse(sourcePosition?.group(1) ?? ''),
+      column: int.tryParse(sourcePosition?.group(2) ?? ''),
       stack: text,
+      bridgeCalls: List<String>.unmodifiable(
+        _activeContext?.bridgeCalls ?? const <String>[],
+      ),
     );
+  }
+
+  /// 将 JavaScript 错误标记中的固定名称还原为宿主桥失败枚举。
+  JsFailureKind _bridgeFailureKind(String? value) {
+    for (final JsFailureKind kind in JsFailureKind.values) {
+      if (kind.name == value) {
+        return kind;
+      }
+    }
+    return JsFailureKind.bridge;
   }
 
   /// 裁剪错误文本并移除长字符串，降低正文或令牌进入报告的风险。

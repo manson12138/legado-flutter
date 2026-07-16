@@ -21,6 +21,12 @@ final class BookChapterDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.chapters,
+      where: 'bookUrl = ? orderBy=`index` ASC',
+      argumentCount: 1,
+    );
     /// 指定书籍的章节行。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.chapters,
@@ -40,6 +46,12 @@ final class BookChapterDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.chapters,
+      where: 'bookUrl = ? AND `index` = ? limit=1',
+      argumentCount: 2,
+    );
     /// 最多包含一章的索引查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.chapters,
@@ -78,6 +90,11 @@ final class BookChapterDao {
     /// 当前写入使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'BATCH_INSERT_REPLACE',
+      table: DatabaseTables.chapters,
+      itemCount: chapters.length,
+    );
     /// 将所有章节写入同一批次，保持顺序和约束检查集中执行。
     final Batch batch = writeExecutor.batch();
     for (final BookChapter chapter in chapters) {
@@ -101,6 +118,12 @@ final class BookChapterDao {
     /// 当前删除使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.chapters,
+      where: 'bookUrl = ?',
+      argumentCount: 1,
+    );
     await writeExecutor.delete(
       DatabaseTables.chapters,
       where: 'bookUrl = ?',

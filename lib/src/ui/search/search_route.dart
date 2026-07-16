@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../help/logging/app_logger.dart';
 import '../book_info/book_info_contract.dart';
 import 'search_contract.dart';
 import 'search_screen.dart';
@@ -35,6 +36,7 @@ final class _SearchRouteState extends State<SearchRoute> {
     _viewModel = SearchViewModel(
       coordinator: widget.dependencies.createBookSearchCoordinator(),
       historyGateway: widget.dependencies.searchHistoryGateway,
+      logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
   }
@@ -46,6 +48,13 @@ final class _SearchRouteState extends State<SearchRoute> {
     }
     switch (effect) {
       case OpenBookInfoEffect(group: final group, book: final book):
+        /// 【搜书诊断日志】记录搜索结果点击后真正执行详情页导航的边界。
+        widget.dependencies.logger.info(
+          tag: bookDetailLogTag,
+          message: '导航到书籍详情 candidateCount=${group.books.length} '
+              'bookId=${appLogDiagnosticId(book.bookUrl)} '
+              'sourceId=${appLogDiagnosticId(book.origin)}',
+        );
         Navigator.of(context).pushNamed(
           AppRoute.bookInfo,
           arguments: BookInfoRouteArguments(group: group, selectedBook: book),

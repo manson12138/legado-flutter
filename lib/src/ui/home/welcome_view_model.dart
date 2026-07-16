@@ -39,6 +39,8 @@ final class WelcomeViewModel {
         _effectController.add(const NavigateToBookshelfEffect());
       case OpenLocalBookImportIntent():
         _effectController.add(const NavigateToLocalBookImportEffect());
+      case OpenSettingsIntent():
+        _effectController.add(const NavigateToSettingsEffect());
     }
   }
 

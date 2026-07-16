@@ -41,6 +41,7 @@ final class BookSourceEditorDraft {
     required this.loginUrl,
     required this.loginUi,
     required this.loginCheckJs,
+    required this.variable,
     required this.comment,
   });
 
@@ -97,6 +98,9 @@ final class BookSourceEditorDraft {
 
   /// 登录检测脚本。
   final String loginCheckJs;
+
+  /// Android `source.getVariable()` 返回的书源自定义变量文本。
+  final String variable;
 
   /// 书源说明。
   final String comment;

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../ui/theme/app_theme.dart';
 import 'app_dependencies.dart';
 import 'app_error_boundary.dart';
+import 'app_navigation_observer.dart';
 import 'app_route.dart';
 import 'app_router.dart';
 
@@ -19,6 +20,10 @@ final class LegadoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     /// 路由器通过构造参数获得依赖，并在页面入口继续向下传递。
     final AppRouter router = AppRouter(dependencies: dependencies);
+    /// 全局路由观察器，统一记录所有 Navigator 页面跳转。
+    final AppNavigationObserver navigationObserver = AppNavigationObserver(
+      logger: dependencies.logger,
+    );
     return MaterialApp(
       title: 'Legado Flutter',
       debugShowCheckedModeBanner: false,
@@ -27,6 +32,7 @@ final class LegadoApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       initialRoute: AppRoute.welcome,
       onGenerateRoute: router.onGenerateRoute,
+      navigatorObservers: <NavigatorObserver>[navigationObserver],
       builder: (BuildContext context, Widget? child) {
         return AppErrorBoundary(child: child);
       },

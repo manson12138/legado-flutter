@@ -17,6 +17,12 @@ final class CookieDao {
   Future<Cookie?> get(String url) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.cookies,
+      where: 'url = ? limit=1',
+      argumentCount: 1,
+    );
     /// 最多包含一条 Cookie 的查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.cookies,
@@ -31,6 +37,11 @@ final class CookieDao {
   Future<void> upsert(Cookie cookie) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.cookies,
+      itemCount: 1,
+    );
     await database.insert(
       DatabaseTables.cookies,
       cookieToMap(cookie),
@@ -43,6 +54,12 @@ final class CookieDao {
   Future<void> delete(String url) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.cookies,
+      where: 'url = ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.cookies,
       where: 'url = ?',

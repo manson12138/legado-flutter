@@ -68,20 +68,12 @@ final class HttpResponseDecoder {
     }
   }
 
-  /// 根据媒体类型或 Content-Encoding 解压响应。
+  /// 解包真正的 ZIP 响应；HTTP gzip/deflate 已由 Dio 底层自动解压。
   Uint8List _decompress(HttpResponse response) {
     /// 原始字节。
     final Uint8List bytes = response.bytes;
-    /// Content-Encoding 小写值。
-    final String encoding = (response.firstHeader('content-encoding') ?? '').toLowerCase();
     /// Content-Type 小写值。
     final String contentType = (response.firstHeader('content-type') ?? '').toLowerCase();
-    if (encoding.contains('gzip')) {
-      return Uint8List.fromList(GZipDecoder().decodeBytes(bytes));
-    }
-    if (encoding.contains('deflate')) {
-      return Uint8List.fromList(ZLibDecoder().decodeBytes(bytes));
-    }
     if (contentType.contains('application/zip') || _hasZipSignature(bytes)) {
       /// ZIP 归档。
       final Archive archive = ZipDecoder().decodeBytes(bytes);

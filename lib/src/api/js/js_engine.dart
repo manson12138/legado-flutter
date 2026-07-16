@@ -24,6 +24,7 @@ final class JsEngineException implements Exception {
     this.line,
     this.column,
     this.stack,
+    this.bridgeCalls = const <String>[],
   });
 
   /// 失败分类。
@@ -43,6 +44,9 @@ final class JsEngineException implements Exception {
 
   /// 经裁剪的 JavaScript 错误栈。
   final String? stack;
+
+  /// 【FLUTTER_JS_COMPAT_LOG】本次脚本实际触达的宿主桥方法与参数类型，不包含参数值。
+  final List<String> bridgeCalls;
 
   @override
   String toString() => 'JsEngineException($kind, $message)';

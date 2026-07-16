@@ -18,6 +18,11 @@ final class BookSourceDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookSources,
+      where: '<all> orderBy=customOrder ASC',
+    );
     /// 全部书源数据库行。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.bookSources,
@@ -34,6 +39,12 @@ final class BookSourceDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookSources,
+      where: 'bookSourceUrl = ? limit=1',
+      argumentCount: 1,
+    );
     /// 最多包含一个书源的主键查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.bookSources,
@@ -49,6 +60,11 @@ final class BookSourceDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookSources,
+      where: 'enabled = 1 orderBy=customOrder ASC',
+    );
     /// 启用书源数据库行。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.bookSources,
@@ -94,6 +110,11 @@ final class BookSourceDao {
     /// 当前写入使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'BATCH_INSERT_REPLACE',
+      table: DatabaseTables.bookSources,
+      itemCount: sources.length,
+    );
     /// 将导入书源集中写入同一批次。
     final Batch batch = writeExecutor.batch();
     for (final BookSource source in sources) {
@@ -119,6 +140,12 @@ final class BookSourceDao {
     /// 当前删除使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.bookSources,
+      where: 'bookSourceUrl = ?',
+      argumentCount: 1,
+    );
     await writeExecutor.delete(
       DatabaseTables.bookSources,
       where: 'bookSourceUrl = ?',
@@ -143,6 +170,12 @@ final class BookSourceDao {
     final DatabaseExecutor writeExecutor = executor ?? await _database.database;
     /// 参数化 IN 子句占位符。
     final String placeholders = List<String>.filled(sourceUrls.length, '?').join(',');
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.bookSources,
+      where: 'bookSourceUrl IN ($placeholders)',
+      argumentCount: sourceUrls.length,
+    );
     await writeExecutor.delete(
       DatabaseTables.bookSources,
       where: 'bookSourceUrl IN ($placeholders)',

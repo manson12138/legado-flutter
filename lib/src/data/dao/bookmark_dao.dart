@@ -17,6 +17,12 @@ final class BookmarkDao {
   Future<List<Bookmark>> getByBook(String bookName, String bookAuthor) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookmarks,
+      where: 'bookName = ? AND bookAuthor = ? orderBy=chapterIndex ASC, chapterPos ASC',
+      argumentCount: 2,
+    );
     /// 指定书名和作者的书签行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookmarks,
@@ -48,6 +54,11 @@ final class BookmarkDao {
   Future<void> upsert(Bookmark bookmark) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.bookmarks,
+      itemCount: 1,
+    );
     await database.insert(
       DatabaseTables.bookmarks,
       bookmarkToMap(bookmark),
@@ -60,6 +71,12 @@ final class BookmarkDao {
   Future<void> deleteByTime(int time) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.bookmarks,
+      where: 'time = ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.bookmarks,
       where: 'time = ?',

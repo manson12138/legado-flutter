@@ -212,20 +212,212 @@ final class StandardRuleEngine {
 
   /// 执行 CSS 选择器及 `@text/@ownText/@html/@all/@属性` 取值。
   List<Object?> _css(String rule, Object? input, {required bool elementMode}) {
-    /// 选择器与取值方式。
-    final _CssRule parsed = _parseCssRule(rule);
     /// CSS 查询根节点。
     final dom.Element root = _htmlRoot(input);
-    /// 命中的元素。
-    final List<dom.Element> elements = parsed.selector.isEmpty
-        ? <dom.Element>[root]
-        : root.querySelectorAll(parsed.selector);
+    /// 原生 Legado 默认规则按 `@` 串联选择器，字符串规则最后一段才表示取值方式。
+    final List<String> chainParts = _splitOperator(rule, '@')
+        .map((String part) => part.trim())
+        .where((String part) => part.isNotEmpty)
+        .toList(growable: false);
+    if (chainParts.isEmpty) {
+      return elementMode ? <Object?>[root] : <Object?>[root.text];
+    }
+    /// 单段字符串规则是否表示从当前节点直接取文本或属性。
+    final bool singleCurrentValueRule = !elementMode &&
+        chainParts.length == 1 &&
+        _isCurrentCssValueRule(chainParts.first);
+    /// 当前规则用于逐层查询的选择器链。
+    final List<String> selectorParts = elementMode
+        ? chainParts
+        : (singleCurrentValueRule
+              ? const <String>[]
+              : (chainParts.length > 1
+              ? chainParts.sublist(0, chainParts.length - 1)
+              : <String>[chainParts.first]));
+    /// 当前规则最终需要提取的字段；元素模式不读取该字段。
+    final String extractor = elementMode
+        ? 'text'
+        : (singleCurrentValueRule
+              ? chainParts.first
+              : (chainParts.length > 1 ? chainParts.last : 'text'));
+    /// 按 Legado `@` 链式语义逐层命中的元素。
+    final List<dom.Element> elements = _selectCssElementChain(root, selectorParts);
     if (elementMode) {
       return elements;
     }
     return elements
-        .map((dom.Element element) => _extractCssValue(element, parsed.extractor))
+        .map((dom.Element element) => _extractCssValue(element, extractor))
         .toList(growable: false);
+  }
+
+  /// 判断单段字符串规则是否应按当前元素取值，而不是按 CSS 选择器查询子节点。
+  bool _isCurrentCssValueRule(String rule) {
+    /// 去除首尾空白后的取值规则。
+    final String trimmed = rule.trim();
+    return trimmed == 'text' ||
+        trimmed == 'textNodes' ||
+        trimmed == 'ownText' ||
+        trimmed == 'html' ||
+        trimmed == 'all' ||
+        trimmed == 'href' ||
+        trimmed == 'src' ||
+        trimmed == 'content' ||
+        trimmed == 'value' ||
+        trimmed == 'title' ||
+        trimmed == 'alt' ||
+        trimmed.startsWith('abs:');
+  }
+
+  /// 按原生 Legado `@` 链式选择语义逐层查询元素。
+  List<dom.Element> _selectCssElementChain(dom.Element root, List<String> selectorParts) {
+    /// 当前层级的查询根集合。
+    List<dom.Element> currentRoots = <dom.Element>[root];
+    for (final String selectorPart in selectorParts) {
+      /// 当前选择器在所有上层节点内命中的下一层元素。
+      final List<dom.Element> nextRoots = <dom.Element>[];
+      for (final dom.Element currentRoot in currentRoots) {
+        nextRoots.addAll(_selectCssElements(currentRoot, selectorPart));
+      }
+      currentRoots = nextRoots;
+      if (currentRoots.isEmpty) {
+        break;
+      }
+    }
+    return currentRoots;
+  }
+
+  /// 在单个根元素内执行一次 CSS 或 Legado 兼容选择器。
+  List<dom.Element> _selectCssElements(dom.Element root, String selector) {
+    /// 【原生规则兼容】解析 jsoup 文本伪选择器与 Legado 尾部索引。
+    final _CompatibleCssSelector compatibleSelector = _parseCompatibleCssSelector(
+      selector,
+    );
+    /// 标准 CSS 初始命中元素。
+    List<dom.Element> elements = compatibleSelector.selector.isEmpty
+        ? <dom.Element>[root]
+        : root.querySelectorAll(compatibleSelector.selector);
+    /// 【原生规则兼容】标准 CSS 查询完成后执行 jsoup 文本条件筛选。
+    for (final _CssTextFilter filter in compatibleSelector.textFilters) {
+      elements = elements
+          .where((dom.Element element) => filter.matches(element))
+          .toList(growable: false);
+    }
+    /// 【原生规则兼容】最后按 Legado `.0`、`.-1` 或 `!0` 规则筛选元素。
+    elements = _applyLegacyIndexes(elements, compatibleSelector.indexRule);
+    return elements;
+  }
+
+  /// 解析 Flutter 标准 CSS 不支持的原生 jsoup 文本伪选择器和 Legado 索引后缀。
+  _CompatibleCssSelector _parseCompatibleCssSelector(String selector) {
+    /// 去除首尾空白后的原始选择器。
+    String standardSelector = selector.trim();
+    /// 【原生规则兼容】选择器末尾的元素索引规则。
+    _LegacyIndexRule? indexRule;
+    /// `.0`、`.-1`、`.0:3` 与 `!0` 是原生 Legado 的列表筛选语法。
+    final RegExpMatch? indexMatch = RegExp(
+      r'([.!])(-?\d+(?::-?\d+(?::-?\d+)?)?)$',
+    ).firstMatch(standardSelector);
+    if (indexMatch != null) {
+      indexRule = _LegacyIndexRule(
+        exclude: indexMatch.group(1) == '!',
+        expression: indexMatch.group(2) ?? '',
+      );
+      standardSelector = standardSelector.substring(0, indexMatch.start).trim();
+    }
+
+    /// 【原生规则兼容】从选择器中提取的 jsoup 文本筛选条件。
+    final List<_CssTextFilter> textFilters = <_CssTextFilter>[];
+    /// jsoup 支持但 `package:html` 不支持的 `:contains` 与 `:containsOwn`。
+    final RegExp textPseudo = RegExp(
+      r''':(containsOwn|contains)\(\s*(['"]?)(.*?)\2\s*\)''',
+      caseSensitive: false,
+    );
+    standardSelector = standardSelector.replaceAllMapped(textPseudo, (Match match) {
+      textFilters.add(
+        _CssTextFilter(
+          ownText: match.group(1)?.toLowerCase() == 'containsown',
+          expectedText: match.group(3) ?? '',
+        ),
+      );
+      return '';
+    });
+
+    /// 【原生规则兼容】原生默认规则常用的快捷选择器前缀。
+    standardSelector = _normalizeLegacySelectorPrefix(standardSelector.trim());
+    return _CompatibleCssSelector(
+      selector: standardSelector,
+      textFilters: textFilters,
+      indexRule: indexRule,
+    );
+  }
+
+  /// 将原生默认规则的 `class/tag/id` 快捷写法转换为标准 CSS。
+  String _normalizeLegacySelectorPrefix(String selector) {
+    if (selector.startsWith('class.')) {
+      return '.${selector.substring(6)}';
+    }
+    if (selector.startsWith('tag.')) {
+      return selector.substring(4);
+    }
+    if (selector.startsWith('id.')) {
+      return '#${selector.substring(3)}';
+    }
+    return selector;
+  }
+
+  /// 按原生 Legado 的尾部索引规则选择或排除元素。
+  List<dom.Element> _applyLegacyIndexes(
+    List<dom.Element> elements,
+    _LegacyIndexRule? indexRule,
+  ) {
+    if (indexRule == null || indexRule.expression.isEmpty || elements.isEmpty) {
+      return elements;
+    }
+    /// 索引表达式各段，分别对应开始、结束和步长。
+    final List<int> values = indexRule.expression
+        .split(':')
+        .map(int.parse)
+        .toList(growable: false);
+    /// 规范化负数索引，使 `-1` 指向最后一个元素。
+    int normalize(int value) => value < 0 ? elements.length + value : value;
+    /// 最终需要选择或排除的索引集合。
+    final Set<int> selectedIndexes = <int>{};
+    if (values.length == 1) {
+      selectedIndexes.add(normalize(values.first));
+    } else {
+      /// 区间开始索引。
+      final int normalizedStart = normalize(values[0]);
+      final int start = normalizedStart < 0
+          ? 0
+          : (normalizedStart >= elements.length ? elements.length - 1 : normalizedStart);
+      /// 区间结束索引；原生区间包含结束位置。
+      final int normalizedEnd = normalize(values[1]);
+      final int end = normalizedEnd < 0
+          ? 0
+          : (normalizedEnd >= elements.length ? elements.length - 1 : normalizedEnd);
+      /// 区间步长，非法或零步长回退为一。
+      final int rawStep = values.length >= 3 ? values[2].abs() : 1;
+      final int step = rawStep == 0 ? 1 : rawStep;
+      if (start <= end) {
+        for (int index = start; index <= end; index += step) {
+          selectedIndexes.add(index);
+        }
+      } else {
+        for (int index = start; index >= end; index -= step) {
+          selectedIndexes.add(index);
+        }
+      }
+    }
+    /// 按原始顺序保存完成筛选的元素。
+    final List<dom.Element> result = <dom.Element>[];
+    for (int index = 0; index < elements.length; index += 1) {
+      /// 当前元素是否位于规则指定的索引集合中。
+      final bool selected = selectedIndexes.contains(index);
+      if (indexRule.exclude != selected) {
+        result.add(elements[index]);
+      }
+    }
+    return result;
   }
 
   /// 执行 XPath。
@@ -263,31 +455,15 @@ final class StandardRuleEngine {
     return values;
   }
 
-  /// 解析 CSS 规则最后一个 `@` 取值后缀。
-  _CssRule _parseCssRule(String rule) {
-    /// 常用取值后缀匹配。
-    final RegExpMatch? known = RegExp(r'@(text|ownText|html|all)$').firstMatch(rule);
-    if (known != null) {
-      return _CssRule(
-        selector: rule.substring(0, known.start),
-        extractor: known.group(1) ?? 'text',
-      );
-    }
-    /// 最后一个属性取值分隔符。
-    final int attributeAt = rule.lastIndexOf('@');
-    if (attributeAt >= 0) {
-      return _CssRule(
-        selector: rule.substring(0, attributeAt),
-        extractor: rule.substring(attributeAt + 1),
-      );
-    }
-    return _CssRule(selector: rule, extractor: 'text');
-  }
-
   /// 提取 CSS 元素值。
   Object? _extractCssValue(dom.Element element, String extractor) {
     return switch (extractor) {
       'text' => element.text,
+      'textNodes' => element.nodes
+          .whereType<dom.Text>()
+          .map((dom.Text node) => node.data.trim())
+          .where((String text) => text.isNotEmpty)
+          .join('\n'),
       'ownText' => element.nodes
           .whereType<dom.Text>()
           .map((dom.Text node) => node.data)
@@ -344,12 +520,77 @@ final class StandardRuleEngine {
     return input is Map || input is List;
   }
 
-  /// 在不理解括号与引号的前提下仅切分顶层兼容运算符。
-  ///
-  /// Android 历史规则的运算符没有统一转义协议；M3 先保留常见直接写法，包含同文字面量
-  /// 的复杂选择器需由对照样本继续补齐。
+  /// 【原生规则兼容】只在引号、圆括号和方括号之外切分组合运算符。
   List<String> _splitOperator(String rule, String operator) {
-    return rule.contains(operator) ? rule.split(operator) : <String>[rule];
+    if (!rule.contains(operator)) {
+      return <String>[rule];
+    }
+    /// 已完成切分的规则片段。
+    final List<String> parts = <String>[];
+    /// 当前片段起始位置。
+    int partStart = 0;
+    /// 当前未闭合圆括号层级。
+    int parenthesisDepth = 0;
+    /// 当前未闭合方括号层级。
+    int bracketDepth = 0;
+    /// 当前字符串引号；空值表示不在字符串中。
+    String? quote;
+    /// 上一个字符是否为转义符。
+    bool escaped = false;
+    for (int index = 0; index < rule.length; index += 1) {
+      /// 当前扫描字符。
+      final String character = rule[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote != null) {
+        if (character == quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character == "'" || character == '"') {
+        quote = character;
+        continue;
+      }
+      if (character == '(') {
+        parenthesisDepth += 1;
+        continue;
+      }
+      if (character == ')') {
+        if (parenthesisDepth > 0) {
+          parenthesisDepth -= 1;
+        }
+        continue;
+      }
+      if (character == '[') {
+        bracketDepth += 1;
+        continue;
+      }
+      if (character == ']') {
+        if (bracketDepth > 0) {
+          bracketDepth -= 1;
+        }
+        continue;
+      }
+      if (parenthesisDepth == 0 &&
+          bracketDepth == 0 &&
+          rule.startsWith(operator, index)) {
+        parts.add(rule.substring(partStart, index));
+        index += operator.length - 1;
+        partStart = index + 1;
+      }
+    }
+    if (partStart == 0) {
+      return <String>[rule];
+    }
+    parts.add(rule.substring(partStart));
+    return parts;
   }
 
   /// 拒绝 JavaScript 规则，确保 M3 不伪装兼容。
@@ -363,14 +604,58 @@ final class StandardRuleEngine {
   }
 }
 
-/// CSS 选择器与取值后缀。
-final class _CssRule {
-  /// 创建 CSS 规则片段。
-  const _CssRule({required this.selector, required this.extractor});
+/// 【原生规则兼容】转换为标准 CSS 后的选择器及其后置筛选条件。
+final class _CompatibleCssSelector {
+  /// 创建不可变兼容选择器。
+  const _CompatibleCssSelector({
+    required this.selector,
+    required this.textFilters,
+    required this.indexRule,
+  });
 
-  /// CSS 选择器；空字符串表示当前节点。
+  /// 可直接交给 `package:html` 的标准 CSS 选择器。
   final String selector;
 
-  /// `text`、`ownText`、`html`、`all` 或属性名。
-  final String extractor;
+  /// 需要在标准 CSS 查询后执行的 jsoup 文本筛选条件。
+  final List<_CssTextFilter> textFilters;
+
+  /// 可选的 Legado 元素索引规则。
+  final _LegacyIndexRule? indexRule;
+}
+
+/// 【原生规则兼容】jsoup `:contains` 或 `:containsOwn` 的后置筛选条件。
+final class _CssTextFilter {
+  /// 创建文本筛选条件。
+  const _CssTextFilter({required this.ownText, required this.expectedText});
+
+  /// 是否只匹配当前元素自身的文本节点。
+  final bool ownText;
+
+  /// 需要包含的文本。
+  final String expectedText;
+
+  /// 判断当前元素是否满足原生 jsoup 文本选择条件。
+  bool matches(dom.Element element) {
+    /// 根据规则选择完整文本或当前元素直属文本。
+    final String sourceText = ownText
+        ? element.nodes.whereType<dom.Text>().map((dom.Text node) => node.data).join()
+        : element.text;
+    /// jsoup 的文本包含选择器按不区分大小写方式匹配。
+    final String normalizedSourceText = sourceText.toLowerCase();
+    /// 与 jsoup 使用相同大小写规则的目标文本。
+    final String normalizedExpectedText = expectedText.toLowerCase();
+    return normalizedSourceText.contains(normalizedExpectedText);
+  }
+}
+
+/// 【原生规则兼容】Legado 选择器尾部的选择或排除索引规则。
+final class _LegacyIndexRule {
+  /// 创建元素索引规则。
+  const _LegacyIndexRule({required this.exclude, required this.expression});
+
+  /// 为 `true` 时排除指定元素，为 `false` 时只保留指定元素。
+  final bool exclude;
+
+  /// 原始索引或闭区间表达式，例如 `0`、`-1`、`0:3:2`。
+  final String expression;
 }

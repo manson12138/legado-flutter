@@ -134,14 +134,21 @@ final class _BookInfoBody extends StatelessWidget {
           ),
         if (!state.loadingToc && state.chapters.isEmpty && state.tocError == null)
           const Padding(padding: EdgeInsets.all(SpacingToken.large), child: Center(child: Text('暂无目录'))),
-        ...state.chapters.map((BookChapter chapter) {
+        ...state.chapters.asMap().entries.map((MapEntry<int, BookChapter> entry) {
+          /// 当前目录项在页面完整目录中的稳定位置。
+          final int chapterIndex = entry.key;
+          /// 当前目录项对应的章节对象。
+          final BookChapter chapter = entry.value;
           return ListTile(
             key: ValueKey<String>('${chapter.index}:${chapter.url}'),
             dense: true,
             leading: Text('${chapter.index + 1}'),
             title: Text(chapter.title),
             subtitle: chapter.tag == null ? null : Text(chapter.tag ?? ''),
-            enabled: !chapter.isVolume,
+            enabled: !chapter.isVolume && !state.addingToShelf,
+            onTap: chapter.isVolume || state.addingToShelf
+                ? null
+                : () => onIntent(OpenBookInfoChapterIntent(chapterIndex)),
           );
         }),
       ],

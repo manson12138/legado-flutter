@@ -17,6 +17,12 @@ final class CacheDao {
   Future<Cache?> get(String key) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.caches,
+      where: '`key` = ? limit=1',
+      argumentCount: 1,
+    );
     /// 最多包含一条缓存的查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.caches,
@@ -31,6 +37,12 @@ final class CacheDao {
   Future<String?> getValidValue(String key, int now) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.caches,
+      where: '`key` = ? AND (deadline = 0 OR deadline > ?) limit=1',
+      argumentCount: 2,
+    );
     /// 最多包含一个有效缓存值的查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.caches,
@@ -54,6 +66,11 @@ final class CacheDao {
   Future<void> upsert(Cache cache) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.caches,
+      itemCount: 1,
+    );
     await database.insert(
       DatabaseTables.caches,
       cacheToMap(cache),
@@ -66,6 +83,12 @@ final class CacheDao {
   Future<void> clearExpired(int now) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.caches,
+      where: 'deadline > 0 AND deadline < ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.caches,
       where: 'deadline > 0 AND deadline < ?',
@@ -78,6 +101,12 @@ final class CacheDao {
   Future<void> delete(String key) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.caches,
+      where: '`key` = ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.caches,
       where: '`key` = ?',

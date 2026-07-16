@@ -10,6 +10,7 @@ final class ResolvedSourceRequest {
     required this.request,
     required this.charset,
     required this.retryCount,
+    this.bodyJavaScript,
   });
 
   /// 可交给统一网络层执行的请求。
@@ -20,6 +21,28 @@ final class ResolvedSourceRequest {
 
   /// Android URL 选项中的重试次数；由上层编排执行。
   final int retryCount;
+
+  /// Android URL 选项中的 `bodyJs`，由上层在响应解码后执行。
+  final String? bodyJavaScript;
+}
+
+/// URL 普通部分与 Android JavaScript 选项的只读解析结果。
+final class SourceUrlJavaScriptOptions {
+  /// 创建不可变 URL JavaScript 选项。
+  const SourceUrlJavaScriptOptions({
+    required this.urlText,
+    this.urlJavaScript,
+    this.bodyJavaScript,
+  });
+
+  /// 不包含 `,{...}` 选项的 URL 文本。
+  final String urlText;
+
+  /// 发起请求前、以绝对 URL 为 `result` 执行的脚本。
+  final String? urlJavaScript;
+
+  /// 响应解码后、以正文为 `result` 执行的脚本。
+  final String? bodyJavaScript;
 }
 
 /// 解析 Android 书源 URL 普通语法，不执行 JavaScript 或 WebView。
@@ -34,28 +57,40 @@ final class SourceUrlResolver {
     required BookSource source,
     String? keyword,
     int? page,
+    String? header,
+    String? evaluatedOptionUrl,
+    bool javaScriptOptionsEvaluated = false,
   }) {
     /// 仅允许无需脚本求值的内建变量，其余内嵌表达式仍交给 M4。
     final String variableResolved = rawUrl
         .replaceAll('{{key}}', keyword ?? '')
         .replaceAll('{{page}}', page?.toString() ?? '');
-    _rejectJavaScript(variableResolved, 'URL');
     /// 已替换 `<第一页,后续页>` 的 URL 规则。
     final String pageResolved = _replacePage(variableResolved, page);
     /// URL 与 JSON 选项分隔位置。
     final RegExpMatch? optionStart = RegExp(r'\s*,\s*(?=\{)').firstMatch(pageResolved);
     /// 不含选项的 URL。
-    final String urlText = (optionStart == null
+    final String parsedUrlText = (optionStart == null
             ? pageResolved
             : pageResolved.substring(0, optionStart.start))
         .trim();
+    _rejectJavaScript(parsedUrlText, 'URL');
     /// JSON 选项对象。
     final Map<String, Object?> option = optionStart == null
         ? <String, Object?>{}
         : _decodeObject(pageResolved.substring(optionStart.end));
-    _rejectUnsupportedOptions(option);
+    _rejectUnsupportedOptions(
+      option,
+      javaScriptOptionsEvaluated: javaScriptOptionsEvaluated,
+    );
+    /// 已执行 UrlOption.js 后得到的候选 URL；空值继续使用原始 URL。
+    final String normalizedEvaluatedOptionUrl =
+        evaluatedOptionUrl?.trim() ?? '';
+    final String urlText = normalizedEvaluatedOptionUrl.isNotEmpty
+        ? normalizedEvaluatedOptionUrl
+        : parsedUrlText;
     /// 书源级 Header。
-    final Map<String, String> headers = _decodeHeaders(source.header);
+    final Map<String, String> headers = _decodeHeaders(header ?? source.header);
     headers.addAll(_coerceHeaders(option['headers']));
     if (_findHeader(headers, 'proxy')?.trim().isNotEmpty == true) {
       throw const UnifiedHttpException(
@@ -85,6 +120,38 @@ final class SourceUrlResolver {
       ),
       charset: _asString(option['charset']),
       retryCount: _asInt(option['retry']) ?? 0,
+      bodyJavaScript: _asString(option['bodyJs']),
+    );
+  }
+
+  /// 读取 URL 普通部分以及 `js/bodyJs`，网络层不在此执行脚本。
+  SourceUrlJavaScriptOptions readJavaScriptOptions({
+    required String rawUrl,
+    String? keyword,
+    int? page,
+  }) {
+    /// 替换搜索关键字和页码后的 URL 规则。
+    final String variableResolved = rawUrl
+        .replaceAll('{{key}}', keyword ?? '')
+        .replaceAll('{{page}}', page?.toString() ?? '');
+    /// 替换 Android 页码选择语法后的 URL 规则。
+    final String pageResolved = _replacePage(variableResolved, page);
+    /// URL 与 JSON 选项分隔位置。
+    final RegExpMatch? optionStart = RegExp(r'\s*,\s*(?=\{)').firstMatch(pageResolved);
+    /// 不包含选项的 URL 文本。
+    final String urlText = (optionStart == null
+            ? pageResolved
+            : pageResolved.substring(0, optionStart.start))
+        .trim();
+    if (optionStart == null) {
+      return SourceUrlJavaScriptOptions(urlText: urlText);
+    }
+    /// Android URL JSON 选项。
+    final Map<String, Object?> option = _decodeObject(pageResolved.substring(optionStart.end));
+    return SourceUrlJavaScriptOptions(
+      urlText: urlText,
+      urlJavaScript: _asString(option['js']),
+      bodyJavaScript: _asString(option['bodyJs']),
     );
   }
 
@@ -186,7 +253,10 @@ final class SourceUrlResolver {
   }
 
   /// 拒绝 M3 不支持的 JS、WebView、自定义 DNS 与服务端选项。
-  void _rejectUnsupportedOptions(Map<String, Object?> option) {
+  void _rejectUnsupportedOptions(
+    Map<String, Object?> option, {
+    required bool javaScriptOptionsEvaluated,
+  }) {
     /// Android 除空、false 与字符串 false 外均视为启用 WebView。
     final bool webView = _isTruthyOption(option['webView']);
     if (webView || _asString(option['webJs'])?.isNotEmpty == true) {
@@ -195,8 +265,9 @@ final class SourceUrlResolver {
         'WebView 请求属于 M4 平台能力',
       );
     }
-    if (_asString(option['js'])?.isNotEmpty == true ||
-        _asString(option['bodyJs'])?.isNotEmpty == true) {
+    if (!javaScriptOptionsEvaluated &&
+        (_asString(option['js'])?.isNotEmpty == true ||
+            _asString(option['bodyJs'])?.isNotEmpty == true)) {
       throw const UnifiedHttpException(
         HttpFailureKind.unsupportedOption,
         'URL JavaScript 选项属于 M4',

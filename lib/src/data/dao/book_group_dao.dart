@@ -17,6 +17,11 @@ final class BookGroupDao {
   Future<List<BookGroup>> getAll() async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookGroups,
+      where: '<all> orderBy=`order` ASC',
+    );
     /// 全部分组数据库行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookGroups,
@@ -29,6 +34,12 @@ final class BookGroupDao {
   Future<BookGroup?> getById(int groupId) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookGroups,
+      where: 'groupId = ? limit=1',
+      argumentCount: 1,
+    );
     /// 最多包含一个分组的主键查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookGroups,
@@ -60,6 +71,11 @@ final class BookGroupDao {
   Future<void> upsert(BookGroup group) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.bookGroups,
+      itemCount: 1,
+    );
     await database.insert(
       DatabaseTables.bookGroups,
       bookGroupToMap(group),
@@ -72,6 +88,12 @@ final class BookGroupDao {
   Future<void> deleteById(int groupId) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.bookGroups,
+      where: 'groupId = ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.bookGroups,
       where: 'groupId = ?',

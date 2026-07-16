@@ -1,8 +1,10 @@
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/book_source_import_result.dart';
+import '../../domain/model/cache.dart';
 import '../../help/error/app_error.dart';
 import '../dao/book_source_dao.dart';
+import '../dao/cache_dao.dart';
 import '../local/data_error.dart';
 import '../local/database_tables.dart';
 import '../local/legado_database.dart';
@@ -14,6 +16,7 @@ final class BookSourceRepository implements BookSourceGateway {
   const BookSourceRepository(
     this._database,
     this._bookSourceDao,
+    this._cacheDao,
     this._importDecoder,
   );
 
@@ -21,6 +24,8 @@ final class BookSourceRepository implements BookSourceGateway {
   final LegadoDatabase _database;
   /// 只包含书源表查询和写入的 DAO。
   final BookSourceDao _bookSourceDao;
+  /// 保存书源运行变量的通用缓存 DAO，不向 UI 暴露数据库实现。
+  final CacheDao _cacheDao;
   /// 隔离外部 JSON 和持久化实体的书源解码器。
   final BookSourceImportDecoder _importDecoder;
 
@@ -139,6 +144,38 @@ final class BookSourceRepository implements BookSourceGateway {
     });
   }
 
+  /// 读取 Flutter 独立缓存中的书源自定义变量。
+  @override
+  Future<String> getSourceVariable(String sourceUrl) {
+    return guardDataOperation<String>(() async {
+      /// 当前未过期的书源变量；不存在时对齐 Android 返回空字符串。
+      final String? value = await _cacheDao.getValidValue(
+        _sourceVariableCacheKey(sourceUrl),
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      return value ?? '';
+    });
+  }
+
+  /// 保存或删除 Flutter 独立缓存中的书源自定义变量。
+  @override
+  Future<void> saveSourceVariable(String sourceUrl, String? value) {
+    return guardDataOperation<void>(() async {
+      /// 与 Android `BaseSource.getVariable()` 一致的稳定缓存键。
+      final String key = _sourceVariableCacheKey(sourceUrl);
+      if (value == null) {
+        await _cacheDao.delete(key);
+        return;
+      }
+      await _cacheDao.upsert(Cache(key: key, value: value));
+    });
+  }
+
+  /// 生成 Android `sourceVariable_书源URL` 对应的 Flutter 独立缓存键。
+  String _sourceVariableCacheKey(String sourceUrl) {
+    return 'sourceVariable_$sourceUrl';
+  }
+
   /// 批量更新启用状态。
   @override
   Future<void> setEnabled(Set<String> sourceUrls, {required bool enabled}) {
@@ -184,9 +221,10 @@ final class BookSourceRepository implements BookSourceGateway {
   /// 删除书源，并让外键级联清理搜索结果。
   @override
   Future<void> deleteByUrl(String sourceUrl) {
-    return guardDataOperation<void>(
-      () => _bookSourceDao.deleteByUrl(sourceUrl),
-    );
+    return guardDataOperation<void>(() async {
+      await _bookSourceDao.deleteByUrl(sourceUrl);
+      await _cacheDao.delete(_sourceVariableCacheKey(sourceUrl));
+    });
   }
 
   /// 原子删除多个书源及数据库外键关联的搜索缓存。
@@ -196,6 +234,9 @@ final class BookSourceRepository implements BookSourceGateway {
       await _database.transaction<void>((transaction) async {
         await _bookSourceDao.deleteByUrls(sourceUrls, executor: transaction);
       });
+      for (final String sourceUrl in sourceUrls) {
+        await _cacheDao.delete(_sourceVariableCacheKey(sourceUrl));
+      }
       if (sourceUrls.isNotEmpty) {
         _database.changeNotifier.notifyTables(
           <String>{DatabaseTables.bookSources, DatabaseTables.searchBooks},

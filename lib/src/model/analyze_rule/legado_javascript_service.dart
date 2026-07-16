@@ -33,17 +33,36 @@ final class LegadoJavaScriptService {
         timeout: timeout,
         cancellationToken: cancellationToken,
       );
-      /// 规则脚本执行结果。
-      final JsBridgeValue result = await lease.engine.evaluate(
-        JsEvaluationRequest(
-          scriptName: scriptName,
-          source: _normalizeRuleScript(script),
-          bindings: bindings,
-          timeout: timeout,
-          cancellationToken: cancellationToken,
-          hostContext: context,
-        ),
+      /// 去除规则标记后的原始 JavaScript 正文。
+      final String normalizedScript = _normalizeRuleScript(script);
+      /// 当前脚本首次执行请求。
+      final JsEvaluationRequest request = JsEvaluationRequest(
+        scriptName: scriptName,
+        source: normalizedScript,
+        bindings: bindings,
+        timeout: timeout,
+        cancellationToken: cancellationToken,
+        hostContext: context,
       );
+      /// 规则脚本执行结果；仅对 Rhino 允许的顶层 `return` 做一次函数作用域兼容重试。
+      JsBridgeValue result;
+      try {
+        result = await lease.engine.evaluate(request);
+      } on JsEngineException catch (error) {
+        if (!_requiresTopLevelReturnRetry(error)) {
+          rethrow;
+        }
+        result = await lease.engine.evaluate(
+          JsEvaluationRequest(
+            scriptName: '$scriptName/top-level-return-compat',
+            source: _wrapTopLevelReturn(normalizedScript),
+            bindings: bindings,
+            timeout: timeout,
+            cancellationToken: cancellationToken,
+            hostContext: context,
+          ),
+        );
+      }
       reusable = true;
       return result;
     } finally {
@@ -92,6 +111,22 @@ final class LegadoJavaScriptService {
       return trimmed.substring(4, trimmed.length - 5);
     }
     return script;
+  }
+
+  /// 判断 QuickJS 错误是否为 Rhino 可接受的顶层 `return` 语法差异。
+  bool _requiresTopLevelReturnRetry(JsEngineException error) {
+    if (error.kind != JsFailureKind.syntax) {
+      return false;
+    }
+    /// 小写引擎错误摘要，用于兼容 JSF 当前返回的两种常见表述。
+    final String detail = (error.stack ?? error.message).toLowerCase();
+    return detail.contains('return not in a function') ||
+        detail.contains('illegal return statement');
+  }
+
+  /// 把包含顶层 `return` 的 Rhino 规则放入普通函数作用域执行。
+  String _wrapTopLevelReturn(String script) {
+    return '(function () {\n$script\n}).call(globalThis)';
   }
 
   /// 关闭引擎池并释放所有原生资源。

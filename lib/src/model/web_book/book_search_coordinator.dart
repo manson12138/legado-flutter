@@ -1,29 +1,30 @@
 import 'dart:async';
 
 import '../../api/http/http_contract.dart';
+import '../../api/js/js_engine.dart';
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/search_book.dart';
+import '../../help/logging/app_logger.dart';
 import 'standard_source_service.dart';
 
 /// 创建独立 HTTP 取消令牌的函数类型。
 typedef HttpCancellationTokenFactory = HttpCancellationToken Function();
 
 /// 使用同一业务接口调度普通与 JavaScript 书源搜索。
-///
-/// M04 尚未完成真实 JavaScript 书源验收，因此当前对 JavaScript 书源返回明确单源失败，
-/// 不会错误地交给普通规则解析器；后续只需替换该分支的执行器，ViewModel 与页面无需改动。
 final class BookSearchCoordinator {
   /// 创建受控多书源搜索协调器。
   const BookSearchCoordinator({
     required BookSourceGateway sourceGateway,
     required StandardBookSourceService standardService,
     required HttpCancellationTokenFactory cancellationTokenFactory,
+    required AppLogger logger,
     this.maximumConcurrency = 4,
   }) : _sourceGateway = sourceGateway,
        _standardService = standardService,
-       _cancellationTokenFactory = cancellationTokenFactory;
+       _cancellationTokenFactory = cancellationTokenFactory,
+       _logger = logger;
 
   /// 启用书源查询边界。
   final BookSourceGateway _sourceGateway;
@@ -34,11 +35,22 @@ final class BookSearchCoordinator {
   /// 每个书源独立取消令牌工厂。
   final HttpCancellationTokenFactory _cancellationTokenFactory;
 
+  /// 【搜书诊断日志】项目统一日志接口，用于记录跨书源调度阶段。
+  final AppLogger _logger;
+
   /// 同时运行的最大书源数，默认与 Android 常用线程数保持保守上限。
   final int maximumConcurrency;
 
   /// 读取当前启用书源快照。
-  Future<List<BookSource>> loadEnabledSources() => _sourceGateway.getEnabled();
+  Future<List<BookSource>> loadEnabledSources() async {
+    /// 当前启用书源快照。
+    final List<BookSource> sources = await _sourceGateway.getEnabled();
+    _logger.debug(
+      tag: bookSearchSourceLogTag,
+      message: '读取启用书源完成 sourceCount=${sources.length}',
+    );
+    return sources;
+  }
 
   /// 开始一次可取消的多书源搜索并返回运行句柄。
   Future<BookSearchRun> start({
@@ -52,6 +64,13 @@ final class BookSearchCoordinator {
     final List<BookSource> sources = enabled.where((BookSource source) {
       return selectedSourceUrls.isEmpty || selectedSourceUrls.contains(source.bookSourceUrl);
     }).toList(growable: false);
+    /// 【搜书诊断日志】记录过滤后的执行规模和并发配置，不记录搜索词原文。
+    _logger.info(
+      tag: bookSearchSourceLogTag,
+      message: '多书源调度创建 keywordLength=${keyword.trim().length} '
+          'enabledCount=${enabled.length} executionCount=${sources.length} '
+          'maximumConcurrency=$maximumConcurrency',
+    );
     /// 当前运行句柄。
     final BookSearchRun run = BookSearchRun();
     run._completion = _execute(
@@ -70,6 +89,8 @@ final class BookSearchCoordinator {
     required List<BookSource> sources,
     required void Function(BookSearchEvent event) onEvent,
   }) async {
+    /// 【搜书诊断日志】多书源协调器整体耗时计时器。
+    final Stopwatch runStopwatch = Stopwatch()..start();
     /// 下一个待领取的书源索引；Dart 单 isolate 事件循环保证同步领取不会竞争。
     int nextIndex = 0;
     /// 已结束书源数。
@@ -87,13 +108,20 @@ final class BookSearchCoordinator {
         nextIndex += 1;
         /// 当前执行书源。
         final BookSource source = sources[index];
+        /// 【搜书诊断日志】当前书源不可逆标识。
+        final String sourceId = appLogDiagnosticId(source.bookSourceUrl);
+        /// 【搜书诊断日志】当前单书源执行耗时计时器。
+        final Stopwatch sourceStopwatch = Stopwatch()..start();
         /// 当前书源独立取消令牌。
         final HttpCancellationToken token = _cancellationTokenFactory();
         run._tokens.add(token);
         try {
-          if (_requiresJavaScript(source)) {
-            throw const _JavaScriptSourcePendingException();
-          }
+          _logger.info(
+            tag: bookSearchSourceLogTag,
+            message: '单书源搜索开始 sourceId=$sourceId '
+                'sourceName=${appLogSafeLabel(source.bookSourceName)} queueIndex=$index '
+                'timeoutMs=${source.respondTime.clamp(10000, 60000).toInt()}',
+          );
           /// 单源超时，限制在 10～60 秒；底层请求同样持有可取消令牌。
           final Duration timeout = Duration(
             milliseconds: source.respondTime.clamp(10000, 60000).toInt(),
@@ -116,11 +144,49 @@ final class BookSearchCoordinator {
               );
           if (!run.isCancelled) {
             succeeded += 1;
+            _logger.info(
+              tag: bookSearchSourceLogTag,
+              message: '单书源搜索成功 sourceId=$sourceId '
+                  'sourceName=${appLogSafeLabel(source.bookSourceName)} resultCount=${books.length} '
+                  'elapsedMs=${sourceStopwatch.elapsedMilliseconds}',
+            );
             onEvent(BookSearchResultsEvent(source: source, books: books));
           }
-        } catch (error) {
+        } catch (error, stackTrace) {
           if (!run.isCancelled) {
             failed += 1;
+            if (error is JsEngineException) {
+              /// 【FLUTTER_JS_COMPAT_LOG】脚本逻辑名仅由书源名和固定阶段名组成，不包含脚本正文。
+              final String scriptName = appLogSafeLabel(
+                error.scriptName ?? '<unknown>',
+                maximumLength: 120,
+              );
+              /// 【FLUTTER_JS_COMPAT_LOG】QuickJS 原始摘要经过认证值、长文本和查询参数脱敏。
+              final String engineDetail = appLogSafeJavaScriptDiagnostic(
+                error.stack ?? error.message,
+              );
+              /// 【FLUTTER_JS_COMPAT_LOG】只包含宿主桥方法名和参数类型的调用轨迹。
+              final String bridgeCalls = error.bridgeCalls.isEmpty
+                  ? '<none>'
+                  : error.bridgeCalls.join(' > ');
+              _logger.error(
+                tag: bookSearchSourceLogTag,
+                message: '$javaScriptCompatibilityDebugLogMarker JavaScript 搜索失败 '
+                    'sourceId=$sourceId kind=${error.kind.name} scriptName=$scriptName '
+                    'line=${error.line?.toString() ?? "<null>"} '
+                    'column=${error.column?.toString() ?? "<null>"} '
+                    'bridgeCalls=$bridgeCalls engineDetail=$engineDetail',
+              );
+            }
+            _logger.error(
+              tag: bookSearchSourceLogTag,
+              message: '单书源搜索失败 sourceId=$sourceId '
+                  'sourceName=${appLogSafeLabel(source.bookSourceName)} '
+                  'category=${_failureCategory(error)} '
+                  'elapsedMs=${sourceStopwatch.elapsedMilliseconds}',
+              error: error,
+              stackTrace: stackTrace,
+            );
             onEvent(
               BookSearchFailureEvent(
                 BookSearchSourceFailure(
@@ -130,6 +196,14 @@ final class BookSearchCoordinator {
                   message: _failureMessage(error),
                 ),
               ),
+            );
+          } else {
+            /// 【搜书诊断日志】取消导致的异常不计入失败，只记录任务退出。
+            _logger.info(
+              tag: bookSearchSourceLogTag,
+              message: '单书源搜索取消 sourceId=$sourceId '
+                  'sourceName=${appLogSafeLabel(source.bookSourceName)} '
+                  'elapsedMs=${sourceStopwatch.elapsedMilliseconds}',
             );
           }
         } finally {
@@ -152,34 +226,30 @@ final class BookSearchCoordinator {
     }
 
     if (sources.isEmpty) {
+      _logger.warning(
+        tag: bookSearchSourceLogTag,
+        message: '多书源调度无可执行书源 elapsedMs=${runStopwatch.elapsedMilliseconds}',
+      );
       onEvent(const BookSearchProgressEvent(BookSearchProgress(total: 0, completed: 0, succeeded: 0, failed: 0)));
       return;
     }
     /// 实际 worker 数量，不超过书源数且至少为一。
     final int workerCount = maximumConcurrency.clamp(1, sources.length).toInt();
+    _logger.debug(
+      tag: bookSearchSourceLogTag,
+      message: '多书源 worker 启动 workerCount=$workerCount sourceCount=${sources.length}',
+    );
     await Future.wait<void>(List<Future<void>>.generate(workerCount, (int index) => worker()));
-  }
-
-  /// 判断普通规则链路当前不能安全执行的 JavaScript 书源。
-  bool _requiresJavaScript(BookSource source) {
-    if (source.jsLib?.trim().isNotEmpty == true) {
-      return true;
-    }
-    /// 可能包含脚本的规则文本。
-    final String rules = <String?>[
-      source.searchUrl,
-      source.ruleSearch,
-      source.ruleBookInfo,
-      source.ruleToc,
-      source.ruleContent,
-    ].whereType<String>().join('\n');
-    return RegExp(r'@js:|<js>|js@|Packages\.|JavaImporter|java\.', caseSensitive: false)
-        .hasMatch(rules);
+    _logger.info(
+      tag: bookSearchSourceLogTag,
+      message: '多书源调度结束 cancelled=${run.isCancelled} completed=$completed/${sources.length} '
+          'succeeded=$succeeded failed=$failed elapsedMs=${runStopwatch.elapsedMilliseconds}',
+    );
   }
 
   /// 将异常转换为不泄漏请求数据的稳定分类。
   String _failureCategory(Object error) {
-    if (error is _JavaScriptSourcePendingException) {
+    if (error is JsEngineException) {
       return 'JavaScript';
     }
     if (error is TimeoutException) {
@@ -190,8 +260,8 @@ final class BookSearchCoordinator {
 
   /// 将异常转换为面向用户的稳定摘要。
   String _failureMessage(Object error) {
-    if (error is _JavaScriptSourcePendingException) {
-      return '该书源依赖 JavaScript，需等待 M04 真机兼容验收后接入';
+    if (error is JsEngineException) {
+      return error.message;
     }
     if (error is TimeoutException) {
       return '书源搜索超时';
@@ -228,10 +298,4 @@ final class BookSearchRun {
     }
     _tokens.clear();
   }
-}
-
-/// 标识 JavaScript 执行边界尚未通过 M04 真机验收。
-final class _JavaScriptSourcePendingException implements Exception {
-  /// 创建无敏感上下文的内部异常。
-  const _JavaScriptSourcePendingException();
 }

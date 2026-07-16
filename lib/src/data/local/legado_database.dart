@@ -1,6 +1,7 @@
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
 
+import '../../help/logging/app_logger.dart';
 import 'database_change_notifier.dart';
 
 /// 管理 Flutter 独立 SQLite 数据库 v2 的打开、迁移、事务和释放。
@@ -8,8 +9,11 @@ import 'database_change_notifier.dart';
 /// 这是全新数据库，不读取或迁移原 Android App 的 Room 数据库。
 final class LegadoDatabase {
   /// 创建惰性数据库实例；首次 DAO 操作时才真正打开文件。
-  LegadoDatabase({DatabaseChangeNotifier? changeNotifier})
-      : changeNotifier = changeNotifier ?? DatabaseChangeNotifier();
+  LegadoDatabase({
+    required AppLogger logger,
+    DatabaseChangeNotifier? changeNotifier,
+  })  : _logger = logger,
+        changeNotifier = changeNotifier ?? DatabaseChangeNotifier();
 
   /// Flutter 独立数据库文件名，不与原 App 的 `legado.db` 共用。
   static const String databaseName = 'legado_flutter.db';
@@ -19,6 +23,9 @@ final class LegadoDatabase {
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
+
+  /// 应用组合根注入的统一日志器，数据库操作固定使用数据库 Tag。
+  final AppLogger _logger;
 
   /// 已打开或正在打开的数据库 Future，保证组合根只创建一个连接。
   Future<Database>? _databaseFuture;
@@ -41,7 +48,38 @@ final class LegadoDatabase {
   Future<T> transaction<T>(Future<T> Function(Transaction transaction) action) async {
     /// 已打开的共享数据库连接。
     final Database openedDatabase = await database;
-    return openedDatabase.transaction<T>(action);
+    logOperation(operation: 'TRANSACTION_BEGIN', table: '<multiple>');
+    try {
+      final T result = await openedDatabase.transaction<T>(action);
+      logOperation(operation: 'TRANSACTION_COMMIT', table: '<multiple>');
+      return result;
+    } catch (error, stackTrace) {
+      _logger.error(
+        tag: databaseLogTag,
+        message: 'operation=TRANSACTION_ROLLBACK table=<multiple>',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
+  /// 由所有 DAO 调用，统一输出操作类型、表名、条件和参数数量。
+  void logOperation({
+    required String operation,
+    required String table,
+    String? where,
+    int argumentCount = 0,
+    int? itemCount,
+  }) {
+    _logger.debug(
+      tag: databaseLogTag,
+      message: 'operation=$operation '
+          'table=$table '
+          'where=${where ?? '<none>'} '
+          'argumentCount=$argumentCount '
+          'itemCount=${itemCount ?? -1}',
+    );
   }
 
   /// 打开数据库并配置外键约束与首次建表回调。
@@ -50,10 +88,15 @@ final class LegadoDatabase {
     final String databasesDirectory = await getDatabasesPath();
     /// Flutter 独立数据库的完整路径。
     final String databasePath = path.join(databasesDirectory, databaseName);
+    _logger.info(
+      tag: databaseLogTag,
+      message: 'operation=OPEN database=$databaseName version=$schemaVersion',
+    );
     return openDatabase(
       databasePath,
       version: schemaVersion,
       onConfigure: (Database configuredDatabase) async {
+        logOperation(operation: 'PRAGMA', table: '<database>');
         await configuredDatabase.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (Database createdDatabase, int version) async {
@@ -61,6 +104,7 @@ final class LegadoDatabase {
       },
       onUpgrade: (Database upgradedDatabase, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
+          logOperation(operation: 'ALTER_TABLE', table: 'book_sources');
           await upgradedDatabase.execute(
             'ALTER TABLE book_sources ADD COLUMN extraFieldsJson TEXT',
           );
@@ -71,6 +115,7 @@ final class LegadoDatabase {
 
   /// 按外键依赖顺序建立当前表、唯一约束和索引。
   Future<void> _createSchemaV2(Database database) async {
+    logOperation(operation: 'CREATE_SCHEMA', table: '<all>');
     /// 将全部 DDL 作为单批次提交，避免只创建部分表。
     final Batch schemaBatch = database.batch();
 
@@ -310,6 +355,10 @@ final class LegadoDatabase {
     if (existingFuture != null) {
       /// 已打开的数据库连接。
       final Database openedDatabase = await existingFuture;
+      _logger.info(
+        tag: databaseLogTag,
+        message: 'operation=CLOSE database=$databaseName',
+      );
       await openedDatabase.close();
     }
     await changeNotifier.close();

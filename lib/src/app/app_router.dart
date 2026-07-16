@@ -9,6 +9,9 @@ import '../ui/search/search_route.dart';
 import '../ui/bookshelf/bookshelf_route.dart';
 import '../ui/reader/book_reader_route.dart';
 import '../ui/local_book_import/local_book_import_route.dart';
+import '../ui/log_management/log_management_route.dart';
+import '../ui/settings/settings_route.dart';
+import '../help/logging/app_logger.dart';
 import 'app_dependencies.dart';
 import 'app_route.dart';
 
@@ -28,6 +31,20 @@ final class AppRouter {
           settings: settings,
           builder: (BuildContext context) {
             return WelcomeRoute(dependencies: dependencies);
+          },
+        );
+      case AppRoute.settings:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return const SettingsRoute();
+          },
+        );
+      case AppRoute.logManagement:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return LogManagementRoute(dependencies: dependencies);
           },
         );
       case AppRoute.bookSourceManagement:
@@ -76,19 +93,38 @@ final class AppRouter {
           },
         );
       case AppRoute.reader:
-        /// M07 固定阅读器参数为 bookUrl；M08 在路由边界继续验证不可信参数。
+        /// M07 兼容字符串 bookUrl，详情目录入口使用带初始章节的参数对象。
         final Object? readerArguments = settings.arguments;
-        if (readerArguments is String && readerArguments.isNotEmpty) {
+        /// 归一化后的阅读器参数。
+        final ReaderRouteArguments? normalizedReaderArguments = switch (readerArguments) {
+          String bookUrl when bookUrl.isNotEmpty => ReaderRouteArguments(bookUrl: bookUrl),
+          ReaderRouteArguments arguments when arguments.bookUrl.isNotEmpty => arguments,
+          _ => null,
+        };
+        if (normalizedReaderArguments != null) {
+          /// 【搜书诊断日志】阅读路由参数验证成功，只记录不可逆书籍标识。
+          dependencies.logger.info(
+            tag: bookReaderEntryLogTag,
+            message: '阅读路由参数验证成功 '
+                'bookId=${appLogDiagnosticId(normalizedReaderArguments.bookUrl)} '
+                'initialChapterIndex=${normalizedReaderArguments.initialChapterIndex}',
+          );
           return MaterialPageRoute<void>(
             settings: settings,
             builder: (BuildContext context) {
               return BookReaderRoute(
                 dependencies: dependencies,
-                bookUrl: readerArguments,
+                bookUrl: normalizedReaderArguments.bookUrl,
+                initialChapterIndex: normalizedReaderArguments.initialChapterIndex,
               );
             },
           );
         }
+        /// 【搜书诊断日志】阅读路由缺少参数时在创建错误页前记录原因。
+        dependencies.logger.error(
+          tag: bookReaderEntryLogTag,
+          message: '阅读路由参数验证失败 argumentType=${readerArguments.runtimeType}',
+        );
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {

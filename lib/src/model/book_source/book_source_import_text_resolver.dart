@@ -1,4 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:path/path.dart' as path_util;
+import 'package:path_provider/path_provider.dart';
 
 import '../../api/http/http_contract.dart';
 import '../../api/http/response_decoder.dart';
@@ -20,6 +24,12 @@ final class BookSourceImportTextResolver {
 
   /// 远程书源列表允许的最大原始响应字节数。
   static const int _maximumResponseBytes = 5 * 1024 * 1024;
+
+  /// 【扫码诊断文件】应用沙盒中保存最新扫码数据的目录名。
+  static const String _diagnosticDirectoryName = 'book_source_qr_diagnostics';
+
+  /// 【扫码诊断文件】保存最新二维码原始文本的固定文件名。
+  static const String _scannedPayloadFileName = 'latest_scanned_payload.txt';
 
   /// 统一 HTTP 客户端，确保扫码导入复用超时、重定向和错误分类。
   final UnifiedHttpClient _httpClient;
@@ -48,6 +58,13 @@ final class BookSourceImportTextResolver {
       _logger.warning(message: '$bookSourceQrScanLogTag stage=resolver_rejected reason=empty');
       throw const FormatException('二维码中没有可导入的书源内容');
     }
+
+    // 【扫码诊断文件】保存最新二维码原文并在统一 Tag 中显示沙盒绝对路径。
+    await _saveDiagnosticBytes(
+      kind: 'scanned_payload',
+      fileName: _scannedPayloadFileName,
+      bytes: utf8.encode(candidate),
+    );
 
     /// 原生书源分享二维码可能使用的 `sourceUrls` 聚合对象。
     final List<String>? sourceUrls = _readSourceUrls(candidate);
@@ -167,9 +184,16 @@ final class BookSourceImportTextResolver {
     /// 小写协议名，用于阻止 file、content、intent 等非网络协议。
     final String scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') {
+      _logger.warning(
+        message:
+            '$bookSourceQrScanLogTag stage=http_rejected reason=unsupported_scheme scheme=$scheme',
+      );
       throw const FormatException('二维码书源地址只支持 HTTP 或 HTTPS');
     }
     if (uri.host.trim().isEmpty) {
+      _logger.warning(
+        message: '$bookSourceQrScanLogTag stage=http_rejected reason=empty_host',
+      );
       throw const FormatException('二维码中的书源地址无效');
     }
     /// 是否启用原生书源地址约定的无默认 UA 请求模式。
@@ -179,7 +203,9 @@ final class BookSourceImportTextResolver {
     // 【扫码诊断日志】不记录 host、完整 URL 或请求 Header。
     _logger.debug(
       message:
-          '$bookSourceQrScanLogTag stage=http_started scheme=$scheme withoutUa=$requestWithoutUserAgent',
+          '$bookSourceQrScanLogTag stage=http_started scheme=$scheme withoutUa=$requestWithoutUserAgent '
+          'connectTimeoutMs=15000 receiveTimeoutMs=30000 totalTimeoutMs=30000 '
+          'followRedirects=true maxRedirects=10 cookieMode=disabled',
     );
     /// 禁用 Cookie 的远程书源列表请求，避免向二维码目标泄漏应用会话。
     final HttpResponse response = await _httpClient.execute(
@@ -192,6 +218,8 @@ final class BookSourceImportTextResolver {
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 30),
         totalTimeout: const Duration(seconds: 30),
+        // 【扫码诊断日志】让 Dio 全链路日志归入扫码书源统一 Tag。
+        logContext: bookSourceQrScanLogTag,
       ),
       cancellationToken: cancellationToken,
     );
@@ -202,6 +230,15 @@ final class BookSourceImportTextResolver {
       );
       throw const FormatException('远程书源内容超过 5 MiB，已停止导入');
     }
+
+    /// 【扫码诊断文件】根据响应媒体类型选择便于直接查看的文件扩展名。
+    final String responseFileName = _diagnosticResponseFileName(response);
+    // 【扫码诊断文件】在任何业务解码前保存 Dio 返回的响应字节，便于确认实际内容。
+    await _saveDiagnosticBytes(
+      kind: 'http_response',
+      fileName: responseFileName,
+      bytes: response.bytes,
+    );
 
     /// 按响应字符集和压缩格式解码后的书源文本。
     final DecodedHttpResponse decodedResponse = _responseDecoder.decode(response);
@@ -218,5 +255,58 @@ final class BookSourceImportTextResolver {
       throw const FormatException('远程书源内容为空');
     }
     return resolvedText;
+  }
+
+  /// 【扫码诊断文件】根据 Content-Type 返回最新远程响应使用的固定文件名。
+  String _diagnosticResponseFileName(HttpResponse response) {
+    /// 【扫码诊断文件】服务端返回的小写媒体类型。
+    final String contentType = (response.firstHeader('content-type') ?? '')
+        .toLowerCase();
+    if (contentType.contains('html')) {
+      return 'latest_http_response.html';
+    }
+    if (contentType.contains('json')) {
+      return 'latest_http_response.json';
+    }
+    if (contentType.startsWith('text/')) {
+      return 'latest_http_response.txt';
+    }
+    return 'latest_http_response.bin';
+  }
+
+  /// 【扫码诊断文件】保存最新诊断数据并输出沙盒绝对路径；失败不影响扫码导入。
+  Future<void> _saveDiagnosticBytes({
+    required String kind,
+    required String fileName,
+    required List<int> bytes,
+  }) async {
+    try {
+      /// 【扫码诊断文件】应用私有支持目录，不需要申请外部存储权限。
+      final Directory supportDirectory = await getApplicationSupportDirectory();
+      /// 【扫码诊断文件】扫码书源诊断文件的独立沙盒目录。
+      final Directory diagnosticDirectory = Directory(
+        path_util.join(supportDirectory.path, _diagnosticDirectoryName),
+      );
+      if (!await diagnosticDirectory.exists()) {
+        await diagnosticDirectory.create(recursive: true);
+      }
+      /// 【扫码诊断文件】本次覆盖写入的最新诊断文件。
+      final File diagnosticFile = File(
+        path_util.join(diagnosticDirectory.path, fileName),
+      );
+      await diagnosticFile.writeAsBytes(bytes, flush: true);
+      _logger.info(
+        message:
+            '$bookSourceQrScanLogTag stage=diagnostic_file_saved kind=$kind '
+            'bytes=${bytes.length} path=${diagnosticFile.path}',
+      );
+    } catch (error, stackTrace) {
+      // 【扫码诊断文件】诊断文件写入失败只能记录，不能改变正常添加书源逻辑。
+      _logger.error(
+        message: '$bookSourceQrScanLogTag stage=diagnostic_file_save_failed kind=$kind',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 }

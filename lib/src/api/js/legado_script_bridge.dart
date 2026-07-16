@@ -17,7 +17,7 @@ import 'webview_script_bridge.dart';
 /// Promise。旧 Rhino 脚本若假设同步网络返回，必须由真实样本报告识别，不能静默转换。
 final class LegadoScriptBridge {
   /// 创建脚本 API 桥。
-  const LegadoScriptBridge(
+  LegadoScriptBridge(
     this._httpClient,
     this._responseDecoder,
     this._urlResolver,
@@ -48,6 +48,32 @@ final class LegadoScriptBridge {
   /// 页面 WebView 独立边界。
   final WebViewScriptBridge _webViewBridge;
 
+  /// 按书源隔离的运行时内存缓存，对应 Android `CacheManager` 的 memory API。
+  final Map<String, Map<String, String>> _memoryCacheBySource =
+      <String, Map<String, String>>{};
+
+  /// 在脚本开始前读取 Android `BaseSource` 对应的持久变量，使 getter 保持同步返回。
+  Future<void> prepareContext(LegadoScriptContext context) async {
+    if (!context.variables.containsKey('sourceVariable')) {
+      /// 当前书源持久化的自定义变量；没有配置时使用空字符串对齐 Android。
+      final String? sourceVariable = await _cacheDao.getValidValue(
+        _sourceRuntimeCacheKey('sourceVariable', context.source.bookSourceUrl),
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      context.variables['sourceVariable'] = sourceVariable ?? '';
+    }
+    if (!context.variables.containsKey('loginHeader')) {
+      /// 当前书源持久化的登录 Header；null 表示从未配置。
+      final String? loginHeader = await _cacheDao.getValidValue(
+        _sourceRuntimeCacheKey('loginHeader', context.source.bookSourceUrl),
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      if (loginHeader != null) {
+        context.variables['loginHeader'] = loginHeader;
+      }
+    }
+  }
+
   /// 分派 JS 侧代理调用。
   Object? invoke(
     LegadoScriptContext context,
@@ -56,6 +82,7 @@ final class LegadoScriptBridge {
     List<Object?> arguments, {
     JsCancellationToken? cancellationToken,
   }) {
+    _recordBridgeCall(context, surface, method, arguments);
     if (surface == 'java') {
       return _invokeJava(context, method, arguments, cancellationToken: cancellationToken);
     }
@@ -63,7 +90,7 @@ final class LegadoScriptBridge {
       return _invokeCookie(method, arguments);
     }
     if (surface == 'cache') {
-      return _invokeCache(method, arguments);
+      return _invokeCache(context, method, arguments);
     }
     if (surface == 'source') {
       return _invokeSource(context, method, arguments);
@@ -71,10 +98,42 @@ final class LegadoScriptBridge {
     if (surface.startsWith('class:')) {
       return _javaBridge.invokeClass(surface.substring(6), method, arguments);
     }
+    if (surface.startsWith('host:')) {
+      return _javaBridge.invokeHost(surface.substring(5), method, arguments);
+    }
     throw JsEngineException(
       kind: JsFailureKind.unsupportedApi,
       message: '未支持脚本 API $surface.$method',
     );
+  }
+
+  /// 【FLUTTER_JS_COMPAT_LOG】记录宿主桥表面、方法名和参数类型，不保存任何参数值。
+  void _recordBridgeCall(
+    LegadoScriptContext context,
+    String surface,
+    String method,
+    List<Object?> arguments,
+  ) {
+    /// 【FLUTTER_JS_COMPAT_LOG】只保留桥表面名称中的安全结构字符。
+    final String normalizedSurface = surface.replaceAll(RegExp(r'[^A-Za-z0-9_.:$-]'), '_');
+    /// 【FLUTTER_JS_COMPAT_LOG】限制后的桥表面名称，避免异常脚本制造超长日志字段。
+    final String safeSurface = normalizedSurface.length <= 100
+        ? normalizedSurface
+        : normalizedSurface.substring(0, 100);
+    /// 【FLUTTER_JS_COMPAT_LOG】只保留桥方法名称中的安全结构字符。
+    final String normalizedMethod = method.replaceAll(RegExp(r'[^A-Za-z0-9_$-]'), '_');
+    /// 【FLUTTER_JS_COMPAT_LOG】限制后的桥方法名称。
+    final String safeMethod = normalizedMethod.length <= 80
+        ? normalizedMethod
+        : normalizedMethod.substring(0, 80);
+    /// 【FLUTTER_JS_COMPAT_LOG】参数运行时类型列表，不包含字符串、URL、Cookie 或正文值。
+    final String argumentTypes = arguments
+        .map((Object? argument) => argument == null ? 'null' : argument.runtimeType.toString())
+        .join(',');
+    context.bridgeCalls.add('$safeSurface.$safeMethod($argumentTypes)');
+    if (context.bridgeCalls.length > 24) {
+      context.bridgeCalls.removeAt(0);
+    }
   }
 
   /// 分派 Android `java` 注入对象方法。
@@ -197,6 +256,7 @@ final class LegadoScriptBridge {
       'getCookie' => _getCookie(arguments),
       'setCookie' => _setCookie(arguments, replace: false),
       'replaceCookie' => _setCookie(arguments, replace: true),
+      'removeCookie' => _removeCookie(arguments),
       _ => throw JsEngineException(
         kind: JsFailureKind.unsupportedApi,
         message: '未支持 cookie.$method',
@@ -238,8 +298,19 @@ final class LegadoScriptBridge {
     }
   }
 
+  /// 删除统一 Cookie 存储中指定地址的 Cookie。
+  Future<void> _removeCookie(List<Object?> arguments) async {
+    /// Cookie URL。
+    final Uri uri = Uri.parse(_requiredString(arguments, 0, 'removeCookie'));
+    await _cookieManager.removeCookieHeader(uri);
+  }
+
   /// 分派持久缓存 API。
-  Object? _invokeCache(String method, List<Object?> arguments) {
+  Object? _invokeCache(
+    LegadoScriptContext context,
+    String method,
+    List<Object?> arguments,
+  ) {
     return switch (method) {
       'get' => _cacheDao.getValidValue(
         _requiredString(arguments, 0, 'cache.get'),
@@ -247,11 +318,52 @@ final class LegadoScriptBridge {
       ),
       'put' => _putCache(arguments),
       'delete' => _cacheDao.delete(_requiredString(arguments, 0, 'cache.delete')),
+      'getFromMemory' => _getMemoryCache(context, arguments),
+      'putMemory' => _putMemoryCache(context, arguments),
+      'deleteMemory' => _deleteMemoryCache(context, arguments),
       _ => throw JsEngineException(
         kind: JsFailureKind.unsupportedApi,
         message: '未支持 cache.$method',
       ),
     };
+  }
+
+  /// 读取当前书源隔离的内存缓存值。
+  String _getMemoryCache(
+    LegadoScriptContext context,
+    List<Object?> arguments,
+  ) {
+    /// 脚本请求读取的缓存键。
+    final String key = _requiredString(arguments, 0, 'cache.getFromMemory');
+    return _memoryCacheBySource[context.source.bookSourceUrl]?[key] ?? '';
+  }
+
+  /// 写入当前书源隔离的内存缓存并返回原值。
+  String _putMemoryCache(
+    LegadoScriptContext context,
+    List<Object?> arguments,
+  ) {
+    /// 脚本请求写入的缓存键。
+    final String key = _requiredString(arguments, 0, 'cache.putMemory');
+    /// 脚本请求写入的缓存值。
+    final String value = _requiredString(arguments, 1, 'cache.putMemory');
+    /// 当前书源独占的内存缓存。
+    final Map<String, String> sourceCache = _memoryCacheBySource.putIfAbsent(
+      context.source.bookSourceUrl,
+      () => <String, String>{},
+    );
+    sourceCache[key] = value;
+    return value;
+  }
+
+  /// 删除当前书源隔离的单个内存缓存值。
+  String _deleteMemoryCache(
+    LegadoScriptContext context,
+    List<Object?> arguments,
+  ) {
+    /// 脚本请求删除的缓存键。
+    final String key = _requiredString(arguments, 0, 'cache.deleteMemory');
+    return _memoryCacheBySource[context.source.bookSourceUrl]?.remove(key) ?? '';
   }
 
   /// 写入带可选秒级有效期的缓存。
@@ -279,13 +391,16 @@ final class LegadoScriptBridge {
   ) {
     return switch (method) {
       'getVariable' => context.variables['sourceVariable'] ?? '',
-      'setVariable' || 'putVariable' => _putNamedVariable(
+      'setVariable' || 'putVariable' => _putPersistentSourceVariable(
         context,
-        'sourceVariable',
         arguments,
       ),
       'getLoginHeader' => context.variables['loginHeader'],
-      'putLoginHeader' => _putNamedVariable(context, 'loginHeader', arguments),
+      'putLoginHeader' => _putPersistentSourceValue(
+        context,
+        'loginHeader',
+        arguments,
+      ),
       'getLoginInfo' => context.variables['loginInfo'],
       'putLoginInfo' => _putNamedVariable(context, 'loginInfo', arguments),
       'getKey' => context.source.bookSourceUrl,
@@ -295,6 +410,53 @@ final class LegadoScriptBridge {
         message: '未支持 source.$method',
       ),
     };
+  }
+
+  /// 更新 `source.getVariable()` 的同步内存值，并把结果写入 Flutter 独立缓存表。
+  Future<String> _putPersistentSourceVariable(
+    LegadoScriptContext context,
+    List<Object?> arguments,
+  ) async {
+    /// 脚本传入的自定义变量；null 对齐 Android 删除语义。
+    final String? value = _optionalString(arguments, 0);
+    if (value == null) {
+      context.variables['sourceVariable'] = '';
+      await _cacheDao.delete(
+        _sourceRuntimeCacheKey('sourceVariable', context.source.bookSourceUrl),
+      );
+      return '';
+    }
+    context.variables['sourceVariable'] = value;
+    await _cacheDao.upsert(
+      Cache(
+        key: _sourceRuntimeCacheKey('sourceVariable', context.source.bookSourceUrl),
+        value: value,
+      ),
+    );
+    return value;
+  }
+
+  /// 更新需要跨脚本保存的书源运行值，并复用 Android `前缀_书源URL` 缓存键语义。
+  Future<String> _putPersistentSourceValue(
+    LegadoScriptContext context,
+    String name,
+    List<Object?> arguments,
+  ) async {
+    /// 脚本传入的运行值；缺少参数时由统一参数校验报告桥错误。
+    final String value = _requiredString(arguments, 0, 'source.$name');
+    context.variables[name] = value;
+    await _cacheDao.upsert(
+      Cache(
+        key: _sourceRuntimeCacheKey(name, context.source.bookSourceUrl),
+        value: value,
+      ),
+    );
+    return value;
+  }
+
+  /// 生成与 Android `BaseSource` 一致、且仅存在于 Flutter 独立数据库中的运行缓存键。
+  String _sourceRuntimeCacheKey(String name, String sourceUrl) {
+    return '${name}_$sourceUrl';
   }
 
   /// 写入指定书源上下文变量。

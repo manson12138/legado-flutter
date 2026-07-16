@@ -6,6 +6,7 @@ import '../../app/app_dependencies.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
+import '../../help/logging/app_logger.dart';
 import '../../platform/reader_platform_service.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
@@ -18,6 +19,7 @@ final class ReaderRoute extends StatefulWidget {
   const ReaderRoute({
     required this.dependencies,
     required this.bookUrl,
+    this.initialChapterIndex,
     super.key,
   });
 
@@ -26,6 +28,9 @@ final class ReaderRoute extends StatefulWidget {
 
   /// M07 书架传入的稳定书籍 URL。
   final String bookUrl;
+
+  /// 从详情目录进入时指定的初始章节索引；为空则使用阅读进度。
+  final int? initialChapterIndex;
 
   /// 创建路由状态。
   @override
@@ -59,9 +64,15 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   @override
   void initState() {
     super.initState();
+    /// 【搜书诊断日志】阅读页面实例创建，后续初始化日志由同一 bookId 串联。
+    widget.dependencies.logger.info(
+      tag: bookReaderEntryLogTag,
+      message: '文本阅读页面创建 bookId=${appLogDiagnosticId(widget.bookUrl)}',
+    );
     WidgetsBinding.instance.addObserver(this);
     _viewModel = ReaderViewModel(
       bookUrl: widget.bookUrl,
+      initialChapterIndex: widget.initialChapterIndex,
       bookshelfGateway: widget.dependencies.bookshelfGateway,
       loadBookChapters: widget.dependencies.loadBookChapters,
       restoreReadingProgress: widget.dependencies.restoreReadingProgress,
@@ -69,6 +80,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       bookmarkGateway: widget.dependencies.bookmarkGateway,
       cacheGateway: widget.dependencies.readerCacheGateway,
       coordinator: widget.dependencies.createReadBookCoordinator(),
+      logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _viewModel.onIntent(const InitializeReaderIntent());
@@ -91,12 +103,22 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     }
     switch (effect) {
       case EnterReaderSystemEffect(keepScreenOn: final bool keepScreenOn):
+        /// 【搜书诊断日志】收到该 Effect 表示书籍、目录和阅读配置初始化成功。
+        widget.dependencies.logger.info(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器初始化通过，进入阅读系统模式 '
+              'bookId=${appLogDiagnosticId(widget.bookUrl)} keepScreenOn=$keepScreenOn',
+        );
         unawaited(_platformService.enterReader(keepScreenOn: keepScreenOn));
       case UpdateReaderSystemEffect(keepScreenOn: final bool keepScreenOn):
         unawaited(_platformService.setKeepScreenOn(keepScreenOn));
       case ExitReaderSystemEffect():
         unawaited(_platformService.exitReader());
       case CloseReaderRouteEffect():
+        widget.dependencies.logger.info(
+          tag: bookReaderEntryLogTag,
+          message: '阅读页面准备退出 bookId=${appLogDiagnosticId(widget.bookUrl)}',
+        );
         if (_allowPop) {
           return;
         }

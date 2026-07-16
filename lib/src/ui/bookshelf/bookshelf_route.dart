@@ -7,6 +7,7 @@ import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
+import '../../help/logging/app_logger.dart';
 import '../book_info/book_info_contract.dart';
 import 'bookshelf_contract.dart';
 import 'bookshelf_screen.dart';
@@ -56,6 +57,12 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     }
     switch (effect) {
       case OpenBookshelfReaderEffect(book: final Book book):
+        /// 【搜书诊断日志】现有产品路径从书架点击书籍后进入阅读路由。
+        widget.dependencies.logger.info(
+          tag: bookReaderEntryLogTag,
+          message: '书架点击书籍，准备进入阅读器 bookId=${appLogDiagnosticId(book.bookUrl)} '
+              'originId=${appLogDiagnosticId(book.origin)} chapterCount=${book.totalChapterNum}',
+        );
         Navigator.of(context).pushNamed(AppRoute.reader, arguments: book.bookUrl);
       case OpenBookshelfBookInfoEffect(book: final Book book):
         /// 将书架书转换为详情路由所需候选来源。

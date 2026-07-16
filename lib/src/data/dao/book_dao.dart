@@ -18,6 +18,11 @@ final class BookDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.books,
+      where: '<all> orderBy=durChapterTime DESC',
+    );
     /// `books` 表查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.books,
@@ -31,6 +36,12 @@ final class BookDao {
     /// 当前查询使用的数据库或事务执行器。
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.books,
+      where: 'bookUrl = ? limit=1',
+      argumentCount: 1,
+    );
     /// 最多包含一行的主键查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.books,
@@ -63,6 +74,11 @@ final class BookDao {
     /// 当前写入使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.books,
+      itemCount: 1,
+    );
     await writeExecutor.insert(
       DatabaseTables.books,
       bookToMap(book),
@@ -78,6 +94,12 @@ final class BookDao {
     /// 当前删除使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.books,
+      where: 'bookUrl = ?',
+      argumentCount: 1,
+    );
     await writeExecutor.delete(
       DatabaseTables.books,
       where: 'bookUrl = ?',
@@ -100,6 +122,12 @@ final class BookDao {
     }
     /// 与 URL 数量一致的 SQL 占位符。
     final String placeholders = List<String>.filled(bookUrls.length, '?').join(',');
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.books,
+      where: 'bookUrl IN ($placeholders)',
+      argumentCount: bookUrls.length,
+    );
     await executor.delete(
       DatabaseTables.books,
       where: 'bookUrl IN ($placeholders)',
@@ -118,6 +146,12 @@ final class BookDao {
     }
     /// 与 URL 数量一致的 SQL 占位符。
     final String placeholders = List<String>.filled(bookUrls.length, '?').join(',');
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.books,
+      where: 'bookUrl IN ($placeholders)',
+      argumentCount: bookUrls.length,
+    );
     await executor.update(
       DatabaseTables.books,
       <String, Object?>{'`group`': groupId > 0 ? groupId : 0},
@@ -139,6 +173,12 @@ final class BookDao {
     /// 当前更新使用的数据库或事务执行器。
     final DatabaseExecutor writeExecutor =
         executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.books,
+      where: 'bookUrl = ?',
+      argumentCount: 1,
+    );
     /// 被更新的书籍行数，用于区分成功和书籍不存在。
     final int changedRows = await writeExecutor.update(
       DatabaseTables.books,

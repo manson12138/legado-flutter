@@ -37,8 +37,10 @@ final class LegadoScriptContext implements JsHostBridgeContext {
     this.page,
     this.nextChapterUrl,
     Map<String, String> variables = const <String, String>{},
+    List<String>? bridgeCalls,
     this.httpCancellationToken,
-  }) : variables = Map<String, String>.from(variables);
+  }) : variables = Map<String, String>.from(variables),
+       bridgeCalls = bridgeCalls ?? <String>[];
 
   /// 当前书源。
   final BookSource source;
@@ -67,6 +69,9 @@ final class LegadoScriptContext implements JsHostBridgeContext {
   /// 规则可变数据；键值更新只存在于当前业务上下文。
   final Map<String, String> variables;
 
+  /// 【FLUTTER_JS_COMPAT_LOG】当前规则链触达的宿主桥方法轨迹，仅保存方法名和参数类型。
+  final List<String> bridgeCalls;
+
   /// 复用 M3 网络取消能力的令牌。
   final HttpCancellationToken? httpCancellationToken;
 
@@ -78,6 +83,7 @@ final class LegadoScriptContext implements JsHostBridgeContext {
       'page': page,
       'nextChapterUrl': nextChapterUrl,
       'result': result,
+      'src': result,
       'source': _sourceMap(source),
       'book': _bookMap(book),
       'chapter': _chapterMap(chapter),

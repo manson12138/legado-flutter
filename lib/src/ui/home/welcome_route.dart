@@ -55,6 +55,8 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
         Navigator.of(context).pushNamed(AppRoute.bookshelf);
       case NavigateToLocalBookImportEffect():
         Navigator.of(context).pushNamed(AppRoute.localBookImport);
+      case NavigateToSettingsEffect():
+        Navigator.of(context).pushNamed(AppRoute.settings);
     }
   }
 

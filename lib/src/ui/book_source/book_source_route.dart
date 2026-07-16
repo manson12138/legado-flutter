@@ -416,6 +416,7 @@ final class _EditSourceDialogViewState extends State<_EditSourceDialogView> {
       'loginUrl': TextEditingController(text: draft.loginUrl),
       'loginUi': TextEditingController(text: draft.loginUi),
       'loginCheckJs': TextEditingController(text: draft.loginCheckJs),
+      'variable': TextEditingController(text: draft.variable),
       'comment': TextEditingController(text: draft.comment),
     };
     _enabled = draft.enabled;
@@ -483,6 +484,7 @@ final class _EditSourceDialogViewState extends State<_EditSourceDialogView> {
               _field('loginUrl', '登录 URL'),
               _field('loginUi', '登录 UI', lines: 4),
               _field('loginCheckJs', '登录检测 JS', lines: 5),
+              _field('variable', '书源变量（source.getVariable）', lines: 4),
               _field('comment', '书源说明', lines: 3),
             ],
           ),
@@ -549,6 +551,7 @@ final class _EditSourceDialogViewState extends State<_EditSourceDialogView> {
         loginUrl: text('loginUrl'),
         loginUi: text('loginUi'),
         loginCheckJs: text('loginCheckJs'),
+        variable: text('variable'),
         comment: text('comment'),
       ),
     );

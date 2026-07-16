@@ -4,6 +4,7 @@ import '../../domain/gateway/search_history_gateway.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/search_book.dart';
+import '../../help/logging/app_logger.dart';
 import '../../model/web_book/book_search_coordinator.dart';
 import 'search_contract.dart';
 
@@ -13,8 +14,10 @@ final class SearchViewModel {
   SearchViewModel({
     required BookSearchCoordinator coordinator,
     required SearchHistoryGateway historyGateway,
+    required AppLogger logger,
   }) : _coordinator = coordinator,
-       _historyGateway = historyGateway {
+       _historyGateway = historyGateway,
+       _logger = logger {
     _initialize();
   }
 
@@ -22,6 +25,8 @@ final class SearchViewModel {
   final BookSearchCoordinator _coordinator;
   /// 搜索历史边界。
   final SearchHistoryGateway _historyGateway;
+  /// 【搜书诊断日志】项目统一日志接口，不直接依赖具体输出实现。
+  final AppLogger _logger;
   /// 当前页面状态。
   SearchUiState _state = SearchUiState();
   /// 状态广播流。
@@ -52,6 +57,11 @@ final class SearchViewModel {
       case CancelSearchIntent():
         _cancel(manual: true);
       case RetryFailedSourcesIntent():
+        /// 【搜书诊断日志】记录用户从失败书源区域触发重试。
+        _logger.info(
+          tag: bookSearchUiLogTag,
+          message: '用户重试失败书源 failureCount=${_state.failures.length}',
+        );
         _retryFailures();
       case ToggleSearchSourceIntent(sourceUrl: final String sourceUrl):
         _toggleSource(sourceUrl);
@@ -60,6 +70,13 @@ final class SearchViewModel {
       case ClearSearchHistoryIntent():
         _clearHistory();
       case OpenSearchResultIntent(group: final BookSearchResultGroup group, book: final SearchBook book):
+        /// 【搜书诊断日志】记录点击的是哪个不可逆候选标识以及可换源数量。
+        _logger.info(
+          tag: bookSearchUiLogTag,
+          message: '用户点击搜索结果 candidateCount=${group.books.length} '
+              'bookId=${appLogDiagnosticId(book.bookUrl)} '
+              'sourceId=${appLogDiagnosticId(book.origin)}',
+        );
         _effectController.add(OpenBookInfoEffect(group, book));
       case BackFromSearchIntent():
         _effectController.add(const CloseSearchEffect());
@@ -68,13 +85,27 @@ final class SearchViewModel {
 
   /// 并行读取书源和历史，失败时保持页面可重试。
   Future<void> _initialize() async {
+    /// 【搜书诊断日志】初始化耗时计时器。
+    final Stopwatch stopwatch = Stopwatch()..start();
+    _logger.info(tag: bookSearchUiLogTag, message: '搜索页面初始化开始');
     try {
       /// 当前启用书源。
       final List<BookSource> sources = await _coordinator.loadEnabledSources();
       /// 已保存历史。
       final List<String> history = await _historyGateway.load();
       _emit(_state.copyWith(loadingSources: false, sources: sources, history: history));
-    } catch (error) {
+      _logger.info(
+        tag: bookSearchUiLogTag,
+        message: '搜索页面初始化完成 sourceCount=${sources.length} '
+            'historyCount=${history.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    } catch (error, stackTrace) {
+      _logger.error(
+        tag: bookSearchUiLogTag,
+        message: '搜索页面初始化失败 elapsedMs=${stopwatch.elapsedMilliseconds}',
+        error: error,
+        stackTrace: stackTrace,
+      );
       _emit(_state.copyWith(loadingSources: false, errorMessage: '读取启用书源失败'));
     }
   }
@@ -84,6 +115,8 @@ final class SearchViewModel {
     /// 去除首尾空白的关键字。
     final String keyword = rawKeyword.trim();
     if (keyword.isEmpty) {
+      /// 【搜书诊断日志】空关键字在 ViewModel 边界被拒绝，没有创建搜索任务。
+      _logger.warning(tag: bookSearchUiLogTag, message: '搜索提交被拒绝 reason=emptyKeyword');
       _effectController.add(const ShowSearchMessageEffect('请输入搜索关键字'));
       return;
     }
@@ -91,6 +124,13 @@ final class SearchViewModel {
     _generation += 1;
     /// 本次搜索固定运行编号。
     final int generation = _generation;
+    /// 【搜书诊断日志】整次多书源搜索耗时计时器。
+    final Stopwatch stopwatch = Stopwatch()..start();
+    _logger.info(
+      tag: bookSearchUiLogTag,
+      message: '搜索任务开始 generation=$generation keywordLength=${keyword.length} '
+          'selectedSourceCount=${sourceUrls.length} allSources=${sourceUrls.isEmpty}',
+    );
     _resultBooks.clear();
     _emit(
       _state.copyWith(
@@ -109,6 +149,11 @@ final class SearchViewModel {
       final List<String> history = await _historyGateway.record(keyword);
       if (generation == _generation) {
         _emit(_state.copyWith(history: history));
+        /// 【搜书诊断日志】只记录历史数量，不记录搜索词原文。
+        _logger.debug(
+          tag: bookSearchUiLogTag,
+          message: '搜索历史已保存 generation=$generation historyCount=${history.length}',
+        );
       }
       /// 新运行句柄。
       final BookSearchRun run = await _coordinator.start(
@@ -117,6 +162,11 @@ final class SearchViewModel {
         onEvent: (BookSearchEvent event) => _handleEvent(generation, event),
       );
       if (generation != _generation) {
+        /// 【搜书诊断日志】启动阶段已经被更新任务替代，立即取消旧运行。
+        _logger.warning(
+          tag: bookSearchUiLogTag,
+          message: '搜索任务启动后已过期 generation=$generation currentGeneration=$_generation',
+        );
         run.cancel();
         return;
       }
@@ -124,9 +174,21 @@ final class SearchViewModel {
       await run.completion;
       if (generation == _generation && !run.isCancelled) {
         _emit(_state.copyWith(searching: false));
+        _logger.info(
+          tag: bookSearchUiLogTag,
+          message: '搜索任务完成 generation=$generation groupCount=${_state.results.length} '
+              'failureCount=${_state.failures.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (generation == _generation) {
+        _logger.error(
+          tag: bookSearchUiLogTag,
+          message: '搜索任务启动或等待失败 generation=$generation '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+          error: error,
+          stackTrace: stackTrace,
+        );
         _emit(_state.copyWith(searching: false, errorMessage: '搜索任务启动失败'));
       }
     }
@@ -135,20 +197,40 @@ final class SearchViewModel {
   /// 处理协调器事件，并用运行编号拒绝旧任务结果。
   void _handleEvent(int generation, BookSearchEvent event) {
     if (generation != _generation) {
+      /// 【搜书诊断日志】旧搜索回调只记录隔离事实，不合并到当前页面。
+      _logger.debug(
+        tag: bookSearchUiLogTag,
+        message: '忽略旧搜索事件 eventGeneration=$generation currentGeneration=$_generation '
+            'eventType=${event.runtimeType}',
+      );
       return;
     }
     switch (event) {
       case BookSearchResultsEvent(books: final List<SearchBook> books):
         _merge(books);
       case BookSearchFailureEvent(failure: final BookSearchSourceFailure failure):
+        /// 【搜书诊断日志】单源详细错误由协调器记录，此处记录页面接收结果。
+        _logger.warning(
+          tag: bookSearchUiLogTag,
+          message: '页面收到书源失败 generation=$generation '
+              'sourceId=${appLogDiagnosticId(failure.sourceUrl)} category=${failure.category}',
+        );
         _emit(_state.copyWith(failures: <BookSearchSourceFailure>[..._state.failures, failure]));
       case BookSearchProgressEvent(progress: final BookSearchProgress progress):
+        /// 【搜书诊断日志】每个书源结束时输出可用于判断卡住位置的聚合进度。
+        _logger.debug(
+          tag: bookSearchUiLogTag,
+          message: '搜索进度 generation=$generation completed=${progress.completed}/${progress.total} '
+              'succeeded=${progress.succeeded} failed=${progress.failed}',
+        );
         _emit(_state.copyWith(progress: progress));
     }
   }
 
   /// 按 Android 严格书名作者键合并来源，并按精确匹配和来源数排序。
   void _merge(List<SearchBook> books) {
+    /// 【搜书诊断日志】合并前已有的结果组数量。
+    final int previousGroupCount = _resultBooks.length;
     for (final SearchBook book in books) {
       /// 避免拼接碰撞的内部键。
       final String key = '${book.name.length}:${book.name}${book.author}';
@@ -173,6 +255,11 @@ final class SearchViewModel {
       return right.books.length.compareTo(left.books.length);
     });
     _emit(_state.copyWith(results: groups));
+    _logger.debug(
+      tag: bookSearchUiLogTag,
+      message: '搜索结果已合并 incomingBookCount=${books.length} '
+          'previousGroupCount=$previousGroupCount currentGroupCount=${groups.length}',
+    );
   }
 
   /// 切换书源选择；空集合保留“全部”语义。
@@ -199,10 +286,16 @@ final class SearchViewModel {
 
   /// 停止当前搜索并使全部旧回调失效。
   void _cancel({required bool manual}) {
+    /// 【搜书诊断日志】取消前是否存在运行句柄。
+    final bool hadActiveRun = _run != null;
     _run?.cancel();
     _run = null;
     if (manual) {
       _generation += 1;
+      _logger.info(
+        tag: bookSearchUiLogTag,
+        message: '用户取消搜索 hadActiveRun=$hadActiveRun newGeneration=$_generation',
+      );
       _emit(_state.copyWith(searching: false, cancelled: true));
     }
   }
@@ -210,6 +303,8 @@ final class SearchViewModel {
   /// 清空持久化历史。
   Future<void> _clearHistory() async {
     await _historyGateway.clear();
+    /// 【搜书诊断日志】只记录清空动作，不输出历史内容。
+    _logger.info(tag: bookSearchUiLogTag, message: '搜索历史已清空');
     _emit(_state.copyWith(history: const <String>[]));
   }
 
@@ -223,6 +318,11 @@ final class SearchViewModel {
 
   /// 取消任务并释放流控制器。
   void dispose() {
+    /// 【搜书诊断日志】记录页面销毁时是否仍有搜索任务。
+    _logger.info(
+      tag: bookSearchUiLogTag,
+      message: '搜索页面释放 searching=${_state.searching} generation=$_generation',
+    );
     _generation += 1;
     _cancel(manual: false);
     _stateController.close();

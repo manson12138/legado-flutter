@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   archive: ^4.0.9
+  cross_file: ^0.3.5+2
   crypto: ^3.0.7
   dio: ^5.10.0
   enough_convert: ^1.6.0
@@ -19,7 +20,9 @@ dependencies:
   jsf: ^1.1.0
   mobile_scanner: ^7.2.0
   path: ^1.9.1
+  path_provider: ^2.1.6
   pdfx: ^2.9.2
+  share_plus: ^12.0.1
   # Flutter 3.41.5 当前内置 Dart 3.11.3，固定到仍兼容该 SDK 的版本。
   sqflite: 2.4.2
   xpath_selector: ^3.0.2

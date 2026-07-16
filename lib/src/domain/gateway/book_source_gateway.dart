@@ -24,6 +24,12 @@ abstract interface class BookSourceGateway {
   /// 保存新增或编辑后的完整书源；URL 变化时删除旧主键但不删除书架书籍。
   Future<void> saveSource(BookSource source, {String? previousUrl});
 
+  /// 读取 Android `source.getVariable()` 对应的书源自定义变量；未配置时返回空字符串。
+  Future<String> getSourceVariable(String sourceUrl);
+
+  /// 保存书源自定义变量；[value] 为 null 时删除 Flutter 独立缓存中的配置。
+  Future<void> saveSourceVariable(String sourceUrl, String? value);
+
   /// 批量修改书源启用状态。
   Future<void> setEnabled(Set<String> sourceUrls, {required bool enabled});
 

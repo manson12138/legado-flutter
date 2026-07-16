@@ -4,6 +4,7 @@ import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/search_book.dart';
+import '../../help/logging/app_logger.dart';
 import 'standard_source_parser.dart';
 import 'standard_source_service.dart';
 
@@ -38,8 +39,10 @@ final class BookDetailService {
   const BookDetailService({
     required BookSourceGateway sourceGateway,
     required StandardBookSourceService standardService,
+    required AppLogger logger,
   }) : _sourceGateway = sourceGateway,
-       _standardService = standardService;
+       _standardService = standardService,
+       _logger = logger;
 
   /// 书源查询边界。
   final BookSourceGateway _sourceGateway;
@@ -47,18 +50,25 @@ final class BookDetailService {
   /// 普通规则详情和目录服务。
   final StandardBookSourceService _standardService;
 
+  /// 【搜书诊断日志】项目统一日志接口，用于记录详情和目录业务编排。
+  final AppLogger _logger;
+
   /// 从搜索结果加载并合并详情字段。
   Future<BookDetailSnapshot> loadDetails({
     required SearchBook searchBook,
     HttpCancellationToken? cancellationToken,
   }) async {
+    /// 【搜书诊断日志】搜索候选书籍不可逆标识。
+    final String bookId = appLogDiagnosticId(searchBook.bookUrl);
+    _logger.info(
+      tag: bookDetailLogTag,
+      message: '详情业务加载开始 bookId=$bookId sourceId=${appLogDiagnosticId(searchBook.origin)}',
+    );
     /// 搜索结果声明的来源书源。
     final BookSource? source = await _sourceGateway.getByUrl(searchBook.origin);
     if (source == null) {
+      _logger.warning(tag: bookDetailLogTag, message: '详情业务终止 bookId=$bookId reason=sourceMissing');
       throw const BookDetailException('原书源已不存在');
-    }
-    if (_requiresJavaScript(source)) {
-      throw const BookDetailException('该详情依赖 JavaScript，需等待 M04 真机兼容验收');
     }
     /// 搜索结果转换的基础书籍。
     final Book baseBook = searchBook.toBook(
@@ -70,19 +80,37 @@ final class BookDetailService {
       book: baseBook,
       cancellationToken: cancellationToken,
     );
-    return BookDetailSnapshot(source: source, book: _merge(baseBook, parsed));
+    /// 合并搜索事实与详情规则字段后的快照。
+    final BookDetailSnapshot snapshot = BookDetailSnapshot(
+      source: source,
+      book: _merge(baseBook, parsed),
+    );
+    _logger.info(
+      tag: bookDetailLogTag,
+      message: '详情业务加载完成 bookId=$bookId hasTocUrl=${snapshot.book.tocUrl.isNotEmpty}',
+    );
+    return snapshot;
   }
 
   /// 加载完整分页目录；服务层负责 URL 去重和连续索引。
   Future<List<BookChapter>> loadToc({
     required BookDetailSnapshot snapshot,
     HttpCancellationToken? cancellationToken,
-  }) {
-    return _standardService.loadToc(
+  }) async {
+    /// 【搜书诊断日志】详情页目录业务阶段对应的书籍不可逆标识。
+    final String bookId = appLogDiagnosticId(snapshot.book.bookUrl);
+    _logger.info(tag: bookTocLogTag, message: '详情页请求完整目录 bookId=$bookId');
+    /// 完整目录结果。
+    final List<BookChapter> chapters = await _standardService.loadToc(
       source: snapshot.source,
       book: snapshot.book,
       cancellationToken: cancellationToken,
     );
+    _logger.info(
+      tag: bookTocLogTag,
+      message: '详情页取得完整目录 bookId=$bookId chapterCount=${chapters.length}',
+    );
+    return chapters;
   }
 
   /// 刷新书架中已有书籍；已有目录 URL 时避免重复请求详情。
@@ -94,9 +122,6 @@ final class BookDetailService {
     final BookSource? source = await _sourceGateway.getByUrl(book.origin);
     if (source == null) {
       throw const BookDetailException('原书源已不存在');
-    }
-    if (_requiresJavaScript(source)) {
-      throw const BookDetailException('该书源依赖 JavaScript，需等待 M04 真机兼容验收');
     }
     /// 目录 URL 缺失时先刷新详情，否则直接沿用书架事实。
     final Book detailBook;
@@ -196,19 +221,6 @@ final class BookDetailService {
     );
   }
 
-  /// 判断当前普通规则服务不能安全执行的脚本字段。
-  bool _requiresJavaScript(BookSource source) {
-    if (source.jsLib?.trim().isNotEmpty == true) {
-      return true;
-    }
-    /// 详情和目录链路相关规则。
-    final String rules = <String?>[
-      source.ruleBookInfo,
-      source.ruleToc,
-    ].whereType<String>().join('\n');
-    return RegExp(r'@js:|<js>|js@|Packages\.|JavaImporter|java\.', caseSensitive: false)
-        .hasMatch(rules);
-  }
 }
 
 /// 表示详情业务可安全展示的受控异常。

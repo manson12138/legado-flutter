@@ -23,7 +23,18 @@ final class WelcomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AppScaffold(
-      appBar: AppBar(title: Text(state.title)),
+      appBar: AppBar(
+        title: Text(state.title),
+        actions: <Widget>[
+          IconButton(
+            onPressed: () {
+              onIntent(const OpenSettingsIntent());
+            },
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '设置',
+          ),
+        ],
+      ),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(SpacingToken.large),

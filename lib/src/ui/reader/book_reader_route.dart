@@ -9,13 +9,21 @@ import 'reader_route.dart';
 /// 在读取书籍事实后把 PDF 分流到页面阅读器，其余书籍进入 M8 文本阅读器。
 final class BookReaderRoute extends StatelessWidget {
   /// 创建统一阅读入口。
-  const BookReaderRoute({required this.dependencies, required this.bookUrl, super.key});
+  const BookReaderRoute({
+    required this.dependencies,
+    required this.bookUrl,
+    this.initialChapterIndex,
+    super.key,
+  });
 
   /// 应用组合根依赖。
   final AppDependencies dependencies;
 
   /// 书架传入的稳定书籍 URL。
   final String bookUrl;
+
+  /// 详情目录入口传入的初始章节索引；为空时沿用阅读进度。
+  final int? initialChapterIndex;
 
   /// 异步读取书籍并选择正确阅读内容模型。
   @override
@@ -34,7 +42,11 @@ final class BookReaderRoute extends StatelessWidget {
         if (book.origin == 'loc_book' && book.originName.toLowerCase().endsWith('.pdf')) {
           return PdfReaderRoute(dependencies: dependencies, book: book);
         }
-        return ReaderRoute(dependencies: dependencies, bookUrl: bookUrl);
+        return ReaderRoute(
+          dependencies: dependencies,
+          bookUrl: bookUrl,
+          initialChapterIndex: initialChapterIndex,
+        );
       },
     );
   }

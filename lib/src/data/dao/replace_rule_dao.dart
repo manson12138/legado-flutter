@@ -17,6 +17,11 @@ final class ReplaceRuleDao {
   Future<List<ReplaceRule>> getAll() async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.replaceRules,
+      where: '<all> orderBy=sortOrder ASC',
+    );
     /// 全部净化规则数据库行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.replaceRules,
@@ -32,6 +37,12 @@ final class ReplaceRuleDao {
   ) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.replaceRules,
+      where: 'enabled content scope query orderBy=sortOrder ASC',
+      argumentCount: 4,
+    );
     /// 与 Android `findEnabledByContentScope` 等价的规则行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.replaceRules,
@@ -75,6 +86,11 @@ final class ReplaceRuleDao {
   Future<int> upsert(ReplaceRule rule) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.replaceRules,
+      itemCount: 1,
+    );
     /// SQLite 返回的自增或既有规则主键。
     final int id = await database.insert(
       DatabaseTables.replaceRules,
@@ -89,6 +105,12 @@ final class ReplaceRuleDao {
   Future<void> deleteById(int id) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.replaceRules,
+      where: 'id = ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.replaceRules,
       where: 'id = ?',

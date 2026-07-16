@@ -51,6 +51,12 @@ final class OpenLocalBookImportIntent extends WelcomeIntent {
   const OpenLocalBookImportIntent();
 }
 
+/// 请求打开应用设置页面。
+final class OpenSettingsIntent extends WelcomeIntent {
+  /// 创建设置页导航意图。
+  const OpenSettingsIntent();
+}
+
 /// 定义欢迎页发出的一次性副作用，不将 Snackbar 等短暂行为存入 UiState。
 sealed class WelcomeEffect {
   /// 限制欢迎页副作用只能由本文件声明的明确类型创建。
@@ -88,4 +94,10 @@ final class NavigateToBookshelfEffect extends WelcomeEffect {
 final class NavigateToLocalBookImportEffect extends WelcomeEffect {
   /// 创建本地书导入导航副作用。
   const NavigateToLocalBookImportEffect();
+}
+
+/// 请求路由层打开应用设置页面。
+final class NavigateToSettingsEffect extends WelcomeEffect {
+  /// 创建无附加数据的设置页导航副作用。
+  const NavigateToSettingsEffect();
 }

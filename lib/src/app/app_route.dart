@@ -3,6 +3,12 @@ abstract final class AppRoute {
   /// M1 欢迎页，也是当前应用启动路由。
   static const String welcome = '/';
 
+  /// 应用设置页面。
+  static const String settings = '/settings';
+
+  /// 设置中的沙盒日志管理页面。
+  static const String logManagement = '/settings/logs';
+
   /// M5 书源管理页面。
   static const String bookSourceManagement = '/book-sources';
 
@@ -20,4 +26,16 @@ abstract final class AppRoute {
 
   /// M08 阅读器预留入口；M07 只定义稳定导航参数。
   static const String reader = '/reader';
+}
+
+/// 阅读器路由参数，支持从书架恢复进度或从目录指定章节进入。
+final class ReaderRouteArguments {
+  /// 创建阅读器路由参数。
+  const ReaderRouteArguments({required this.bookUrl, this.initialChapterIndex});
+
+  /// 阅读器需要读取的本地稳定书籍 URL。
+  final String bookUrl;
+
+  /// 从详情目录进入阅读器时指定的初始章节索引；为空时使用既有阅读进度。
+  final int? initialChapterIndex;
 }

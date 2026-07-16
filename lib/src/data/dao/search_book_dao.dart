@@ -17,6 +17,12 @@ final class SearchBookDao {
   Future<SearchBook?> getFirstByNameAuthor(String name, String author) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.searchBooks,
+      where: 'name = ? AND author = ? orderBy=originOrder ASC limit=1',
+      argumentCount: 2,
+    );
     /// 最多包含一条候选的查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.searchBooks,
@@ -35,6 +41,11 @@ final class SearchBookDao {
     }
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'BATCH_INSERT_REPLACE',
+      table: DatabaseTables.searchBooks,
+      itemCount: books.length,
+    );
     /// 聚合本次搜索结果写入的批次。
     final Batch batch = database.batch();
     for (final SearchBook book in books) {
@@ -52,6 +63,12 @@ final class SearchBookDao {
   Future<void> clearExpired(int time) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.searchBooks,
+      where: 'time < ?',
+      argumentCount: 1,
+    );
     await database.delete(
       DatabaseTables.searchBooks,
       where: 'time < ?',

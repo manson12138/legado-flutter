@@ -205,6 +205,10 @@ final class BookSourceManagementViewModel {
         message:
             '$bookSourceQrScanLogTag stage=confirmation_accepted policy=${conflictPolicy.name} chars=${text.length}',
       );
+      _logger.info(
+        message:
+            '$bookSourceQrScanLogTag stage=database_import_started policy=${conflictPolicy.name}',
+      );
     }
     _emit(_state.copyWith(busy: true, clearDialog: true, clearError: true));
     /// 领域导入结果。
@@ -217,12 +221,20 @@ final class BookSourceManagementViewModel {
         if (isScannedImport) {
           _logger.info(
             message:
+                '$bookSourceQrScanLogTag stage=database_import_finished total=${value.total} added=${value.added} overwritten=${value.overwritten} skipped=${value.skipped} invalid=${value.invalid}',
+          );
+          _logger.info(
+            message:
                 '$bookSourceQrScanLogTag stage=flow_finished result=imported total=${value.total} added=${value.added} overwritten=${value.overwritten} skipped=${value.skipped} invalid=${value.invalid}',
           );
         }
         _emit(_state.copyWith(busy: false, dialog: ImportSummaryDialog(result: value)));
       case AppFailure<BookSourceImportResult>(error: final error):
         if (isScannedImport) {
+          _logger.warning(
+            message: '$bookSourceQrScanLogTag stage=database_import_failed',
+            error: error,
+          );
           _logger.warning(
             message: '$bookSourceQrScanLogTag stage=flow_finished result=import_failed',
             error: error,
@@ -348,14 +360,35 @@ final class BookSourceManagementViewModel {
   }
 
   /// 显示已有书源编辑草稿。
-  void _showEditor(String sourceUrl) {
+  Future<void> _showEditor(String sourceUrl) async {
     /// 数据库观察状态中的目标书源。
     final BookSource? source = _findSource(sourceUrl);
     if (source == null) {
       _effectController.add(const ShowBookSourceMessageEffect('书源已不存在'));
       return;
     }
-    _emit(_state.copyWith(dialog: EditBookSourceDialog(draft: _draftFromSource(source))));
+    try {
+      /// Flutter 独立缓存中保存的书源自定义变量。
+      final String variable = await _gateway.getSourceVariable(sourceUrl);
+      if (_findSource(sourceUrl) == null) {
+        _effectController.add(const ShowBookSourceMessageEffect('书源已不存在'));
+        return;
+      }
+      _emit(
+        _state.copyWith(
+          dialog: EditBookSourceDialog(
+            draft: _draftFromSource(source, variable: variable),
+          ),
+        ),
+      );
+    } catch (error, stackTrace) {
+      _logger.error(
+        message: '读取书源变量失败',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _effectController.add(const ShowBookSourceMessageEffect('读取书源变量失败'));
+    }
   }
 
   /// 校验并保存书源草稿。
@@ -412,10 +445,18 @@ final class BookSourceManagementViewModel {
       extraFieldsJson: original?.extraFieldsJson,
     );
     await _runWrite(
-      operation: () => _gateway.saveSource(
-        source,
-        previousUrl: draft.originalUrl.isEmpty ? null : draft.originalUrl,
-      ),
+      operation: () async {
+        /// 编辑前主键；新增书源时为空。
+        final String? previousUrl = draft.originalUrl.isEmpty ? null : draft.originalUrl;
+        await _gateway.saveSource(source, previousUrl: previousUrl);
+        await _gateway.saveSourceVariable(
+          source.bookSourceUrl,
+          draft.variable.isEmpty ? null : draft.variable,
+        );
+        if (previousUrl != null && previousUrl != source.bookSourceUrl) {
+          await _gateway.saveSourceVariable(previousUrl, null);
+        }
+      },
       successMessage: original == null ? '书源已新增' : '书源已保存',
     );
   }
@@ -590,12 +631,16 @@ final class BookSourceManagementViewModel {
       loginUrl: '',
       loginUi: '',
       loginCheckJs: '',
+      variable: '',
       comment: '',
     );
   }
 
   /// 将完整书源转换为第一批编辑器草稿。
-  BookSourceEditorDraft _draftFromSource(BookSource source) {
+  BookSourceEditorDraft _draftFromSource(
+    BookSource source, {
+    required String variable,
+  }) {
     return BookSourceEditorDraft(
       originalUrl: source.bookSourceUrl,
       name: source.bookSourceName,
@@ -615,6 +660,7 @@ final class BookSourceManagementViewModel {
       loginUrl: source.loginUrl ?? '',
       loginUi: source.loginUi ?? '',
       loginCheckJs: source.loginCheckJs ?? '',
+      variable: variable,
       comment: source.bookSourceComment ?? '',
     );
   }

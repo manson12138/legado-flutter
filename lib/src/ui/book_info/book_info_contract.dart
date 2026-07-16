@@ -104,6 +104,15 @@ final class AddBookToShelfIntent extends BookInfoIntent {
   const AddBookToShelfIntent();
 }
 
+/// 从详情目录打开指定章节阅读。
+final class OpenBookInfoChapterIntent extends BookInfoIntent {
+  /// 创建打开目录章节 Intent。
+  const OpenBookInfoChapterIntent(this.chapterIndex);
+
+  /// 用户点击的目录章节索引。
+  final int chapterIndex;
+}
+
 /// 切换到搜索阶段发现的另一个来源。
 final class ChangeBookInfoSourceIntent extends BookInfoIntent {
   /// 创建换源 Intent。
@@ -136,4 +145,16 @@ final class ShowBookInfoMessageEffect extends BookInfoEffect {
 final class CloseBookInfoEffect extends BookInfoEffect {
   /// 创建返回 Effect。
   const CloseBookInfoEffect();
+}
+
+/// 请求进入阅读器并定位到指定章节。
+final class OpenBookInfoReaderEffect extends BookInfoEffect {
+  /// 创建打开阅读器 Effect。
+  const OpenBookInfoReaderEffect({required this.bookUrl, required this.chapterIndex});
+
+  /// 已持久化书籍的稳定 URL。
+  final String bookUrl;
+
+  /// 阅读器初始化时应优先打开的章节索引。
+  final int chapterIndex;
 }

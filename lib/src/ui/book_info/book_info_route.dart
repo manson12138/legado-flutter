@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_route.dart';
 import 'book_info_contract.dart';
 import 'book_info_screen.dart';
 import 'book_info_view_model.dart';
@@ -39,6 +40,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       addBookToBookshelf: widget.dependencies.addBookToBookshelf,
       saveBookChapters: widget.dependencies.saveBookChapters,
       cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
+      logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
   }
@@ -55,6 +57,17 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
           ..showSnackBar(SnackBar(content: Text(message)));
       case CloseBookInfoEffect():
         Navigator.of(context).maybePop();
+      case OpenBookInfoReaderEffect(
+        bookUrl: final String bookUrl,
+        chapterIndex: final int chapterIndex,
+      ):
+        Navigator.of(context).pushNamed(
+          AppRoute.reader,
+          arguments: ReaderRouteArguments(
+            bookUrl: bookUrl,
+            initialChapterIndex: chapterIndex,
+          ),
+        );
     }
   }
 

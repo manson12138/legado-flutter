@@ -10,6 +10,7 @@ import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/replace_rule.dart';
+import '../../help/logging/app_logger.dart';
 import '../web_book/standard_source_service.dart';
 import '../web_book/standard_source_parser.dart';
 import '../local_book/local_book_parser.dart';
@@ -39,13 +40,15 @@ final class ReadBookCoordinator {
     required LocalBookContentService localBookContentService,
     required ReaderTextProcessor textProcessor,
     required HttpCancellationToken Function() cancellationTokenFactory,
+    required AppLogger logger,
   }) : _sourceGateway = sourceGateway,
        _replaceRuleGateway = replaceRuleGateway,
        _cacheGateway = cacheGateway,
        _standardService = standardService,
        _localBookContentService = localBookContentService,
        _textProcessor = textProcessor,
-       _cancellationTokenFactory = cancellationTokenFactory;
+       _cancellationTokenFactory = cancellationTokenFactory,
+       _logger = logger;
 
   /// 书源读取边界。
   final BookSourceGateway _sourceGateway;
@@ -67,6 +70,9 @@ final class ReadBookCoordinator {
 
   /// HTTP 取消令牌工厂。
   final HttpCancellationToken Function() _cancellationTokenFactory;
+
+  /// 【搜书诊断日志】项目统一日志接口，用于记录正文缓存、获取、处理与预加载。
+  final AppLogger _logger;
 
   /// 最多保留当前章和前后章的内存 LRU 缓存。
   final LinkedHashMap<String, ReaderChapterContent> _memoryCache = LinkedHashMap<String, ReaderChapterContent>();
@@ -90,6 +96,13 @@ final class ReadBookCoordinator {
     _generation += 1;
     /// 当前请求独占世代。
     final int generation = _generation;
+    /// 【搜书诊断日志】当前可见章节不可逆标识。
+    final String chapterId = appLogDiagnosticId(chapter.url);
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '正文协调器接收可见章节 generation=$generation chapterId=$chapterId '
+          'forceRefresh=$forceRefresh replaceRules=${config.useReplaceRules}',
+    );
     _currentToken?.cancel('切换到新的阅读章节');
     _cancelPreloads('当前章节请求优先');
     /// 当前可见请求令牌。
@@ -105,8 +118,18 @@ final class ReadBookCoordinator {
         forceRefresh: forceRefresh,
       );
       if (generation != _generation || token.isCancelled) {
+        _logger.info(
+          tag: bookReaderContentLogTag,
+          message: '正文协调器结果已取消 generation=$generation currentGeneration=$_generation '
+              'chapterId=$chapterId tokenCancelled=${token.isCancelled}',
+        );
         throw const ReadBookException('章节请求已取消');
       }
+      _logger.info(
+        tag: bookReaderContentLogTag,
+        message: '正文协调器返回可见章节 generation=$generation chapterId=$chapterId '
+            'textLength=${content.text.length} fromCache=${content.fromCache}',
+      );
       return content;
     } finally {
       if (identical(_currentToken, token)) {
@@ -127,22 +150,46 @@ final class ReadBookCoordinator {
     final List<int> candidates = <int>[currentIndex + 1, currentIndex - 1]
         .where((int index) => index >= 0 && index < chapters.length && !chapters[index].isVolume)
         .toList(growable: false);
+    _logger.debug(
+      tag: bookReaderContentLogTag,
+      message: '相邻章节预加载开始 currentIndex=$currentIndex candidateCount=${candidates.length}',
+    );
     for (final int index in candidates) {
       if (_currentToken != null) {
+        _logger.debug(
+          tag: bookReaderContentLogTag,
+          message: '相邻章节预加载让位于可见请求 remainingCandidateIndex=$index',
+        );
         return;
       }
       /// 当前预加载令牌。
       final HttpCancellationToken token = _cancellationTokenFactory();
       _preloadTokens.add(token);
       try {
+        /// 【搜书诊断日志】当前预加载章节不可逆标识。
+        final String chapterId = appLogDiagnosticId(chapters[index].url);
+        _logger.debug(
+          tag: bookReaderContentLogTag,
+          message: '相邻章节预加载单章开始 chapterIndex=$index chapterId=$chapterId',
+        );
         await _load(
           book: book,
           chapter: chapters[index],
           config: config,
           token: token,
         );
-      } on Object {
-        // 预加载失败只丢弃该章，当前阅读状态不受影响。
+        _logger.debug(
+          tag: bookReaderContentLogTag,
+          message: '相邻章节预加载单章完成 chapterIndex=$index chapterId=$chapterId',
+        );
+      } on Object catch (error) {
+        /// 【搜书诊断日志】预加载失败只记录并丢弃，当前阅读状态不受影响。
+        _logger.warning(
+          tag: bookReaderContentLogTag,
+          message: '相邻章节预加载单章失败 chapterIndex=$index '
+              'chapterId=${appLogDiagnosticId(chapters[index].url)}',
+          error: error,
+        );
       } finally {
         _preloadTokens.remove(token);
       }
@@ -151,6 +198,11 @@ final class ReadBookCoordinator {
 
   /// 释放当前请求、预加载和有限内存缓存。
   void dispose() {
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '正文协调器释放 generation=$_generation memoryCacheCount=${_memoryCache.length} '
+          'preloadCount=${_preloadTokens.length} hasCurrentRequest=${_currentToken != null}',
+    );
     _generation += 1;
     _currentToken?.cancel('阅读页面已关闭');
     _currentToken = null;
@@ -166,6 +218,10 @@ final class ReadBookCoordinator {
     required HttpCancellationToken token,
     bool forceRefresh = false,
   }) async {
+    /// 【搜书诊断日志】当前正文管线章节不可逆标识。
+    final String chapterId = appLogDiagnosticId(chapter.url);
+    /// 【搜书诊断日志】单章缓存、网络与处理总耗时计时器。
+    final Stopwatch stopwatch = Stopwatch()..start();
     /// 配置参与缓存键，替换规则开关变化时不复用旧处理结果。
     final String memoryKey = '${chapter.url}#replace=${config.useReplaceRules}';
     if (!forceRefresh) {
@@ -173,6 +229,11 @@ final class ReadBookCoordinator {
       final ReaderChapterContent? memory = _memoryCache.remove(memoryKey);
       if (memory != null) {
         _memoryCache[memoryKey] = memory;
+        _logger.debug(
+          tag: bookReaderContentLogTag,
+          message: '章节命中内存缓存 chapterId=$chapterId textLength=${memory.text.length} '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
         return memory;
       }
     }
@@ -189,10 +250,20 @@ final class ReadBookCoordinator {
     }
     /// 是否命中持久正文缓存。
     final bool fromCache = rawContent != null;
+    _logger.debug(
+      tag: bookReaderContentLogTag,
+      message: '章节持久缓存查询完成 chapterId=$chapterId hit=$fromCache forceRefresh=$forceRefresh',
+    );
     if (rawContent == null && book.origin == 'loc_book') {
       try {
+        _logger.info(tag: bookReaderContentLogTag, message: '章节读取本地书内容开始 chapterId=$chapterId');
         rawContent = await _localBookContentService.loadChapter(book, chapter);
       } on LocalBookException catch (error) {
+        _logger.error(
+          tag: bookReaderContentLogTag,
+          message: '章节读取本地书内容失败 chapterId=$chapterId',
+          error: error,
+        );
         throw ReadBookException(error.message);
       }
     }
@@ -200,16 +271,21 @@ final class ReadBookCoordinator {
       /// 当前网络书籍对应书源。
       final BookSource? source = await _sourceGateway.getByUrl(book.origin);
       if (source == null) {
+        _logger.warning(
+          tag: bookReaderContentLogTag,
+          message: '章节网络加载终止 chapterId=$chapterId reason=sourceMissing',
+        );
         throw const ReadBookException('原书源已不存在');
       }
-      if (_requiresJavaScript(source, chapter)) {
-        throw const ReadBookException('该章节依赖 JavaScript，需先完成 M04 真机兼容验收');
-      }
-      /// 普通书源解析后的正文页。
+      /// 普通规则或 JavaScript 混合链路解析后的正文页。
       final ParsedContentPage parsed = await _standardService.loadContent(
         source: source,
         chapter: chapter,
         cancellationToken: token,
+      );
+      _logger.info(
+        tag: bookReaderContentLogTag,
+        message: '章节网络正文取得 chapterId=$chapterId contentLength=${parsed.content.length}',
       );
       rawContent = parsed.content;
       if (parsed.title?.trim().isNotEmpty == true) {
@@ -218,6 +294,7 @@ final class ReadBookCoordinator {
     }
     if (!fromCache) {
       if (rawContent.trim().isEmpty) {
+        _logger.warning(tag: bookReaderContentLogTag, message: '章节正文为空 chapterId=$chapterId');
         throw const ReadBookException('章节正文为空');
       }
       /// 网络书和本地书都缓存七天；重新导入会生成新的稳定内容身份。
@@ -227,6 +304,10 @@ final class ReadBookCoordinator {
         rawContent,
         DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch,
       );
+      _logger.debug(
+        tag: bookReaderContentLogTag,
+        message: '章节原始正文缓存完成 chapterId=$chapterId contentLength=${rawContent.length}',
+      );
     }
     if (token.isCancelled) {
       throw const ReadBookException('章节请求已取消');
@@ -235,6 +316,11 @@ final class ReadBookCoordinator {
     final List<ReplaceRule> rules = config.useReplaceRules
         ? await _replaceRuleGateway.getEnabledContentRules(book.name, book.origin)
         : const <ReplaceRule>[];
+    _logger.debug(
+      tag: bookReaderContentLogTag,
+      message: '章节正文处理开始 chapterId=$chapterId replaceRuleCount=${rules.length} '
+          'rawContentLength=${rawContent.length}',
+    );
     /// 后台净化和分块结果。
     final ReaderChapterContent content;
     try {
@@ -248,36 +334,39 @@ final class ReadBookCoordinator {
         fromCache: fromCache,
       );
     } on ReaderTextProcessException catch (error) {
+      _logger.error(
+        tag: bookReaderContentLogTag,
+        message: '章节正文处理失败 chapterId=$chapterId',
+        error: error,
+      );
       throw ReadBookException(error.message);
     }
     _memoryCache[memoryKey] = content;
     while (_memoryCache.length > 3) {
       _memoryCache.remove(_memoryCache.keys.first);
     }
+    _logger.info(
+      tag: bookReaderContentLogTag,
+      message: '章节正文处理完成 chapterId=$chapterId textLength=${content.text.length} '
+          'blockCount=${content.blocks.length} effectiveReplaceRuleCount=${content.effectiveReplaceRuleCount} '
+          'fromCache=${content.fromCache} elapsedMs=${stopwatch.elapsedMilliseconds}',
+    );
     return content;
   }
 
   /// 取消全部低优先级预加载令牌。
   void _cancelPreloads(String reason) {
+    if (_preloadTokens.isNotEmpty) {
+      /// 【搜书诊断日志】取消原因由内部固定文案提供，不包含用户输入。
+      _logger.debug(
+        tag: bookReaderContentLogTag,
+        message: '取消相邻章节预加载 count=${_preloadTokens.length} reason=$reason',
+      );
+    }
     for (final HttpCancellationToken token in List<HttpCancellationToken>.of(_preloadTokens)) {
       token.cancel(reason);
     }
     _preloadTokens.clear();
   }
 
-  /// 判断普通规则正文服务不能安全执行的 JavaScript 字段或规则片段。
-  bool _requiresJavaScript(BookSource source, BookChapter chapter) {
-    if (source.jsLib?.trim().isNotEmpty == true) {
-      return true;
-    }
-    /// 正文链路可能包含脚本的原始文本。
-    final String rules = <String?>[
-      source.ruleContent,
-      chapter.url,
-    ].whereType<String>().join('\n');
-    return RegExp(
-      r'@js:|<js>|js@|Packages\.|JavaImporter|java\.',
-      caseSensitive: false,
-    ).hasMatch(rules);
-  }
 }

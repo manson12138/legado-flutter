@@ -67,6 +67,7 @@ final class HttpRequest {
     this.acceptHttpErrorStatus = false,
     this.cookieMode = HttpCookieMode.shared,
     this.sessionKey,
+    this.logContext,
   }) : headers = Map<String, String>.unmodifiable(headers);
 
   /// 目标地址。
@@ -107,6 +108,9 @@ final class HttpRequest {
 
   /// 独立会话键；仅在 [cookieMode] 为独立会话时使用。
   final String? sessionKey;
+
+  /// 可选诊断日志上下文；仅用于串联请求日志，不参与网络请求。
+  final String? logContext;
 }
 
 /// Cookie 会话策略。

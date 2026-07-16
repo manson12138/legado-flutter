@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
+import '../../help/logging/app_logger.dart';
 import '../cookie/cookie_manager.dart';
 import 'http_contract.dart';
 
@@ -31,7 +32,7 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
   /// 创建网络客户端。
   DioUnifiedHttpClient(this._dio, this._cookieManager);
 
-  /// 无全局敏感日志拦截器的 Dio 实例。
+  /// 已由应用组合根安装安全日志拦截器的 Dio 实例。
   final Dio _dio;
 
   /// 集中 Cookie 管理器。
@@ -69,6 +70,10 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
       contentType: _contentType(request.body),
       sendTimeout: request.sendTimeout,
       receiveTimeout: request.receiveTimeout,
+      extra: <String, dynamic>{
+        // 【扫码诊断日志】把业务上下文透传给日志拦截器，不发送到服务端。
+        networkRequestLogContextExtraKey: request.logContext,
+      },
     );
     try {
       /// Dio 原始字节响应。

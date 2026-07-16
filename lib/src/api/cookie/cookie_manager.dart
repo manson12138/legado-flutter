@@ -207,6 +207,13 @@ final class LegadoCookieManager {
     await _mergePersistent(domain, _parseCookieHeader(cookieHeader), deleteCookie: false);
   }
 
+  /// 删除指定地址主域的持久 Cookie，对应脚本 `cookie.removeCookie`。
+  Future<void> removeCookieHeader(Uri uri) async {
+    /// 持久化作用域域名。
+    final String domain = _candidateDomains(uri.host).lastOrNull ?? uri.host.toLowerCase();
+    await _cookieDao.delete(domain);
+  }
+
   /// 将新 Cookie 合并进指定域的持久记录。
   Future<void> _mergePersistent(
     String domain,
