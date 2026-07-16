@@ -5,6 +5,7 @@ import '../ui/home/welcome_route.dart';
 import '../ui/book_source/book_source_route.dart';
 import '../ui/book_info/book_info_contract.dart';
 import '../ui/book_info/book_info_route.dart';
+import '../ui/change_book_source/change_book_source_route.dart';
 import '../ui/search/search_route.dart';
 import '../ui/bookshelf/bookshelf_route.dart';
 import '../ui/reader/book_reader_route.dart';
@@ -24,7 +25,7 @@ final class AppRouter {
   final AppDependencies dependencies;
 
   /// 根据 Flutter 路由设置创建目标页面。
-  Route<void> onGenerateRoute(RouteSettings settings) {
+  Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
       case AppRoute.welcome:
         return MaterialPageRoute<void>(
@@ -75,6 +76,27 @@ final class AppRouter {
             return LocalBookImportRoute(dependencies: dependencies);
           },
         );
+      case AppRoute.changeBookSource:
+        /// 换源页只接受非空旧书主键，页面会重新查询数据库避免使用过期对象。
+        final Object? changeSourceArguments = settings.arguments;
+        if (changeSourceArguments is ChangeBookSourceRouteArguments &&
+            changeSourceArguments.bookUrl.isNotEmpty) {
+          return MaterialPageRoute<dynamic>(
+            settings: settings,
+            builder: (BuildContext context) {
+              return ChangeBookSourceRoute(
+                dependencies: dependencies,
+                bookUrl: changeSourceArguments.bookUrl,
+              );
+            },
+          );
+        }
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return const AppFatalErrorView(message: '整书换源缺少有效书籍 URL');
+          },
+        );
       case AppRoute.bookInfo:
         /// 详情页必须由搜索页携带候选来源参数。
         final Object? arguments = settings.arguments;
@@ -116,6 +138,7 @@ final class AppRouter {
                 dependencies: dependencies,
                 bookUrl: normalizedReaderArguments.bookUrl,
                 initialChapterIndex: normalizedReaderArguments.initialChapterIndex,
+                initialMessage: normalizedReaderArguments.initialMessage,
               );
             },
           );

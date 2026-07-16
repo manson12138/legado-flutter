@@ -143,6 +143,10 @@ final class ReaderViewModel {
         );
       case PauseReaderIntent():
         unawaited(_saveProgress());
+      case ReaderMemoryPressureIntent():
+        _coordinator.handleMemoryPressure();
+      case OpenReaderBookSourceChangeIntent():
+        unawaited(_requestBookSourceChange());
       case CloseReaderIntent():
         unawaited(_close());
     }
@@ -656,6 +660,19 @@ final class ReaderViewModel {
   Future<void> _deleteBookmark(Bookmark bookmark) async {
     await _bookmarkGateway.deleteBookmark(bookmark.time);
     _effectController.add(const ShowReaderMessageEffect('书签已删除'));
+  }
+
+  /// 保存当前稳定进度并请求路由进入整书换源，避免旧主键删除前丢失最后位置。
+  Future<void> _requestBookSourceChange() async {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null || book.origin == 'loc_book') {
+      _effectController.add(const ShowReaderMessageEffect('当前书籍不支持整书换源'));
+      return;
+    }
+    await _saveProgress();
+    _emit(_state.copyWith(menuVisible: false));
+    _effectController.add(OpenReaderBookSourceChangeEffect(book.bookUrl));
   }
 
   /// 正常退出前立即保存进度并恢复平台窗口状态。

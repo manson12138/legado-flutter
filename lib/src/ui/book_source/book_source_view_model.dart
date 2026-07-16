@@ -129,7 +129,7 @@ final class BookSourceManagementViewModel {
       case DebugBookSourceIntent(sourceUrl: final String sourceUrl):
         _showDebug(sourceUrl);
       case LoginBookSourceIntent(sourceUrl: final String sourceUrl):
-        _effectController.add(OpenBookSourceLoginEffect(sourceUrl));
+        _requestLogin(sourceUrl);
       case DismissBookSourceDialogIntent():
         if (_awaitingScannedImportConfirmation) {
           // 【扫码诊断日志】用户在预览阶段关闭，未执行数据库导入。
@@ -545,7 +545,7 @@ final class BookSourceManagementViewModel {
       return const <BookSourceDebugItem>[
         BookSourceDebugItem(
           category: 'JavaScript',
-          message: '检测到 WebView/浏览器依赖；当前平台桥尚未实现。',
+          message: '检测到 WebView/浏览器依赖；页面桥已接入，但历史同步 Rhino 调用与 Promise 语义仍需兼容结论。',
           isError: true,
         ),
       ];
@@ -598,6 +598,23 @@ final class BookSourceManagementViewModel {
       _emit(_state.copyWith(busy: false, errorMessage: '操作失败，已有书源未被修改。'));
       _effectController.add(const ShowBookSourceMessageEffect('操作失败，已有书源未被修改。'));
     }
+  }
+
+  /// 根据稳定书源 URL 找到登录配置，优先打开 `loginUrl`，缺失时回退书源主页。
+  void _requestLogin(String sourceUrl) {
+    /// 当前用户请求登录的书源。
+    final BookSource? source = _findSource(sourceUrl);
+    if (source == null) {
+      _effectController.add(const ShowBookSourceMessageEffect('书源已经不存在'));
+      return;
+    }
+    /// 去除空白后的显式登录地址；空值表示书源没有单独登录页。
+    final String configuredLoginUrl = source.loginUrl?.trim() ?? '';
+    /// 实际交给受控 WebView 的地址。
+    final String targetUrl = configuredLoginUrl.isEmpty
+        ? source.bookSourceUrl
+        : configuredLoginUrl;
+    _effectController.add(OpenBookSourceLoginEffect(targetUrl));
   }
 
   /// 按 URL 查找当前状态中的书源。

@@ -210,6 +210,15 @@ final class ReadBookCoordinator {
     _memoryCache.clear();
   }
 
+  /// iOS/Android 触发内存警告时取消非关键预加载并清空可重建的章节内存缓存。
+  ///
+  /// 当前可见正文仍由 ReaderUiState 持有，稳定锚点和持久缓存不受影响，因此页面可以继续
+  /// 阅读；下一次切章按原管线从持久缓存或书源恢复。
+  void handleMemoryPressure() {
+    _cancelPreloads('系统内存压力');
+    _memoryCache.clear();
+  }
+
   /// 执行单章缓存、网络和处理管线。
   Future<ReaderChapterContent> _load({
     required Book book,

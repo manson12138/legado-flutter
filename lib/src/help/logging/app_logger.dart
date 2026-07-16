@@ -28,6 +28,9 @@ const String bookDetailLogTag = 'BOOK_DETAIL';
 /// 【搜书诊断日志】书籍目录请求、分页解析和持久化使用的 Logcat Tag。
 const String bookTocLogTag = 'BOOK_TOC';
 
+/// M11 整书换源搜索、候选预览、事务提交和路由切换共用的 Logcat Tag。
+const String bookSourceChangeLogTag = 'BOOK_SOURCE_CHANGE';
+
 /// 【搜书诊断日志】从书架点击书籍到阅读器初始化完成使用的 Logcat Tag。
 const String bookReaderEntryLogTag = 'BOOK_READER_ENTRY';
 

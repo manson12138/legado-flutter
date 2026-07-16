@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../domain/model/book.dart';
+import '../../domain/model/book_search.dart';
+import '../../domain/model/search_book.dart';
+import '../../domain/usecase/change_book_source_use_case.dart';
 import 'book_info_contract.dart';
 import 'book_info_screen.dart';
 import 'book_info_view_model.dart';
@@ -43,6 +47,17 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
+    /// 路由替换后的提示等待详情 Scaffold 首帧完成再展示。
+    final String? initialMessage = widget.arguments.initialMessage;
+    if (initialMessage != null && initialMessage.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(initialMessage)),
+          );
+        }
+      });
+    }
   }
 
   /// 执行导航和 Snackbar 副作用。
@@ -68,7 +83,59 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
             initialChapterIndex: chapterIndex,
           ),
         );
+      case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):
+        unawaited(_openFullSourceChange(bookUrl));
     }
+  }
+
+  /// 打开独立换源页面，成功后以新主键和新来源替换当前详情路由。
+  Future<void> _openFullSourceChange(String oldBookUrl) async {
+    /// 整书换源页面返回的事务结果。
+    final ChangeBookSourceResult? result =
+        await Navigator.of(context).pushNamed<ChangeBookSourceResult>(
+      AppRoute.changeBookSource,
+      arguments: ChangeBookSourceRouteArguments(bookUrl: oldBookUrl),
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    /// 换源后持久化的新书籍事实。
+    final Book book = result.book;
+    /// 新详情路由所需的搜索候选模型。
+    final SearchBook searchBook = SearchBook(
+      bookUrl: book.bookUrl,
+      origin: book.origin,
+      originName: book.originName,
+      name: book.name,
+      author: book.author,
+      type: book.type,
+      kind: book.kind,
+      coverUrl: book.coverUrl,
+      intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      tocUrl: book.tocUrl,
+      time: book.lastCheckTime,
+      variable: book.variable,
+      originOrder: book.originOrder,
+    );
+    /// 新详情页首帧展示的成功或非阻断警告。
+    final String resultMessage = result.warnings.isEmpty
+        ? '已切换到“${book.originName}”'
+        : '换源已完成；${result.warnings.join('；')}';
+    unawaited(
+      Navigator.of(context).pushReplacementNamed<void, void>(
+        AppRoute.bookInfo,
+        arguments: BookInfoRouteArguments(
+          group: BookSearchResultGroup(
+            key: '${book.name.length}:${book.name}${book.author}',
+            books: <SearchBook>[searchBook],
+          ),
+          selectedBook: searchBook,
+          initialMessage: resultMessage,
+        ),
+      ),
+    );
   }
 
   /// 释放订阅和 ViewModel。

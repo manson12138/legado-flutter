@@ -125,6 +125,8 @@ final class BookshelfViewModel {
         _back();
       case OpenBookshelfLocalBookImportIntent():
         _effectController.add(const OpenBookshelfLocalBookImportEffect());
+      case OpenSelectedBookSourceChangeIntent():
+        _openSelectedBookSourceChange();
     }
   }
 
@@ -301,6 +303,29 @@ final class BookshelfViewModel {
     if (book != null) {
       _effectController.add(OpenBookshelfBookInfoEffect(book));
     }
+  }
+
+  /// 校验当前恰好选中一本网络书，再请求路由打开整书换源页面。
+  void _openSelectedBookSourceChange() {
+    if (_state.selectedBookUrls.length != 1) {
+      _effectController.add(
+        const ShowBookshelfMessageEffect('整书换源一次只能选择一本书'),
+      );
+      return;
+    }
+    /// 当前唯一选中的稳定书籍 URL。
+    final String selectedBookUrl = _state.selectedBookUrls.first;
+    /// 与选择 URL 对应的当前数据库快照。
+    final Book? book = _findBook(selectedBookUrl);
+    if (book == null) {
+      _effectController.add(const ShowBookshelfMessageEffect('选中的书籍已不存在'));
+      return;
+    }
+    if (book.origin == 'loc_book') {
+      _effectController.add(const ShowBookshelfMessageEffect('本地书不支持整书换源'));
+      return;
+    }
+    _effectController.add(OpenBookshelfChangeSourceEffect(book));
   }
 
   /// 开始刷新可见或选中书籍目录。

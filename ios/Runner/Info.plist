@@ -28,6 +28,15 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>用于扫描书源二维码并导入书源配置。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于访问用户主动配置的局域网书源或本地服务。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

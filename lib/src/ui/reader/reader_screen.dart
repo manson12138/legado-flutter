@@ -57,6 +57,13 @@ final class ReaderScreen extends StatelessWidget {
       title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
       actions: <Widget>[
         IconButton(
+          onPressed: state.book == null || state.book?.origin == 'loc_book'
+              ? null
+              : () => onIntent(const OpenReaderBookSourceChangeIntent()),
+          icon: const Icon(Icons.swap_horiz),
+          tooltip: '整书换源',
+        ),
+        IconButton(
           onPressed: state.loadState == ReaderLoadState.ready
               ? () => onIntent(const AddReaderBookmarkIntent())
               : null,

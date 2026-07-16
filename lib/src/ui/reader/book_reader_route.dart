@@ -13,6 +13,7 @@ final class BookReaderRoute extends StatelessWidget {
     required this.dependencies,
     required this.bookUrl,
     this.initialChapterIndex,
+    this.initialMessage,
     super.key,
   });
 
@@ -24,6 +25,9 @@ final class BookReaderRoute extends StatelessWidget {
 
   /// 详情目录入口传入的初始章节索引；为空时沿用阅读进度。
   final int? initialChapterIndex;
+
+  /// 路由替换后需要展示的一次性提示。
+  final String? initialMessage;
 
   /// 异步读取书籍并选择正确阅读内容模型。
   @override
@@ -46,6 +50,7 @@ final class BookReaderRoute extends StatelessWidget {
           dependencies: dependencies,
           bookUrl: bookUrl,
           initialChapterIndex: initialChapterIndex,
+          initialMessage: initialMessage,
         );
       },
     );

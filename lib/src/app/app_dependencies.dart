@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../api/cookie/cookie_manager.dart';
+import '../api/cookie/flutter_webview_cookie_bridge.dart';
 import '../api/http/dio_http_client.dart';
 import '../api/http/app_dio_log_interceptor.dart';
 import '../api/http/http_contract.dart';
@@ -40,6 +41,7 @@ import '../domain/gateway/search_history_gateway.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
 import '../domain/usecase/delete_books_from_bookshelf_use_case.dart';
 import '../domain/usecase/create_bookshelf_group_use_case.dart';
+import '../domain/usecase/change_book_source_use_case.dart';
 import '../domain/usecase/import_book_sources_use_case.dart';
 import '../domain/usecase/load_book_chapters_use_case.dart';
 import '../domain/usecase/restore_reading_progress_use_case.dart';
@@ -52,6 +54,7 @@ import '../model/web_book/standard_source_parser.dart';
 import '../model/web_book/standard_source_service.dart';
 import '../model/web_book/book_detail_service.dart';
 import '../model/web_book/book_search_coordinator.dart';
+import '../model/web_book/change_source_coordinator.dart';
 import '../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import '../model/book_source/book_source_import_text_resolver.dart';
 import '../model/analyze_rule/legado_javascript_service.dart';
@@ -83,11 +86,13 @@ final class AppDependencies {
     required this.replaceRuleGateway,
     required this.readerCacheGateway,
     required this.searchHistoryGateway,
+    required this.cookieManager,
     required this.importBookSources,
     required this.bookSourceImportTextResolver,
     required this.addBookToBookshelf,
     required this.deleteBooksFromBookshelf,
     required this.createBookshelfGroup,
+    required this.changeBookSource,
     required this.replaceBooksGroup,
     required this.loadBookChapters,
     required this.saveBookChapters,
@@ -149,10 +154,12 @@ final class AppDependencies {
     );
     /// 全部 Dio 请求、响应和异常统一写入网络专用 Tag。
     dio.interceptors.add(AppDioLogInterceptor(logger: logger));
-    /// 共享 Cookie 管理器；WebView 桥在 M4 替换。
+    /// Android/iOS 共用的 WebView Cookie Store 适配器。
+    final FlutterWebViewCookieBridge webViewCookieBridge = FlutterWebViewCookieBridge();
+    /// 共享 Cookie 管理器；普通 HTTP、登录 WebView 和页面脚本共用同一持久事实。
     final LegadoCookieManager cookieManager = LegadoCookieManager(
       cookieDao,
-      const UnsupportedWebViewCookieBridge(),
+      webViewCookieBridge,
     );
     /// 统一 HTTP 实现。
     final UnifiedHttpClient httpClient = DioUnifiedHttpClient(dio, cookieManager);
@@ -163,6 +170,11 @@ final class AppDependencies {
           responseDecoder: const HttpResponseDecoder(),
           logger: logger,
         );
+    /// M10 Android/iOS 共用的受控页面 WebView 脚本桥。
+    final FlutterWebViewScriptBridge webViewScriptBridge = FlutterWebViewScriptBridge(
+      cookieManager,
+      webViewCookieBridge,
+    );
     /// M4 Legado、网络、Cookie、缓存与 Java 白名单统一桥。
     final LegadoScriptBridge scriptBridge = LegadoScriptBridge(
       httpClient,
@@ -171,7 +183,7 @@ final class AppDependencies {
       cookieManager,
       cacheDao,
       const JavaCompatibilityBridge(),
-      const UnsupportedWebViewScriptBridge(),
+      webViewScriptBridge,
     );
     /// 按书源隔离的 QuickJS 引擎池。
     final JsEnginePool jsEnginePool = JsEnginePool(JsfJsEngineFactory(scriptBridge));
@@ -236,11 +248,13 @@ final class AppDependencies {
       replaceRuleGateway: readerRepository,
       readerCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
+      cookieManager: cookieManager,
       importBookSources: ImportBookSourcesUseCase(bookSourceRepository),
       bookSourceImportTextResolver: bookSourceImportTextResolver,
       addBookToBookshelf: AddBookToBookshelfUseCase(bookRepository),
       deleteBooksFromBookshelf: DeleteBooksFromBookshelfUseCase(bookRepository),
       createBookshelfGroup: CreateBookshelfGroupUseCase(bookGroupRepository),
+      changeBookSource: ChangeBookSourceUseCase(bookRepository, readerRepository),
       replaceBooksGroup: ReplaceBooksGroupUseCase(bookRepository),
       loadBookChapters: LoadBookChaptersUseCase(bookRepository),
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
@@ -288,6 +302,9 @@ final class AppDependencies {
   /// 搜索历史持久化边界。
   final SearchHistoryGateway searchHistoryGateway;
 
+  /// 普通 HTTP、登录 WebView 与 JavaScript 页面请求共用的统一 Cookie 管理器。
+  final LegadoCookieManager cookieManager;
+
   /// 书源 JSON 导入业务动作。
   final ImportBookSourcesUseCase importBookSources;
 
@@ -302,6 +319,9 @@ final class AppDependencies {
 
   /// 创建用户书架分组 UseCase。
   final CreateBookshelfGroupUseCase createBookshelfGroup;
+
+  /// M11 原子替换书籍主键、目录并迁移用户阅读事实的 UseCase。
+  final ChangeBookSourceUseCase changeBookSource;
 
   /// 批量替换书籍分组 UseCase。
   final ReplaceBooksGroupUseCase replaceBooksGroup;
@@ -339,6 +359,15 @@ final class AppDependencies {
       sourceGateway: bookSourceGateway,
       standardService: standardBookSourceService,
       cancellationTokenFactory: createHttpCancellationToken,
+      logger: logger,
+    );
+  }
+
+  /// 创建页面生命周期独占的整书换源候选协调器。
+  ChangeSourceCoordinator createChangeSourceCoordinator() {
+    return ChangeSourceCoordinator(
+      searchCoordinator: createBookSearchCoordinator(),
+      detailService: bookDetailService,
       logger: logger,
     );
   }

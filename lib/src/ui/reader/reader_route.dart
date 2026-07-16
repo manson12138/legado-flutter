@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_route.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
+import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../../platform/reader_platform_service.dart';
 import '../theme/app_tokens.dart';
@@ -20,6 +22,7 @@ final class ReaderRoute extends StatefulWidget {
     required this.dependencies,
     required this.bookUrl,
     this.initialChapterIndex,
+    this.initialMessage,
     super.key,
   });
 
@@ -31,6 +34,9 @@ final class ReaderRoute extends StatefulWidget {
 
   /// 从详情目录进入时指定的初始章节索引；为空则使用阅读进度。
   final int? initialChapterIndex;
+
+  /// 新路由首帧需要展示的一次性提示，例如整书换源结果。
+  final String? initialMessage;
 
   /// 创建路由状态。
   @override
@@ -60,6 +66,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   /// 程序化退出前允许 Navigator 真正弹出当前路由。
   bool _allowPop = false;
 
+  /// 是否已经打开换源页面，阻止重复 Effect 创建多条路由。
+  bool _openingChangeSource = false;
+
   /// 创建 ViewModel、订阅 Effect 并开始初始化。
   @override
   void initState() {
@@ -84,16 +93,55 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _viewModel.onIntent(const InitializeReaderIntent());
+    /// 路由替换后的提示必须等 Scaffold 完成首帧构建再展示。
+    final String? initialMessage = widget.initialMessage;
+    if (initialMessage != null && initialMessage.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(initialMessage)),
+          );
+        }
+      });
+    }
   }
 
   /// 前后台切换时立即保存稳定阅读进度。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _viewModel.state.loadState == ReaderLoadState.ready) {
+      /// 回到前台后重新应用 iOS 系统栏与常亮设置，阅读位置仍由现有 Dart 状态保持。
+      unawaited(
+        _platformService.enterReader(
+          keepScreenOn: _viewModel.state.config.keepScreenOn,
+        ),
+      );
+      return;
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       _viewModel.onIntent(const PauseReaderIntent());
     }
+  }
+
+  /// 旋转、分屏或系统尺寸变化后按稳定字符锚点重新计算临时滚动位置。
+  @override
+  void didChangeMetrics() {
+    _lastRestoreRequestId = -1;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+      if (mounted) {
+        _restoreScrollPosition(_viewModel.state);
+      }
+    });
+  }
+
+  /// 系统内存警告时保留当前正文与稳定锚点，只释放可重建的相邻章缓存。
+  @override
+  void didHaveMemoryPressure() {
+    _viewModel.onIntent(const ReaderMemoryPressureIntent());
   }
 
   /// 执行系统栏、常亮、消息和关闭路由副作用。
@@ -134,7 +182,54 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(message)));
+      case OpenReaderBookSourceChangeEffect(bookUrl: final String bookUrl):
+        unawaited(_openChangeSource(bookUrl));
     }
+  }
+
+  /// 暂时退出阅读系统模式，换源成功后用新主键替换当前阅读路由。
+  Future<void> _openChangeSource(String oldBookUrl) async {
+    if (_openingChangeSource) {
+      return;
+    }
+    _openingChangeSource = true;
+    await _platformService.exitReader();
+    if (!mounted) {
+      _openingChangeSource = false;
+      return;
+    }
+    /// 整书换源页面返回的事务结果。
+    final ChangeBookSourceResult? result =
+        await Navigator.of(context).pushNamed<ChangeBookSourceResult>(
+      AppRoute.changeBookSource,
+      arguments: ChangeBookSourceRouteArguments(bookUrl: oldBookUrl),
+    );
+    if (!mounted) {
+      return;
+    }
+    _openingChangeSource = false;
+    if (result == null) {
+      await _platformService.enterReader(
+        keepScreenOn: _viewModel.state.config.keepScreenOn,
+      );
+      return;
+    }
+    /// 换源成功后用于新阅读路由的稳定主键。
+    final String newBookUrl = result.book.bookUrl;
+    /// 新阅读路由首帧展示的成功或非阻断警告。
+    final String resultMessage = result.warnings.isEmpty
+        ? '已切换到“${result.book.originName}”'
+        : '换源已完成；${result.warnings.join('；')}';
+    /// 数据事务已经完成，当前旧路由必须被替换，不能继续持有已删除旧主键。
+    unawaited(
+      Navigator.of(context).pushReplacementNamed<void, void>(
+        AppRoute.reader,
+        arguments: ReaderRouteArguments(
+          bookUrl: newBookUrl,
+          initialMessage: resultMessage,
+        ),
+      ),
+    );
   }
 
   /// 根据稳定字符锚点换算本次布局的临时滚动偏移，字体变化后可重复执行。

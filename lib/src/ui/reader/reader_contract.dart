@@ -272,6 +272,18 @@ final class PauseReaderIntent extends ReaderIntent {
   const PauseReaderIntent();
 }
 
+/// 系统报告内存压力时释放可重建的预加载和章节内存缓存。
+final class ReaderMemoryPressureIntent extends ReaderIntent {
+  /// 创建内存压力 Intent。
+  const ReaderMemoryPressureIntent();
+}
+
+/// 保存当前进度后请求打开整书换源页面。
+final class OpenReaderBookSourceChangeIntent extends ReaderIntent {
+  /// 创建阅读器整书换源 Intent。
+  const OpenReaderBookSourceChangeIntent();
+}
+
 /// 用户返回书架，先保存进度再发出关闭 Effect。
 final class CloseReaderIntent extends ReaderIntent {
   /// 创建关闭阅读器 Intent。
@@ -321,4 +333,13 @@ final class ShowReaderMessageEffect extends ReaderEffect {
 
   /// 用户可见消息。
   final String message;
+}
+
+/// 请求路由退出阅读系统模式并打开 M11 整书换源页面。
+final class OpenReaderBookSourceChangeEffect extends ReaderEffect {
+  /// 创建阅读器换源导航 Effect。
+  const OpenReaderBookSourceChangeEffect(this.bookUrl);
+
+  /// 当前已保存进度的旧书籍稳定 URL。
+  final String bookUrl;
 }

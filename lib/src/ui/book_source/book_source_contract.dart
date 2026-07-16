@@ -526,7 +526,7 @@ final class OpenBookSourceLoginEffect extends BookSourceManagementEffect {
   /// 创建登录副作用。
   const OpenBookSourceLoginEffect(this.sourceUrl);
 
-  /// 书源 URL。
+  /// ViewModel 解析后的登录目标 URL，优先为书源 `loginUrl`，否则为书源主页。
   final String sourceUrl;
 }
 

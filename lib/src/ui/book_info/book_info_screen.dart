@@ -28,6 +28,14 @@ final class BookInfoScreen extends StatelessWidget {
         ),
         title: Text(state.book?.name ?? state.selectedBook.name),
         actions: <Widget>[
+          if (state.inBookshelf && state.book?.origin != 'loc_book')
+            IconButton(
+              onPressed: () {
+                onIntent(const OpenBookInfoFullSourceChangeIntent());
+              },
+              icon: const Icon(Icons.manage_search),
+              tooltip: '整书换源',
+            ),
           if (state.group.books.length > 1)
             PopupMenuButton<SearchBook>(
               tooltip: '更换书源',

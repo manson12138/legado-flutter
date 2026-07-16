@@ -9,6 +9,7 @@ import '../../help/logging/app_logger.dart';
 import '../../platform/book_source_platform_bridge.dart';
 import '../theme/app_tokens.dart';
 import 'book_source_contract.dart';
+import 'book_source_login_route.dart';
 import 'book_source_qr_scanner_route.dart';
 import 'book_source_screen.dart';
 import 'book_source_view_model.dart';
@@ -72,11 +73,7 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
         );
         await _scanQrCode();
       case OpenBookSourceLoginEffect(sourceUrl: final String sourceUrl):
-        try {
-          await widget.platformBridge.openLogin(sourceUrl);
-        } catch (error) {
-          _showMessage(_platformErrorMessage(error));
-        }
+        await _openLogin(sourceUrl);
       case ShowBookSourceMessageEffect(message: final String message):
         _showMessage(message);
       case CloseBookSourceManagementEffect():
@@ -84,6 +81,21 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
           await Navigator.of(context).maybePop();
         }
     }
+  }
+
+  /// 打开受控 WebView 登录页；页面退出前会把 Android/iOS Cookie 回写统一 Store。
+  Future<void> _openLogin(String sourceUrl) async {
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => BookSourceLoginRoute(
+          dependencies: widget.dependencies,
+          sourceUrl: sourceUrl,
+        ),
+      ),
+    );
   }
 
   /// 打开相机扫码页面，并把有效结果交给 ViewModel 判断 JSON 或远程书源地址。

@@ -9,11 +9,17 @@ abstract interface class LocalBookPlatformBridge {
 }
 
 /// 使用 file_picker 连接 Android SAF 与 iOS Document Picker。
+///
+/// iOS 的安全作用域 URL 生命周期由 file_picker 原生实现负责，Dart 边界只接收当前可读路径；
+/// 调用方必须立即交给 `LocalBookStorage.persist` 复制，禁止把该外部路径当作长期身份。
 final class DefaultLocalBookPlatformBridge implements LocalBookPlatformBridge {
   /// 创建默认本地书平台桥。
   const DefaultLocalBookPlatformBridge();
 
   /// 选择 Android 基线中的书籍和压缩容器格式，不把内容载入 UI isolate 内存。
+  ///
+  /// Android 返回 SAF 可读路径，iOS 返回 Document Picker 当前可读路径；两端都只允许在
+  /// 本次导入任务中读取，长期访问始终依赖应用私有副本，不依赖插件是否保留外部授权。
   @override
   Future<List<LocalBookPickedFile>> pickBooks() async {
     /// 系统文件选择结果。

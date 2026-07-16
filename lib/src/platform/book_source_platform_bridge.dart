@@ -3,16 +3,16 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 
-/// 文件和 WebView 登录等系统能力的书源管理边界。
+/// 书源管理使用的系统文件选择边界。
 abstract interface class BookSourcePlatformBridge {
   /// 打开系统文件选择器并返回 UTF-8 JSON/TXT 文本；取消时返回 null。
   Future<String?> pickSourceText();
-
-  /// 打开指定书源的 WebView 登录，并在关闭前同步 Cookie。
-  Future<void> openLogin(String sourceUrl);
 }
 
 /// 使用系统文档选择器读取小型书源文件的平台实现。
+///
+/// iOS Document Picker 的安全作用域由 file_picker 原生边界管理；本实现只接收内存字节，
+/// 解码完成后不保存外部 URL 或临时绝对路径，因此长期访问不依赖外部授权。
 final class DefaultBookSourcePlatformBridge implements BookSourcePlatformBridge {
   /// 创建默认平台桥。
   const DefaultBookSourcePlatformBridge();
@@ -44,11 +44,5 @@ final class DefaultBookSourcePlatformBridge implements BookSourcePlatformBridge 
       throw const FormatException('系统未返回可读取的文件内容');
     }
     return utf8.decode(bytes, allowMalformed: false);
-  }
-
-  /// WebView 登录仍受 M4 平台实现阻塞时明确报告不支持。
-  @override
-  Future<void> openLogin(String sourceUrl) {
-    throw UnsupportedError('WebView 登录平台实现尚未接入');
   }
 }

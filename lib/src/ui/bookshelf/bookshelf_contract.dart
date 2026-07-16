@@ -326,6 +326,12 @@ final class OpenBookshelfLocalBookImportIntent extends BookshelfIntent {
   const OpenBookshelfLocalBookImportIntent();
 }
 
+/// 请求对当前唯一选中的网络书执行整书换源。
+final class OpenSelectedBookSourceChangeIntent extends BookshelfIntent {
+  /// 创建打开整书换源 Intent。
+  const OpenSelectedBookSourceChangeIntent();
+}
+
 /// 书架一次性副作用。
 sealed class BookshelfEffect {
   /// 限制 Effect 类型。
@@ -366,4 +372,13 @@ final class CloseBookshelfEffect extends BookshelfEffect {
 final class OpenBookshelfLocalBookImportEffect extends BookshelfEffect {
   /// 创建本地书导入导航 Effect。
   const OpenBookshelfLocalBookImportEffect();
+}
+
+/// 请求路由层打开指定书籍的 M11 整书换源页面。
+final class OpenBookshelfChangeSourceEffect extends BookshelfEffect {
+  /// 创建整书换源导航 Effect。
+  const OpenBookshelfChangeSourceEffect(this.book);
+
+  /// 需要重新确认数据库事实的当前书籍。
+  final Book book;
 }

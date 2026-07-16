@@ -7,6 +7,7 @@ import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
+import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../book_info/book_info_contract.dart';
 import 'bookshelf_contract.dart';
@@ -85,7 +86,29 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         Navigator.of(context).maybePop();
       case OpenBookshelfLocalBookImportEffect():
         Navigator.of(context).pushNamed(AppRoute.localBookImport);
+      case OpenBookshelfChangeSourceEffect(book: final Book book):
+        unawaited(_openChangeSource(book));
     }
+  }
+
+  /// 打开整书换源页面，并在返回后展示新来源和非阻断迁移提示。
+  Future<void> _openChangeSource(Book book) async {
+    /// 整书换源页面返回的事务结果。
+    final ChangeBookSourceResult? result =
+        await Navigator.of(context).pushNamed<ChangeBookSourceResult>(
+      AppRoute.changeBookSource,
+      arguments: ChangeBookSourceRouteArguments(bookUrl: book.bookUrl),
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    /// 换源成功后的提示，附带可能存在的配置复制警告。
+    final String message = result.warnings.isEmpty
+        ? '已切换到“${result.book.originName}”'
+        : '换源已完成；${result.warnings.join('；')}';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 将持久化书籍转换为详情页搜索候选，不改变核心实体。

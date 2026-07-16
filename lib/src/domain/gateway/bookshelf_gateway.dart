@@ -12,6 +12,16 @@ abstract interface class BookshelfGateway {
   /// 在一个事务中写入书籍及可选完整目录。
   Future<void> addBook(Book book, List<BookChapter> chapters);
 
+  /// 在一个事务中用新书源书籍和完整目录替换旧书籍主键。
+  ///
+  /// 对应 Android `ChangeBookSourceUseCase.changeTo` 的数据库边界；实现必须在写入前再次
+  /// 检查新主键是否被其他书籍占用，并保证旧书、旧目录、新书和新目录不会出现部分提交。
+  Future<void> changeBookSource({
+    required String oldBookUrl,
+    required Book newBook,
+    required List<BookChapter> chapters,
+  });
+
   /// 删除书籍，章节由外键级联删除。
   Future<void> deleteBook(String bookUrl);
 

@@ -416,7 +416,7 @@ final class _ScannerErrorView extends StatelessWidget {
               const Icon(Icons.no_photography_outlined, color: Colors.white, size: 56),
               const SizedBox(height: 16),
               const Text(
-                '无法使用相机，请允许相机权限或确认设备具有可用摄像头。',
+                '无法使用相机。可到系统设置中允许相机权限，或返回书源管理后使用“从剪贴板导入”。',
                 style: TextStyle(color: Colors.white),
                 textAlign: TextAlign.center,
               ),
@@ -426,6 +426,11 @@ final class _ScannerErrorView extends StatelessWidget {
                   unawaited(onRetry());
                 },
                 child: const Text('重试'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('返回并改用剪贴板'),
               ),
             ],
           ),

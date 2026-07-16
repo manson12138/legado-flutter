@@ -87,6 +87,8 @@ final class BookInfoViewModel {
         _openChapterInReader(chapterIndex);
       case ChangeBookInfoSourceIntent(book: final SearchBook book):
         _changeSource(book);
+      case OpenBookInfoFullSourceChangeIntent():
+        _openFullSourceChange();
       case BackFromBookInfoIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户从详情页返回');
         _effectController.add(const CloseBookInfoEffect());
@@ -345,6 +347,23 @@ final class BookInfoViewModel {
     _snapshot = null;
     _emit(_state.copyWith(selectedBook: book, inBookshelf: false));
     _loadDetails();
+  }
+
+  /// 对已在书架中的网络书请求独立全书源换源页面。
+  void _openFullSourceChange() {
+    /// 当前已解析并确认在书架中的书籍。
+    final Book? book = _state.book;
+    if (!_state.inBookshelf || book == null) {
+      _effectController.add(
+        const ShowBookInfoMessageEffect('请先把书籍加入书架再执行整书换源'),
+      );
+      return;
+    }
+    if (book.origin == 'loc_book') {
+      _effectController.add(const ShowBookInfoMessageEffect('本地书不支持整书换源'));
+      return;
+    }
+    _effectController.add(OpenBookInfoFullSourceChangeEffect(book.bookUrl));
   }
 
   /// 将异常转换为不泄漏响应内容的提示。

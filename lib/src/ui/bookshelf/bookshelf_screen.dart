@@ -91,6 +91,13 @@ final class BookshelfScreen extends StatelessWidget {
           tooltip: '移动分组',
         ),
         IconButton(
+          onPressed: state.selectedBookUrls.length == 1
+              ? () => onIntent(const OpenSelectedBookSourceChangeIntent())
+              : null,
+          icon: const Icon(Icons.swap_horiz),
+          tooltip: '整书换源',
+        ),
+        IconButton(
           onPressed: () => onIntent(const RequestDeleteBookshelfBooksIntent()),
           icon: const Icon(Icons.delete_outline),
           tooltip: '删除',

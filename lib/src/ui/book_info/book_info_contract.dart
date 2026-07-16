@@ -6,11 +6,18 @@ import '../../domain/model/search_book.dart';
 /// 书籍详情路由参数，保留搜索阶段发现的全部可换来源。
 final class BookInfoRouteArguments {
   /// 创建详情路由参数。
-  const BookInfoRouteArguments({required this.group, required this.selectedBook});
+  const BookInfoRouteArguments({
+    required this.group,
+    required this.selectedBook,
+    this.initialMessage,
+  });
   /// 同名作者候选来源组。
   final BookSearchResultGroup group;
   /// 初始选择来源。
   final SearchBook selectedBook;
+
+  /// 路由替换后由新详情页展示的一次性提示。
+  final String? initialMessage;
 }
 
 /// 详情、目录、书架和换源入口的不可变页面状态。
@@ -121,6 +128,12 @@ final class ChangeBookInfoSourceIntent extends BookInfoIntent {
   final SearchBook book;
 }
 
+/// 对已在书架中的网络书打开独立整书换源页面。
+final class OpenBookInfoFullSourceChangeIntent extends BookInfoIntent {
+  /// 创建打开整书换源 Intent。
+  const OpenBookInfoFullSourceChangeIntent();
+}
+
 /// 返回上一页。
 final class BackFromBookInfoIntent extends BookInfoIntent {
   /// 创建返回 Intent。
@@ -157,4 +170,13 @@ final class OpenBookInfoReaderEffect extends BookInfoEffect {
 
   /// 阅读器初始化时应优先打开的章节索引。
   final int chapterIndex;
+}
+
+/// 请求路由层打开当前书架书籍的 M11 整书换源页面。
+final class OpenBookInfoFullSourceChangeEffect extends BookInfoEffect {
+  /// 创建整书换源导航 Effect。
+  const OpenBookInfoFullSourceChangeEffect(this.bookUrl);
+
+  /// 当前书架书籍的稳定 URL。
+  final String bookUrl;
 }

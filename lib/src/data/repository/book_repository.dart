@@ -4,6 +4,7 @@ import '../../domain/gateway/reading_progress_gateway.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/reading_progress.dart';
+import '../../help/error/app_error.dart';
 import '../dao/book_chapter_dao.dart';
 import '../dao/book_dao.dart';
 import '../local/data_error.dart';
@@ -45,6 +46,47 @@ final class BookRepository
           await _chapterDao.deleteByBook(book.bookUrl, executor: transaction);
           await _chapterDao.upsertAll(chapters, executor: transaction);
         }
+      });
+      _database.changeNotifier.notifyTables(
+        <String>{DatabaseTables.books, DatabaseTables.chapters},
+      );
+    });
+  }
+
+  /// 原子替换书籍主键和目录，并阻止覆盖书架中另一条已存在记录。
+  @override
+  Future<void> changeBookSource({
+    required String oldBookUrl,
+    required Book newBook,
+    required List<BookChapter> chapters,
+  }) {
+    return guardDataOperation<void>(() async {
+      await _database.transaction<void>((transaction) async {
+        /// 事务开始时仍然存在的旧书记录，防止并发删除后重新制造新书。
+        final Book? existingOldBook = await _bookDao.getByUrl(
+          oldBookUrl,
+          executor: transaction,
+        );
+        if (existingOldBook == null) {
+          throw const AppError(
+            kind: AppErrorKind.validation,
+            message: '原书籍已不在书架中，换源已取消',
+          );
+        }
+        /// 事务内重新读取的新主键记录，关闭预检查与提交之间的覆盖窗口。
+        final Book? conflictingBook = await _bookDao.getByUrl(
+          newBook.bookUrl,
+          executor: transaction,
+        );
+        if (conflictingBook != null && conflictingBook.bookUrl != oldBookUrl) {
+          throw const AppError(
+            kind: AppErrorKind.validation,
+            message: '目标来源的书籍已经在书架中，请先处理重复书籍',
+          );
+        }
+        await _bookDao.deleteByUrl(oldBookUrl, executor: transaction);
+        await _bookDao.upsert(newBook, executor: transaction);
+        await _chapterDao.upsertAll(chapters, executor: transaction);
       });
       _database.changeNotifier.notifyTables(
         <String>{DatabaseTables.books, DatabaseTables.chapters},
