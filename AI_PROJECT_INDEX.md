@@ -4,7 +4,7 @@
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-07-15。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-07-16。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -97,7 +97,7 @@ flutter_app/lib/main.dart
 | `flutter_app/lib/src/data/local/` | 数据库、表名、行读取、变更通知 | 功能页面状态 |
 | `flutter_app/lib/src/data/model/` | 外部数据进入领域前的解码边界 | 页面 DTO |
 | `flutter_app/lib/src/api/http/` | 统一 HTTP 契约、Dio 实现、URL 解析、响应解码 | 书源页面状态 |
-| `flutter_app/lib/src/api/cookie/` | HTTP Cookie 持久化与 WebView Cookie 边界 | 独立第二套 Cookie 存储 |
+| `flutter_app/lib/src/api/cookie/` | HTTP Cookie 持久化、Android WebView/WKWebView 按域同步 | 独立第二套 Cookie 存储 |
 | `flutter_app/lib/src/api/js/` | JS 引擎、实例池、桥接、执行上下文 | 具体页面流程 |
 | `flutter_app/lib/src/model/analyze_rule/` | 普通规则和 JavaScript 规则服务 | 导航和数据库 SQL |
 | `flutter_app/lib/src/model/web_book/` | 搜索、详情、目录、正文编排 | Widget |
@@ -126,6 +126,7 @@ flutter_app/lib/main.dart
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` | `BookshelfViewModel` | 实时书架、分组、排序、批量操作 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
 | `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute` |
+| `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
 
@@ -150,6 +151,7 @@ Route 管理生命周期、插件、导航、对话框和 Effect；Screen 保持
 | 详情和目录 | `ui/book_info/` | `BookDetailService`、`SaveBookChaptersUseCase`、`AddBookToBookshelfUseCase` | `ui/book/info/`、`model/webBook/` | [`m06/README.md`](./m06/README.md) |
 | 书架 | `ui/bookshelf/` | `BookRepository`、`BookGroupRepository`、`BookshelfRefreshCoordinator` | `ui/main/bookshelf/` | [`m07/README.md`](./m07/README.md) |
 | 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository` | `ui/book/read/`、`model/ReadBook.kt` | [`m08/README.md`](./m08/README.md) |
+| 整书换源 | `ui/change_book_source/` | `ChangeSourceCoordinator`、`ChangeBookSourceUseCase`、`BookRepository.changeBookSource` | `ui/book/changesource/`、`ChangeSourceSearchUseCase.kt`、`ChangeBookSourceUseCase.kt` | [`m11/README.md`](./m11/README.md) |
 | 本地书导入 | `ui/local_book_import/` | `LocalBookImportCoordinator`、`LocalBookStorage`、各格式 Parser | `model/localBook/` 和原文件导入入口 | [`m08_1/README.md`](./m08_1/README.md) |
 | PDF 阅读 | `ui/reader/pdf_reader_route.dart` | `PdfLocalBookParser`、`pdfx` | `model/localBook/PdfFile.kt` | [`m08_1/README.md`](./m08_1/README.md) |
 | 阅读系统栏和常亮 | `platform/reader_platform_service.dart` | Android `MainActivity.kt`、iOS `AppDelegate.swift` | 原阅读 Activity/窗口逻辑 | [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md) |
@@ -226,6 +228,25 @@ UI Intent
 
 事务失败时不能发送成功变更通知；sqflite Map 和异常不能越过 Repository/Gateway 边界进入 UI。
 
+### 7.5 整书换源
+
+```text
+BookInfo / Bookshelf / Reader Intent
+  -> /books/change-source
+  -> ChangeBookSourceViewModel
+  -> ChangeSourceCoordinator
+     -> BookSearchCoordinator
+     -> BookDetailService
+     -> StandardBookSourceService
+  -> ChangeBookSourceUseCase
+  -> BookshelfGateway.changeBookSource
+  -> BookRepository SQLite transaction
+  -> ReaderCacheGateway 复制稳定锚点和显示配置
+  -> 调用页使用新 bookUrl 替换详情或阅读路由
+```
+
+当前只覆盖单本网络书的整书换源。单章、自动、批量换源、候选书源管理和缓存下载仍是独立 M11 Feature，不能因本路由存在而宣称完成。
+
 ## 8. 数据层索引
 
 当前 Schema v2 的核心表定义位于 `data/local/legado_database.dart`：
@@ -273,16 +294,17 @@ JavaScript 入口：
 
 书源运行变量通过 `BookSourceGateway`/`BookSourceRepository` 读写 `sourceVariable_书源URL` 独立缓存键，书源编辑器提供输入入口；`LegadoScriptBridge.prepareContext` 在执行前预载，使 `source.getVariable()` 保持同步返回。JSF 宿主桥使用结构化信封传播失败，避免 Dart 异常对象被当作脚本业务值。`org.jsoup.Jsoup` 只有基于现有 `html` 依赖的固定只读白名单，不代表任意 JVM 类兼容。
 
-搜索、详情、目录和正文已经通过 `StandardBookSourceService` 接入同一混合执行入口，不再把所有脚本书源预先标成 `javascriptPending`。当前仍不能宣称的能力：Rhino/JVM 全兼容、历史同步 `java.ajax/connect/get/post` 透明兼容、WebView/Cookie 双平台同步、Android/iOS 真机 JSF 已通过。具体样本和阻塞见 [`m04/README.md`](./m04/README.md) 与 [`m04/05_collection_validation_samples.md`](./m04/05_collection_validation_samples.md)。
+搜索、详情、目录和正文已经通过 `StandardBookSourceService` 接入同一混合执行入口，不再把所有脚本书源预先标成 `javascriptPending`。M10 已新增 `FlutterWebViewScriptBridge` 和 `FlutterWebViewCookieBridge`，Android/iOS 使用官方系统 WebView 按域同步统一 Cookie；书源登录入口位于 `ui/book_source/book_source_login_route.dart`。当前仍不能宣称的能力：Rhino/JVM 全兼容、历史同步 `java.ajax/connect/get/post` 透明兼容、WebView/Cookie 真机样本通过、Android/iOS 真机 JSF 已通过。具体样本和阻塞见 [`m04/README.md`](./m04/README.md)、[`m04/05_collection_validation_samples.md`](./m04/05_collection_validation_samples.md) 与 [`m10/README.md`](./m10/README.md)。
 
 ## 10. 平台宿主索引
 
 | 能力 | Dart 边界 | Android 宿主 | iOS 宿主 |
 |---|---|---|---|
 | 阅读沉浸模式和常亮 | `platform/reader_platform_service.dart` | `android/app/src/main/kotlin/io/legado/flutter/MainActivity.kt` | `ios/Runner/AppDelegate.swift` |
-| 书源文件和登录 | `platform/book_source_platform_bridge.dart` | 文件由 Flutter 插件处理；WebView 登录未接入 | 文件由 Flutter 插件处理；WebView 登录未接入 |
+| 书源文件和登录 | `platform/book_source_platform_bridge.dart`、`ui/book_source/book_source_login_route.dart` | file_picker + 官方 Android WebView + 统一 Cookie | Document Picker + 官方 WKWebView + 统一 Cookie |
 | 本地书文件选择 | `platform/local_book_platform_bridge.dart` | `file_picker` / SAF | `file_picker` / Document Picker |
 | 二维码相机 | `ui/book_source/book_source_qr_scanner_route.dart` | Manifest 相机权限 + `mobile_scanner` | `Info.plist` 用途说明 + `mobile_scanner` |
+| 页面 WebView/Cookie | `api/js/webview_script_bridge.dart`、`api/cookie/flutter_webview_cookie_bridge.dart` | 系统 WebView；超时/取消/释放代码待真机 | WKWebView/WKHTTPCookieStore；超时/取消/释放代码待真机 |
 
 平台差异先查 [`m00/07_platform_capability_matrix.md`](./m00/07_platform_capability_matrix.md) 和 [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md)。原生宿主只能提供窄能力，不能复制 Dart 业务状态机。
 
@@ -292,9 +314,10 @@ JavaScript 入口：
 
 - M1～M8.1 已有实现代码，但仍缺用户完整运行证据，不能将“文件存在”写成阶段通过。
 - M4 JavaScript 兼容仍为 `BLOCKED`，核心问题包含真实书源双平台结果和历史同步网络语义。
-- 当前工作处于 M9 Android 第一批验收准备，不能宣称 Android A2 已完成。
-- M10 iOS 第一批适配受 M9 和 M4 门禁约束。
+- 用户本回合要求执行 M10 后，iOS 平台代码和验收文档已接入；这不等同于 Android A2 或 iOS 真机通过。
+- M10 仍受 M9 和 M4 门禁约束，状态保持 `IN_PROGRESS`；安装、签名、JSF、WebView/Cookie、文件安全作用域和核心路径都等待用户结果。
 - M11 全功能迁移尚不能替代核心闭环验收。
+- 用户在获知 M10 尚待真机验收后要求继续执行 M11；当前只领取整书换源，代码状态为 `IN_PROGRESS`，该决定不等同于 M9/M10 通过。
 
 状态入口：
 
@@ -304,6 +327,12 @@ JavaScript 入口：
 | Android 核心验收项 | [`m09/02_core_and_exception_matrix.md`](./m09/02_core_and_exception_matrix.md) |
 | 已知缺陷和回归 | [`m09/03_issue_and_regression_log.md`](./m09/03_issue_and_regression_log.md) |
 | 下一阶段交接 | [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md) |
+| M10 当前实现与阻断 | [`m10/README.md`](./m10/README.md) |
+| iOS 能力与平台差异 | [`m10/01_ios_capability_inventory.md`](./m10/01_ios_capability_inventory.md) |
+| iOS 签名与真机步骤 | [`m10/02_ios_signing_and_device_run.md`](./m10/02_ios_signing_and_device_run.md) |
+| iOS 样本与验收矩阵 | [`m10/03_ios_compatibility_report.md`](./m10/03_ios_compatibility_report.md)、[`m10/04_ios_acceptance_matrix.md`](./m10/04_ios_acceptance_matrix.md) |
+| M11 当前 Feature 与门禁记录 | [`m11/README.md`](./m11/README.md) |
+| 整书换源行为、映射与验收 | [`m11/change_source/01_android_behavior_inventory.md`](./m11/change_source/01_android_behavior_inventory.md)、[`02_mapping_and_design.md`](./m11/change_source/02_mapping_and_design.md)、[`03_acceptance_matrix.md`](./m11/change_source/03_acceptance_matrix.md) |
 | 功能是否纳入首批 | [`m00/04_feature_matrix.md`](./m00/04_feature_matrix.md) |
 | Android 与 Flutter 文件对应 | [`m00/03_file_mapping.md`](./m00/03_file_mapping.md) |
 

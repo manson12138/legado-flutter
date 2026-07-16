@@ -1,6 +1,6 @@
 # M00 Feature Matrix
 
-Last updated: 2026-07-14
+Last updated: 2026-07-16
 
 ## First-Wave Features
 
@@ -11,7 +11,7 @@ Last updated: 2026-07-14
 | Book source management | `BookSourceActivity` | `ui/book/source/manage/**`, `BookSourceDao` | Source list/manage screens | Enable/disable/group/edit/delete basics implemented; user execution pending. | Codex + user | IN_PROGRESS | 2026-07-13 |
 | Normal rule parsing | Rule analyzer classes | `model/analyzeRule/**`, `model/webBook/**` | Dart rule engine | Controlled samples match Android output. | User samples needed | BLOCKED | 2026-07-13 |
 | JavaScript rules | Rhino engine and source JS extensions | `modules/rhino/**`, `help/rhino/**`, `help/source/**` | `JsEngine` and Legado API bridge | JS samples pass on Android and iOS prototype. | User samples needed | BLOCKED | 2026-07-13 |
-| Network and cookies | `HttpHelper`, `CookieManager`, WebView helpers | `help/http/**`, `help/webView/**` | Unified HTTP/cookie layer | Headers, cookies, charset, timeout, and errors are observable. | Codex | NOT_STARTED | 2026-07-13 |
+| Network and cookies | `HttpHelper`, `CookieManager`, WebView helpers | `help/http/**`, `help/webView/**` | Unified HTTP/cookie layer | Unified HTTP and persistent cookies exist; M10 adds Android WebView/WKWebView domain sync, pending device verification. | Codex + user | IN_PROGRESS | 2026-07-16 |
 | Search | `MainRouteSearch`, `SearchActivity` | `ui/book/search/**`, `SearchBooksUseCase.kt` | Search MVI and bounded coordinator | Normal-source code path supports incremental results/cancel/retry; real execution and JS pending. | Codex + user | IN_PROGRESS | 2026-07-14 |
 | Book detail | `MainRouteBookInfo`, `BookInfoActivity` | `ui/book/info/**`, `WebBook.kt` | Book info MVI and detail service | Normal-source detail and add-to-shelf transaction implemented; user validation pending. | Codex + user | IN_PROGRESS | 2026-07-14 |
 | Toc | `TocActivity` | `ui/book/toc/**`, `BookChapterDao.kt` | Toc embedded in book info | Pagination, URL dedupe, continuous index and persistence wired; user validation pending. | Codex + user | IN_PROGRESS | 2026-07-14 |
@@ -23,6 +23,8 @@ Last updated: 2026-07-14
 
 | Feature | Android Entry | Deferral Reason | Flutter Target | Owner | Status | Updated |
 |---|---|---|---|---|---|---|
+| Whole-book source switching | `BookInfoScreen`, `ReadBookScreen`, bookshelf management | M6 only covered candidates from the same search run. | Independent exact search, candidate preview, atomic identity/toc migration and reader route replacement | Codex + user | IN_PROGRESS | 2026-07-16 |
+| Cache download | cache actions and download services | Kept separate from source switching to preserve the M11 one-Feature rule. | Shared Dart queue plus Android foreground/iOS foreground-or-limited-background adapters | Codex | NOT_STARTED | 2026-07-16 |
 | RSS | `RssSourceActivity`, RSS routes | Not in first-wave default scope. | Later RSS feature set | Codex | NOT_STARTED | 2026-07-13 |
 | AI chat and AI settings | `MainRouteAiChat`, AI config routes | Not in first-wave default scope; IM reversed-list rule must be preserved when migrated. | Later AI feature set | Codex | NOT_STARTED | 2026-07-13 |
 | Manga reader | `ReadMangaActivity` | Text reader first. | Later manga reader | Codex | NOT_STARTED | 2026-07-13 |

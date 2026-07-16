@@ -26,10 +26,10 @@ M4 不能进入 `ANDROID_READY`，原因有两项：
 - 网络、Cookie 和缓存分别复用 M3/M2，未创建第二套存储或网络栈。
 - MD5、Base64、Hex、URI、UUID 及少量 Java 类白名单。
 - 未支持 API 抛出带表面、类名和方法名的错误，不返回伪造空值。
-- WebView 与纯 JavaScript 引擎分离，当前平台实现明确未支持。
+- WebView 与纯 JavaScript 引擎分离；M10 已用 Flutter 官方 WebView 接入 Android/iOS 页面脚本、超时、取消、结果回传和统一 Cookie，同一套代码仍待双端真机样本验证。
 - S2 标准 JavaScript URL 与 S3 `jsLib`/混合字段规则已建立四段真实调用路径，包含 `src` 注入和按书源隔离的 `cache.putMemory/getFromMemory`。
 - `Packages.*` 现在进入 Java 白名单桥并报告具体类和方法，不再只产生无法定位的全局变量缺失。
-- Android `UrlOption.js` 已按“请求前、绝对 URL 作为 `result`”接入，`bodyJs` 已按“响应解码后、正文作为 `result`”接入；WebView 选项仍保持明确边界。
+- Android `UrlOption.js` 已按“请求前、绝对 URL 作为 `result`”接入，`bodyJs` 已按“响应解码后、正文作为 `result`”接入；WebView 选项由独立受控页面桥执行，不混入 QuickJS Scope。
 - QuickJS 明确报告顶层 `return` 时，会使用函数作用域做一次 Rhino 兼容重试；其他语法错误不会进行猜测性改写。
 - `FLUTTER_JS_COMPAT_LOG` 会记录脱敏后的 QuickJS 摘要，以及宿主桥方法名和参数类型轨迹；不记录脚本、参数值、正文、Header 或 Cookie。
 - 可选字段告警按“字段 + 原因”去重，避免同一搜索列表逐项重复输出。
@@ -46,3 +46,5 @@ M4 不能进入 `ANDROID_READY`，原因有两项：
 - 同步网络历史脚本的跨平台解决方案。
 - 任意 `Packages.*`、JavaImporter、JavaAdapter、Android API 或 Java 反射；当前 Jsoup 仅是固定只读白名单。
 - `java.createSymmetricCrypto` 需要新增经过评估的跨平台 AES/DES 依赖，当前不能用哈希库或伪对象替代。
+- M10 WebView/Cookie 实现尚无 S6～S8 的 Android/iOS 真机结果，不能据此关闭 M4。
+- 历史脚本同步调用 `java.webView` 时仍可能观察到 Promise；页面桥实现不等于 Rhino 同步调用已透明兼容。

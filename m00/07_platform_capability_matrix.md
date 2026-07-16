@@ -1,19 +1,20 @@
 # M00 Platform Capability Matrix
 
-Last updated: 2026-07-14
+Last updated: 2026-07-16
 
 ## First-Wave Capabilities
 
 | Capability | Android Source | Flutter Android Direction | Flutter iOS Direction | Difference / Risk | Owner | Status | Updated |
 |---|---|---|---|---|---|---|---|
 | HTTP | `help/http/HttpHelper.kt`, OkHttp/Cronet | Dart HTTP first; plugin only if needed | Same Dart HTTP first | Cronet is Android-specific; charset/cookie behavior must be tested. | Codex | MAPPING | 2026-07-13 |
-| Cookie store | `CookieManager.kt`, `CookieStore.kt` | Dart store plus Android WebView sync | Dart store plus WKWebView sync | Cross-WebView sync differs. | Codex | MAPPING | 2026-07-13 |
-| WebView | `BackstageWebView.kt`, login WebView | Flutter WebView plugin/platform adapter | WKWebView adapter | JS bridge and cookies differ. | Codex | MAPPING | 2026-07-13 |
-| JavaScript | `:modules:rhino` | Candidate engine or plugin | Same strategy required where possible | iOS cannot execute JVM classes. | User samples needed | BLOCKED | 2026-07-13 |
-| Local book file import | `ImportBookScreen`, file associations, `LocalBook` | System picker followed immediately by app-private copy; external-open association pending | Same picker boundary and sandbox copy; M10 must validate security-scoped source lifetime | No temporary absolute path is persisted; database stores only a private relative path and SHA-256 identity. | Codex + user | IN_PROGRESS | 2026-07-14 |
-| QR/camera | `QrCodeActivity` | `mobile_scanner` with Android camera permission | `mobile_scanner` with iOS camera usage description | Camera QR text/URL source import implemented; gallery QR and real-device permission/rotation validation remain. | Codex + user | IN_PROGRESS | 2026-07-14 |
-| Reader keep screen on | `ReadBookController.keepScreenOn` | MethodChannel sets `FLAG_KEEP_SCREEN_ON` and restores original flag | MethodChannel sets `isIdleTimerDisabled` and restores original value | Code implemented; real auto-lock timing needs device validation. | Codex + user | IN_PROGRESS | 2026-07-14 |
-| Safe area/system bars | `toggleSystemBar`, reader Activity behavior | `SystemChrome` immersive sticky plus shared SafeArea | Same Flutter system UI and SafeArea policy | Code implemented; gesture conflict and restoration need device validation. | Codex + user | IN_PROGRESS | 2026-07-14 |
+| Cookie store | `CookieManager.kt`, `CookieStore.kt` | Dart store + official Android WebView cookie manager | Dart store + WKHTTPCookieStore through official plugin | Code now syncs by domain before/after controlled pages; HttpOnly/third-party behavior needs device results. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| WebView | `BackstageWebView.kt`, login WebView | Official Android WebView login/script route | Official WKWebView login/script route | Timeout/cancel/delegate release implemented; login, captcha and web-process recovery need device results. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| JavaScript | `:modules:rhino` | Shared Dart JSF/QuickJS + Legado bridge | Same Dart JSF/QuickJS + Legado bridge | iOS cannot execute JVM classes; WebView page bridge now exists, S2～S7 still need device results. | User samples needed | BLOCKED | 2026-07-16 |
+| Local book file import | `ImportBookScreen`, file associations, `LocalBook` | System picker followed immediately by app-private copy; external-open association pending | Document Picker current-readable result followed immediately by sandbox copy | No temporary absolute path is persisted; security-scoped provider lifetime still needs iOS device validation. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| QR/camera | `QrCodeActivity` | `mobile_scanner` with Android camera permission | `mobile_scanner` with iOS camera usage description | Permission denial now points to Settings or clipboard fallback; gallery QR and real-device validation remain. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| Reader keep screen on | `ReadBookController.keepScreenOn` | MethodChannel sets `FLAG_KEEP_SCREEN_ON` and restores original flag | MethodChannel pauses `isIdleTimerDisabled` in background, restores requested value on foreground, restores original on exit | Code implemented; real auto-lock timing needs device validation. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| Safe area/system bars | `toggleSystemBar`, reader Activity behavior | `SystemChrome` immersive sticky plus shared SafeArea | Same Flutter SafeArea; size changes reproject stable character anchor | Code implemented; Home Indicator, keyboard and gesture conflict need device validation. | Codex + user | IN_PROGRESS | 2026-07-16 |
+| Whole-book source switching | `ChangeSourceSearchUseCase`, `ChangeBookSourceUseCase` | Shared Dart search, preview, migration and sqflite transaction | Same Dart state machine and transaction | No new native logic; behavior still depends on platform network/JS results and must be accepted Android first, then iOS. | Codex + user | IN_PROGRESS | 2026-07-16 |
 
 ## Android-Only or Risky Capabilities
 

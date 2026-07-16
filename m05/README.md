@@ -21,7 +21,7 @@
 - 外部扫码控制器显式跟随应用 inactive/resumed 生命周期停止和恢复，避免权限弹窗或前后台切换造成重复初始化。
 - 扫码调试日志统一使用 `[BOOK_SOURCE_QR_SCAN]`，通过 `stage=` 串联入口、相机状态、识别、解析、远程请求、确认和最终导入结果；只记录类型、长度、数量及错误分类，不记录二维码正文、书源 URL、Header 或 Cookie。默认控制台日志器仅在 Flutter debug 模式输出。
 - Android 声明相机权限，iOS 声明相机用途说明；拒绝权限、无摄像头和启动失败均显示可重试错误状态。
-- WebView 登录继续通过 `BookSourcePlatformBridge` 接线，当前明确抛出未支持错误。
+- M10 新增受控 WebView 登录 Route；Android/iOS 进入前写入统一 Cookie，完成、后台和内存警告时按域回写，页面销毁时解除 Delegate。
 - 数据库升级到 v2，为 `book_sources` 增加 `extraFieldsJson`。
 
 ## Android 行为对照
@@ -31,12 +31,12 @@
 - Android 支持置顶、置底、拖拽排序、导出、在线导入和分组追加/移除；Flutter 第一批只保留数据库手动顺序和分组替换，这些高级动作列入后续。
 - Android 删除会清理书源缓存和配置；Flutter 删除书源、搜索缓存和独立缓存中的书源变量，不删除书架记录。
 - Android 调试会真实执行搜索、详情、目录和正文；Flutter M5 只做静态分类，真实调试依赖 M4 JavaScript 门禁和 M6 搜索链路。
-- Android 登录包含表单、验证码和 WebView；Flutter 已有 Effect/平台边界，但平台实现受 M4 WebView/Cookie 门禁阻塞。
+- Android 登录包含表单、验证码和 WebView；Flutter 已接 Android WebView/WKWebView 与统一 Cookie，真实登录、验证码和第三方 Cookie 仍受 M4/M10 真机门禁约束。
 
 ## 当前阻塞与后续矩阵
 
 1. M4 尚未通过 Android/iOS JavaScript 真机门禁，因此 M5 不能标记完成。
-2. WebView 登录只有明确接口，没有 Android/iOS 插件实现。
+2. WebView 登录和 Cookie 插件代码已实现，但尚无 Android/iOS 真实登录样本结果。
 3. 扫码已支持相机中的二维码，但尚未实现从相册图片识别二维码。
 4. 除二维码包含的 HTTP/HTTPS 地址外，尚未实现独立的远程 URL 在线导入入口、导出、拖拽排序、置顶/置底、分组追加/移除和全量高级字段编辑。
 5. 基础调试尚不发起真实网络请求，不产生搜索、详情、目录、正文结果。
@@ -61,6 +61,6 @@ AI 未运行以下命令或操作：
 13. 点击“扫描二维码”，分别扫描包含单条 JSON、JSON 数组、HTTP/HTTPS 书源地址和 `sourceUrls` 聚合对象的二维码，确认识别后先展示导入文本和冲突策略，不会自动写入数据库。
 14. Android 与 iOS 分别拒绝一次相机权限，确认显示明确错误；返回系统设置授权后点击重试，确认相机恢复。
 15. 扫描空响应、超过 5 MiB 的远程地址、非 HTTP/HTTPS 协议和不可访问地址，确认显示安全错误且现有书源不变。
-16. 点击登录入口，确认当前返回明确“尚未接入”，而不是无响应或假成功。
+16. 点击登录入口，完成一次表单/验证码/重定向登录；关闭页面后用同域 HTTP 请求确认 Cookie 已回写，后台返回与刷新不崩溃。
 
 用户提供 Android/iOS 结果前，M5 保持 `IN_PROGRESS`。

@@ -20,7 +20,7 @@
 | S4 | Legado `java.*` | 得奇小说 | `java.ajax`、脚本生成请求 | 被同步网络语义阻塞 |
 | S5 | Rhino/Java 类 | 热门小说网 | `Packages.org.jsoup.Jsoup` | 必须明确失败或建立白名单替代 |
 | S6 | 登录脚本 | 69书吧 | Cookie、验证页、浏览器等待 | 需要登录与 WebView 平台能力 |
-| S7 | WebView 脚本 | 爱丽书屋 | `java.webView`、页面 HTML 回传 | 当前明确未支持 |
+| S7 | WebView 脚本 | 爱丽书屋 | `java.webView`、页面 HTML 回传 | M10 已接页面桥，待双端真机 |
 | S8 | Cookie Header | 书包书库 | 持久 Cookie 与自定义 Header | 仅用脱敏值验证存储和日志 |
 | S9 | 音频书源 | 懒人听书 | 音频地址、付费状态、分页目录 | 原始 Token 必须脱敏 |
 | S10 | 图片书源 | 🎨武芊漫画 | 图片列表转正文图片标签 | 验证类型 2 与图片顺序 |
@@ -206,7 +206,7 @@ if (html.indexOf('wafjs') !== -1 || html.indexOf('loading ailisw') !== -1) {
 result;
 ```
 
-校验点：纯 QuickJS 不应模拟浏览器 DOM。请求必须进入 `WebViewScriptBridge`，同步统一 Cookie，执行超时后关闭页面，并把结果以 DTO 返回。当前占位实现应明确报告 Android/iOS WebView 尚未接入。
+校验点：纯 QuickJS 不应模拟浏览器 DOM。请求必须进入 `WebViewScriptBridge`，同步统一 Cookie，执行超时后关闭页面，并把结果以 DTO 返回。M10 已接入 Flutter 官方 Android WebView/WKWebView；必须验证 DOM 回传、重定向域 Cookie、超时/取消和页面释放，未取得结果前保持 `NOT_STARTED`。
 
 ## S8：Cookie Header 脱敏书源
 
