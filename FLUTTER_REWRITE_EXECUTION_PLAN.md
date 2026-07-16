@@ -6,6 +6,8 @@
 >
 > 最后更新：2026-07-13。
 
+> AI 开始定位 Flutter 子项目时，先阅读 [`AI_PROJECT_INDEX.md`](./AI_PROJECT_INDEX.md)；该文件只负责导航，不替代本方案的强制规则。
+>
 > 分阶段执行时，必须同时阅读 [`steps/MIGRATION_STEPS_INDEX.md`](./steps/MIGRATION_STEPS_INDEX.md) 和对应阶段文档。
 
 ---
@@ -1004,79 +1006,81 @@ flutter build ios --no-codesign
 
 # 附录 A：首批功能映射检查表
 
+> 2026-07-16：用户已在 Flutter Android 上对主要功能逻辑完成一轮冒烟验证。下列勾选表示“当前实现已覆盖且主流程已实际走过”，不代表 iOS 已验收、全部异常路径已通过或对应阶段已达到 `DONE`。
+
 ## A.1 书源
 
-- [ ] `BookSource` 实体映射。
-- [ ] 书源 DAO。
-- [ ] 书源 Repository/Gateway。
-- [ ] JSON 导入。
-- [ ] 书源启用/停用。
-- [ ] 书源分组。
-- [ ] 书源编辑。
-- [ ] 书源删除。
+- [x] `BookSource` 实体映射。
+- [x] 书源 DAO。
+- [x] 书源 Repository/Gateway。
+- [x] JSON 导入。
+- [x] 书源启用/停用。
+- [x] 书源分组。
+- [x] 书源编辑。
+- [x] 书源删除。
 - [ ] 登录和 Cookie。
-- [ ] 调试错误展示。
+- [x] 调试错误展示。
 
 ## A.2 规则引擎
 
-- [ ] `AnalyzeRule`。
-- [ ] `AnalyzeUrl`。
-- [ ] `AnalyzeByJSonPath`。
-- [ ] `AnalyzeByXPath`。
-- [ ] `AnalyzeByJSoup` 等价实现。
-- [ ] `AnalyzeByRegex`。
-- [ ] `RuleAnalyzer`。
-- [ ] `CustomUrl`。
-- [ ] JavaScript Scope。
+- [x] `AnalyzeRule`。
+- [x] `AnalyzeUrl`。
+- [x] `AnalyzeByJSonPath`。
+- [x] `AnalyzeByXPath`。
+- [x] `AnalyzeByJSoup` 等价实现。
+- [x] `AnalyzeByRegex`。
+- [x] `RuleAnalyzer`。
+- [x] `CustomUrl`。
+- [x] JavaScript Scope。
 - [ ] Legado 脚本 API。
 - [ ] JavaCompatibilityBridge。
 - [ ] WebView 请求。
-- [ ] 超时和取消。
-- [ ] 错误堆栈。
+- [x] 超时和取消。
+- [x] 错误堆栈。
 
 ## A.3 搜索
 
-- [ ] 搜索关键字历史。
-- [ ] 单书源搜索。
-- [ ] 多书源搜索。
-- [ ] 并发限制。
-- [ ] 取消搜索。
-- [ ] 结果去重。
-- [ ] 空状态。
-- [ ] 错误状态。
-- [ ] 打开详情。
+- [x] 搜索关键字历史。
+- [x] 单书源搜索。
+- [x] 多书源搜索。
+- [x] 并发限制。
+- [x] 取消搜索。
+- [x] 结果去重。
+- [x] 空状态。
+- [x] 错误状态。
+- [x] 打开详情。
 
 ## A.4 书架
 
-- [ ] `Book`。
-- [ ] `BookGroup`。
-- [ ] 书架 DAO。
-- [ ] 列表模式。
-- [ ] 网格模式。
-- [ ] 分组。
-- [ ] 排序。
-- [ ] 目录更新。
-- [ ] 选择模式。
-- [ ] 删除。
-- [ ] 阅读进度。
+- [x] `Book`。
+- [x] `BookGroup`。
+- [x] 书架 DAO。
+- [x] 列表模式。
+- [x] 网格模式。
+- [x] 分组。
+- [x] 排序。
+- [x] 目录更新。
+- [x] 选择模式。
+- [x] 删除。
+- [x] 阅读进度。
 
 ## A.5 阅读器
 
-- [ ] `BookChapter`。
-- [ ] 正文缓存。
-- [ ] 章节加载。
-- [ ] 上一章/下一章。
-- [ ] 目录跳转。
-- [ ] 上下滚动。
-- [ ] 进度保存。
-- [ ] 进度恢复。
-- [ ] 字体设置。
-- [ ] 行距和边距。
-- [ ] 日间/夜间颜色。
-- [ ] 替换规则。
-- [ ] 书签。
-- [ ] 预加载。
-- [ ] 错误重试。
+- [x] `BookChapter`。
+- [x] 正文缓存。
+- [x] 章节加载。
+- [x] 上一章/下一章。
+- [x] 目录跳转。
+- [x] 上下滚动。
+- [x] 进度保存。
+- [x] 进度恢复。
+- [x] 字体设置。
+- [x] 行距和边距。
+- [x] 日间/夜间颜色。
+- [x] 替换规则。
+- [x] 书签。
+- [x] 预加载。
+- [x] 错误重试。
 - [ ] 横竖屏恢复。
 
 ---
