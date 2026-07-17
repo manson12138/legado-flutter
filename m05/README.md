@@ -9,6 +9,8 @@
 - 书源列表、名称/URL/分组搜索，以及全部、启用、停用、未分组、JavaScript 筛选。
 - URL 稳定 key、长按选择、批量启停、替换分组和删除确认。
 - JSON 文件、文本和剪贴板导入；支持对象、数组及包裹 JSON 的转义字符串。
+- 新安装 Flutter App 在书源表为空时，会从 `flutter_app/assets/default_data/book_sources.json`
+  导入内置默认书源，复用同一套导入 UseCase、解码器、冲突策略和事务写入流程。
 - 同 URL 冲突可选择覆盖或跳过；同批重复 URL 跳过。
 - 单条无效书源进入导入摘要，有效项仍在同一事务中写入；JSON 根格式错误不触碰数据库。
 - 导入未知字段保存到 `extraFieldsJson`，编辑已知字段时继续保留。
@@ -27,6 +29,7 @@
 ## Android 行为对照
 
 - Android 以 `bookSourceUrl` 为唯一标识；Flutter 保持同样覆盖和稳定 key 语义。
+- Android 默认书源来自 assets 出厂数据；Flutter 使用 Flutter assets 保存同类 JSON，并在空书源库启动时导入。
 - Android 导入页区分新增、更新、已有，并允许保留名称、分组和启用状态；Flutter 第一批改为用户明确选择“覆盖”或“跳过”，统计新增、覆盖、跳过、无效。
 - Android 支持置顶、置底、拖拽排序、导出、在线导入和分组追加/移除；Flutter 第一批只保留数据库手动顺序和分组替换，这些高级动作列入后续。
 - Android 删除会清理书源缓存和配置；Flutter 删除书源、搜索缓存和独立缓存中的书源变量，不删除书架记录。

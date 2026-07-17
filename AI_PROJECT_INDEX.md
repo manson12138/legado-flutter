@@ -55,6 +55,19 @@
 - AI 不运行构建、测试、Lint、静态分析、格式检查或应用启动命令。
 - 新增文件后必须询问用户是否加入 Git 暂存区，不能主动执行 `git add`。
 
+跨阶段 UI、阅读器和书架冲突重构方案见
+[`FLUTTER_UI_AND_READER_REDESIGN_PLAN.md`](./FLUTTER_UI_AND_READER_REDESIGN_PLAN.md)。该文档当前为
+`IN_PROGRESS`；R1～R5 已写入第一批实现但尚无用户运行证据，且仿真翻页、高级设置、有限多章
+Widget 窗口、离线下载和其余页面视觉重构仍未完成。
+小说正文阅读界面完整 UI 对齐的实施优先级见
+[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md)。该文档当前为
+`IN_PROGRESS`；P0～P4 可落地阅读 UI 已写入 Flutter，依赖型能力已用边界面板登记，TTS、
+离线下载、AI、同步和单章换源等仍等待对应子系统迁移。
+小说阅读详情页完整 UI 对齐的实施优先级见
+[`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md)。该文档当前为
+`IN_PROGRESS`；P0～P3 基础入口已写入 Flutter 详情页但尚无用户运行证据，阅读记录、
+换封面、相关书、书源登录/变量、Web 文件、清缓存、日志和同步仍需后续业务能力。
+
 ## 3. 总体启动链
 
 ```text
@@ -75,6 +88,7 @@ flutter_app/lib/main.dart
 |---|---|---|
 | 进程入口与全局错误兜底 | `flutter_app/lib/main.dart` | 初始化顺序、日志后备实现、`runZonedGuarded` |
 | 应用组合根 | `flutter_app/lib/src/app/app_dependencies.dart` | DAO、Repository、HTTP、JS、协调器和 UseCase 的唯一集中装配处 |
+| 内置书源启动导入 | `flutter_app/lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
 | 路由常量 | `flutter_app/lib/src/app/app_route.dart` | 应用内稳定路由名 |
 | 路由与参数校验 | `flutter_app/lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
 | 根 Widget | `flutter_app/lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器和错误边界 |
@@ -117,7 +131,7 @@ flutter_app/lib/main.dart
 
 | 路由 | Route / Screen | 状态入口 | 参数或说明 |
 |---|---|---|---|
-| `/` | `ui/home/welcome_route.dart` / `welcome_screen.dart` | `WelcomeViewModel` | 应用启动页和各核心功能入口 |
+| `/` | `ui/home/welcome_route.dart` / `welcome_screen.dart` | `WelcomeViewModel` | 正式应用 Shell；手机底部导航、宽屏 NavigationRail，IndexedStack 保留书架/搜索/书源/设置状态 |
 | `/settings` | `ui/settings/settings_route.dart` / `settings_screen.dart` | 当前为轻量无状态接线 | 设置入口 |
 | `/settings/logs` | `ui/log_management/log_management_route.dart` / `log_management_screen.dart` | `LogManagementViewModel` | 查看、分享、ADB 回显和删除沙盒日志 |
 | `/book-sources` | `ui/book_source/book_source_route.dart` / `book_source_screen.dart` | `BookSourceManagementViewModel` | 书源管理、导入、扫码和编辑 |
@@ -125,7 +139,7 @@ flutter_app/lib/main.dart
 | `/book-info` | `ui/book_info/book_info_route.dart` / `book_info_screen.dart` | `BookInfoViewModel` | 必须传 `BookInfoRouteArguments` |
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` | `BookshelfViewModel` | 实时书架、分组、排序、批量操作 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
-| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute` |
+| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；P0/P2 文本阅读菜单浮层和刷新范围入口在 `reader_menu_overlay.dart`，P1/P3 设置面板在 `reader_settings_sheet.dart`，P2/P4 当前章/整书搜索、书签编辑、替换规则列表和后续能力面板在 `reader_action_sheets.dart` |
 | `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
@@ -148,14 +162,15 @@ Route 管理生命周期、插件、导航、对话框和 Effect；Screen 保持
 | 普通规则 | `model/analyze_rule/standard_rule_engine.dart` | `source_rules.dart`、`standard_source_parser.dart`、`standard_source_service.dart` | `model/analyzeRule/`、`model/webBook/` | [`m03/README.md`](./m03/README.md) |
 | JavaScript 书源 | `api/js/` | `LegadoJavaScriptService`、`LegadoScriptBridge`、`JsEnginePool` | `modules/rhino/`、`model/analyzeRule/` | [`m04/README.md`](./m04/README.md) |
 | 搜索 | `ui/search/` | `BookSearchCoordinator`、`SearchHistoryRepository`、`StandardBookSourceService` | `ui/book/search/` | [`m06/README.md`](./m06/README.md) |
-| 详情和目录 | `ui/book_info/` | `BookDetailService`、`SaveBookChaptersUseCase`、`AddBookToBookshelfUseCase` | `ui/book/info/`、`model/webBook/` | [`m06/README.md`](./m06/README.md) |
+| 详情和目录 | `ui/book_info/` | `BookDetailService`、`SaveBookChaptersUseCase`、`AddBookToBookshelfUseCase` | `ui/book/info/`、`model/webBook/` | [`m06/README.md`](./m06/README.md)、[`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md) |
 | 书架 | `ui/bookshelf/` | `BookRepository`、`BookGroupRepository`、`BookshelfRefreshCoordinator` | `ui/main/bookshelf/` | [`m07/README.md`](./m07/README.md) |
-| 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository` | `ui/book/read/`、`model/ReadBook.kt` | [`m08/README.md`](./m08/README.md) |
+| 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository`、`ReaderSearchState`、`ReaderDisplayConfig` | `ui/book/read/`、`model/ReadBook.kt` | [`m08/README.md`](./m08/README.md)、[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md) |
 | 整书换源 | `ui/change_book_source/` | `ChangeSourceCoordinator`、`ChangeBookSourceUseCase`、`BookRepository.changeBookSource` | `ui/book/changesource/`、`ChangeSourceSearchUseCase.kt`、`ChangeBookSourceUseCase.kt` | [`m11/README.md`](./m11/README.md) |
 | 本地书导入 | `ui/local_book_import/` | `LocalBookImportCoordinator`、`LocalBookStorage`、各格式 Parser | `model/localBook/` 和原文件导入入口 | [`m08_1/README.md`](./m08_1/README.md) |
 | PDF 阅读 | `ui/reader/pdf_reader_route.dart` | `PdfLocalBookParser`、`pdfx` | `model/localBook/PdfFile.kt` | [`m08_1/README.md`](./m08_1/README.md) |
 | 阅读系统栏和常亮 | `platform/reader_platform_service.dart` | Android `MainActivity.kt`、iOS `AppDelegate.swift` | 原阅读 Activity/窗口逻辑 | [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md) |
 | 日志与设置 | `ui/settings/`、`ui/log_management/` | `help/logging/`、`AppDependencies` | `ui/widget/components/log/` 等现有日志入口 | 当前源码；修改前搜索最新专项目标文档 |
+| 全局 UI、响应式、连续阅读、分页、预取、同书不同源冲突 | `ui/theme/`、`ui/components/adaptive_app_scaffold.dart`、`ui/bookshelf/`、`ui/book_info/`、`ui/reader/reader_page_layout.dart` | `ResolveBookShelfStateUseCase`、`AddBookToBookshelfUseCase`、`ReadBookCoordinator`、`ReaderPageLayoutEngine` | `ui/book/read/`、`model/ReadBook.kt`、`ResolveBookShelfStateUseCase.kt` | [`FLUTTER_UI_AND_READER_REDESIGN_PLAN.md`](./FLUTTER_UI_AND_READER_REDESIGN_PLAN.md) |
 
 ## 7. 核心调用链
 
@@ -173,6 +188,9 @@ BookSourceManagementScreen
 ```
 
 外部 JSON、二维码、剪贴板和远程文本都属于不可信输入。不要绕过统一解码、大小限制、冲突策略和事务边界。
+新安装默认书源由 `DefaultBookSourceBootstrapper` 在 `main.dart` 启动期触发；它仅在书源表为空时读取
+`flutter_app/assets/default_data/book_sources.json`，并继续走 `ImportBookSourcesUseCase` 与
+`BookSourceRepository.importSourceJson`，不得另建资产专用解码或写库路径。
 
 ### 7.2 网络书搜索到阅读
 
@@ -247,6 +265,36 @@ BookInfo / Bookshelf / Reader Intent
 
 当前只覆盖单本网络书的整书换源。单章、自动、批量换源、候选书源管理和缓存下载仍是独立 M11 Feature，不能因本路由存在而宣称完成。
 
+### 7.6 同书冲突、分页与阅读预下载
+
+```text
+BookInfoViewModel
+  -> AddBookToBookshelfUseCase
+  -> ResolveBookShelfStateUseCase
+  -> BookshelfGateway.getShelfBookConflict
+  -> BookDao 精确 name + author 查询
+  -> 已入架 / 同名同作者冲突 / 未入架
+  -> 冲突时由 BookInfoRoute 展示替换、明确新增或取消
+
+ReaderScreen
+  -> 连续模式：章节边界 Intent
+  -> 分页模式：ReaderPageLayoutEngine 标题/段落/真实排版行装页 + 中文字符/英文词距两端对齐
+  -> 缓存未命中：先测首批页面/恢复锚点页，_ReaderIncrementalPageLayoutJob 后台分批续算完整页集
+  -> 超长无换行段落按有限字符块测量，完整页集写入 ReaderPageLayoutCache 最近三套 LRU
+  -> ReaderPagedContent 左右跟手覆盖翻页
+  -> ReaderDisplayConfig 左/中/右点击动作、长按动作、点击区宽度和音量键翻页配置
+  -> ReaderSystemInfoText 时间/电量页眉页脚 + ReaderPlatformService 亮度/方向/电量窄桥
+  -> 章节边界：保留旧页加载相邻章 + _ReaderChapterCoverSwitch 跨章覆盖衔接
+  -> ReaderViewModel 稳定字符锚点与切章防抖
+  -> ReadBookCoordinator 有界预下载、并发 2、失败上限 3
+  -> ReaderRepository 持久化阅读方式与预下载数量
+```
+
+领域结果文件为 `domain/model/book_shelf_state.dart` 和
+`domain/model/add_book_to_bookshelf_result.dart`；冲突解析入口为
+`domain/usecase/resolve_book_shelf_state_use_case.dart`。分页文件依赖 Flutter 排版测量，因此位于
+`ui/reader/reader_page_layout.dart`，不得下沉到平台无关 Domain。
+
 ## 8. 数据层索引
 
 当前 Schema v2 的核心表定义位于 `data/local/legado_database.dart`：
@@ -300,7 +348,7 @@ JavaScript 入口：
 
 | 能力 | Dart 边界 | Android 宿主 | iOS 宿主 |
 |---|---|---|---|
-| 阅读沉浸模式和常亮 | `platform/reader_platform_service.dart` | `android/app/src/main/kotlin/io/legado/flutter/MainActivity.kt` | `ios/Runner/AppDelegate.swift` |
+| 阅读沉浸模式、常亮、亮度、方向和电量 | `platform/reader_platform_service.dart` | `android/app/src/main/kotlin/io/legado/flutter/MainActivity.kt` | `ios/Runner/AppDelegate.swift` |
 | 书源文件和登录 | `platform/book_source_platform_bridge.dart`、`ui/book_source/book_source_login_route.dart` | file_picker + 官方 Android WebView + 统一 Cookie | Document Picker + 官方 WKWebView + 统一 Cookie |
 | 本地书文件选择 | `platform/local_book_platform_bridge.dart` | `file_picker` / SAF | `file_picker` / Document Picker |
 | 二维码相机 | `ui/book_source/book_source_qr_scanner_route.dart` | Manifest 相机权限 + `mobile_scanner` | `Info.plist` 用途说明 + `mobile_scanner` |
@@ -318,6 +366,9 @@ JavaScript 入口：
 - M10 仍受 M9 和 M4 门禁约束，状态保持 `IN_PROGRESS`；安装、签名、JSF、WebView/Cookie、文件安全作用域和核心路径都等待用户结果。
 - M11 全功能迁移尚不能替代核心闭环验收。
 - 用户在获知 M10 尚待真机验收后要求继续执行 M11；当前只领取整书换源，代码状态为 `IN_PROGRESS`，该决定不等同于 M9/M10 通过。
+- UI 与阅读器重构已写入 R1～R5 第一批实现；未运行编译、分析、测试、格式化或应用启动，阶段保持 `IN_PROGRESS`，具体未完成项见重构方案的“实施快照”。
+- 小说正文阅读界面完整 UI 对齐已有 P0～P4 优先级文档，状态为 `IN_PROGRESS`；默认左右覆盖翻页、章节标题分页、首行缩进、两端对齐、长章节首屏增量分页、后台分批续算、完整分页 LRU、点击区域、音量键翻页、页眉页脚时间/电量、亮度和方向配置已写入 Flutter，但尚无用户运行证据。
+- 小说阅读详情页完整 UI 对齐已有 P0～P3 优先级文档，状态为 `IN_PROGRESS`；P0～P3 基础入口和可用子集已写入 Flutter 详情页但尚无用户运行证据，依赖型能力仍按文档继续拆分。
 
 状态入口：
 
