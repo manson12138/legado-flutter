@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../ui/components/app_state_views.dart';
@@ -19,10 +20,20 @@ import 'app_route.dart';
 /// 统一负责把路由名称映射为页面，并在入口处注入页面依赖。
 final class AppRouter {
   /// 创建绑定应用依赖容器的路由器。
-  const AppRouter({required this.dependencies});
+  const AppRouter({
+    required this.dependencies,
+    required this.themeModeListenable,
+    required this.onChangeThemeMode,
+  });
 
   /// 组合根提供的依赖容器，路由只负责向页面构造函数传递。
   final AppDependencies dependencies;
+
+  /// 当前应用主题模式监听器，供已保留的“我的”页面同步选中状态。
+  final ValueListenable<ThemeMode> themeModeListenable;
+
+  /// 修改应用主题模式的组合根回调。
+  final ValueChanged<ThemeMode> onChangeThemeMode;
 
   /// 根据 Flutter 路由设置创建目标页面。
   Route<dynamic> onGenerateRoute(RouteSettings settings) {
@@ -31,14 +42,22 @@ final class AppRouter {
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return WelcomeRoute(dependencies: dependencies);
+            return WelcomeRoute(
+              dependencies: dependencies,
+              themeModeListenable: themeModeListenable,
+              onChangeThemeMode: onChangeThemeMode,
+            );
           },
         );
       case AppRoute.settings:
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return const SettingsRoute();
+            return SettingsRoute(
+              dependencies: dependencies,
+              themeModeListenable: themeModeListenable,
+              onChangeThemeMode: onChangeThemeMode,
+            );
           },
         );
       case AppRoute.logManagement:

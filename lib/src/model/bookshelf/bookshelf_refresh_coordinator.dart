@@ -150,7 +150,7 @@ final class BookshelfRefreshCoordinator {
                 },
               );
           /// 原子保存结果。
-          final AppResult<void> saveResult = await _saveBook.execute(
+          final AppResult<void> saveResult = await _saveBook.save(
             refreshed.book,
             refreshed.chapters,
           );

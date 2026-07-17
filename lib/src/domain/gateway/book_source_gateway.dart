@@ -6,6 +6,9 @@ abstract interface class BookSourceGateway {
   /// 观察全部书源，按用户手动顺序返回。
   Stream<List<BookSource>> watchAll();
 
+  /// 一次性读取全部书源，供启动初始化和非 UI 业务判断使用。
+  Future<List<BookSource>> getAll();
+
   /// 按未经规范化的书源 URL 查询。
   Future<BookSource?> getByUrl(String sourceUrl);
 

@@ -1,12 +1,28 @@
 import 'package:flutter/services.dart';
 
+import '../domain/model/reader_content.dart';
+
 /// 定义阅读器系统栏和屏幕常亮平台能力，业务 ViewModel 只通过 Effect 请求。
 abstract interface class ReaderPlatformService {
   /// 进入阅读模式，隐藏系统栏并按配置设置屏幕常亮。
-  Future<void> enterReader({required bool keepScreenOn});
+  Future<void> enterReader({
+    required bool keepScreenOn,
+    required bool useSystemBrightness,
+    required double readerBrightness,
+    required ReaderOrientationMode orientationMode,
+  });
 
   /// 阅读中更新屏幕常亮状态。
   Future<void> setKeepScreenOn(bool enabled);
+
+  /// 阅读中更新屏幕亮度；跟随系统时恢复平台进入阅读器前的亮度。
+  Future<void> setBrightness({required bool useSystemBrightness, required double value});
+
+  /// 阅读中更新方向锁定策略。
+  Future<void> setOrientation(ReaderOrientationMode mode);
+
+  /// 读取平台电量百分比；无法读取时返回 null，由 UI 隐藏。
+  Future<int?> getBatteryLevel();
 
   /// 离开阅读模式，恢复系统栏并取消阅读器设置的常亮状态。
   Future<void> exitReader();
@@ -22,30 +38,85 @@ final class MethodChannelReaderPlatformService implements ReaderPlatformService 
 
   /// 隐藏系统栏并设置屏幕常亮；平台桥缺失时仍保留 Flutter 沉浸模式。
   @override
-  Future<void> enterReader({required bool keepScreenOn}) async {
+  Future<void> enterReader({
+    required bool keepScreenOn,
+    required bool useSystemBrightness,
+    required double readerBrightness,
+    required ReaderOrientationMode orientationMode,
+  }) async {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await _invokePlatform('enterReader', keepScreenOn);
+    await _invokePlatform('enterReader', <String, Object?>{
+      'enabled': keepScreenOn,
+      'useSystemBrightness': useSystemBrightness,
+      'brightness': readerBrightness,
+    });
+    await setOrientation(orientationMode);
   }
 
   /// 更新宿主窗口常亮标志。
   @override
   Future<void> setKeepScreenOn(bool enabled) {
-    return _invokePlatform('setKeepScreenOn', enabled);
+    return _invokePlatform('setKeepScreenOn', <String, Object?>{'enabled': enabled});
+  }
+
+  /// 更新阅读器亮度；平台桥缺失时按系统亮度降级。
+  @override
+  Future<void> setBrightness({
+    required bool useSystemBrightness,
+    required double value,
+  }) {
+    return _invokePlatform('setBrightness', <String, Object?>{
+      'useSystemBrightness': useSystemBrightness,
+      'brightness': value.clamp(0.05, 1).toDouble(),
+    });
+  }
+
+  /// 使用 Flutter 支持的系统方向接口锁定或释放阅读方向。
+  @override
+  Future<void> setOrientation(ReaderOrientationMode mode) {
+    return switch (mode) {
+      ReaderOrientationMode.system => SystemChrome.setPreferredOrientations(
+          const <DeviceOrientation>[],
+        ),
+      ReaderOrientationMode.portrait => SystemChrome.setPreferredOrientations(
+          const <DeviceOrientation>[
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown,
+          ],
+        ),
+      ReaderOrientationMode.landscape => SystemChrome.setPreferredOrientations(
+          const <DeviceOrientation>[
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ],
+        ),
+    };
+  }
+
+  /// 读取平台电量；宿主未实现或系统拒绝时返回 null。
+  @override
+  Future<int?> getBatteryLevel() async {
+    try {
+      return await _channel.invokeMethod<int>('getBatteryLevel');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
   }
 
   /// 取消阅读器常亮并恢复应用统一 edge-to-edge 系统栏模式。
   @override
   Future<void> exitReader() async {
-    await _invokePlatform('exitReader', false);
+    await _invokePlatform('exitReader', <String, Object?>{'enabled': false});
+    await setOrientation(ReaderOrientationMode.system);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
   /// 调用原生阅读窗口桥；不支持的平台返回受控降级而不终止阅读。
-  Future<void> _invokePlatform(String method, bool enabled) async {
+  Future<void> _invokePlatform(String method, Map<String, Object?> arguments) async {
     try {
-      await _channel.invokeMethod<void>(method, <String, Object?>{
-        'enabled': enabled,
-      });
+      await _channel.invokeMethod<void>(method, arguments);
     } on MissingPluginException {
       // 宿主尚未更新时仅失去常亮能力，正文阅读和系统栏仍保持可用。
     } on PlatformException {

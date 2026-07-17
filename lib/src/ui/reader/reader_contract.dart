@@ -2,6 +2,7 @@ import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
+import '../../domain/model/replace_rule.dart';
 
 /// 阅读器正文加载状态，空正文与失败不会伪装成已完成。
 enum ReaderLoadState {
@@ -16,6 +17,27 @@ enum ReaderLoadState {
 
   /// 当前章节加载失败，可由用户重试。
   error,
+}
+
+/// 阅读搜索范围，当前章用于快速定位，整本书会按目录顺序加载章节正文后搜索。
+enum ReaderSearchScope {
+  /// 只搜索当前已打开章节。
+  currentChapter,
+
+  /// 搜索当前书的全部可阅读章节。
+  wholeBook,
+}
+
+/// 阅读器章节刷新范围，对应顶部刷新和扩展菜单里的后续/全部刷新动作。
+enum ReaderRefreshScope {
+  /// 只强制刷新当前可见章节。
+  currentChapter,
+
+  /// 从下一章开始刷新后续可阅读章节。
+  followingChapters,
+
+  /// 从目录第一章开始刷新全部可阅读章节。
+  allChapters,
 }
 
 /// 阅读器当前展示的业务面板。
@@ -42,6 +64,110 @@ final class ReaderBookmarksSheet extends ReaderSheet {
   const ReaderBookmarksSheet();
 }
 
+/// 阅读中搜索面板。
+final class ReaderSearchSheet extends ReaderSheet {
+  /// 创建正文搜索面板标识。
+  const ReaderSearchSheet();
+}
+
+/// 书签备注编辑面板。
+final class ReaderBookmarkEditSheet extends ReaderSheet {
+  /// 创建书签编辑面板标识。
+  const ReaderBookmarkEditSheet(this.bookmark);
+
+  /// 当前需要编辑备注的书签。
+  final Bookmark bookmark;
+}
+
+/// 替换规则当前章节统计面板。
+final class ReaderReplaceInfoSheet extends ReaderSheet {
+  /// 创建替换规则信息面板标识。
+  const ReaderReplaceInfoSheet();
+}
+
+/// 阅读器依赖型后续能力边界面板。
+final class ReaderFutureFeaturesSheet extends ReaderSheet {
+  /// 创建后续能力边界面板标识。
+  const ReaderFutureFeaturesSheet();
+}
+
+/// 当前章节内搜索结果项。
+final class ReaderSearchMatch {
+  /// 创建稳定的章节内搜索结果。
+  const ReaderSearchMatch({
+    required this.start,
+    required this.end,
+    required this.preview,
+    this.chapterIndex,
+    this.chapterTitle = '',
+  });
+
+  /// 匹配开始字符位置。
+  final int start;
+
+  /// 匹配结束字符位置。
+  final int end;
+
+  /// 不含敏感上下文之外的短预览文本。
+  final String preview;
+
+  /// 整书搜索时命中的章节索引；为空表示当前章节内结果。
+  final int? chapterIndex;
+
+  /// 整书搜索时命中的章节标题；当前章搜索可为空。
+  final String chapterTitle;
+}
+
+/// 当前章节内搜索状态。
+final class ReaderSearchState {
+  /// 创建搜索状态。
+  const ReaderSearchState({
+    this.query = '',
+    List<ReaderSearchMatch> matches = const <ReaderSearchMatch>[],
+    this.currentIndex = 0,
+    this.submitted = false,
+    this.scope = ReaderSearchScope.currentChapter,
+    this.searching = false,
+  }) : matches = matches;
+
+  /// 当前输入的搜索词。
+  final String query;
+
+  /// 当前章节内的匹配结果。
+  final List<ReaderSearchMatch> matches;
+
+  /// 当前正在查看的匹配结果索引。
+  final int currentIndex;
+
+  /// 是否已经执行过一次搜索。
+  final bool submitted;
+
+  /// 当前搜索范围。
+  final ReaderSearchScope scope;
+
+  /// 是否正在执行可能跨章节加载的搜索。
+  final bool searching;
+
+  /// 复制搜索状态。
+  ReaderSearchState copyWith({
+    String? query,
+    List<ReaderSearchMatch>? matches,
+    int? currentIndex,
+    bool? submitted,
+    ReaderSearchScope? scope,
+    bool? searching,
+  }) {
+    return ReaderSearchState(
+      query: query ?? this.query,
+      matches: matches ?? this.matches,
+      currentIndex: currentIndex ?? this.currentIndex,
+      submitted: submitted ?? this.submitted,
+      scope: scope ?? this.scope,
+      searching: searching ?? this.searching,
+    );
+  }
+}
+
 /// 阅读器完整不可变 UiState，业务状态不依赖 ScrollController 或平台窗口对象。
 final class ReaderUiState {
   /// 创建阅读器状态。
@@ -57,9 +183,15 @@ final class ReaderUiState {
     this.errorMessage,
     this.menuVisible = true,
     this.activeSheet,
+    this.searchState = const ReaderSearchState(),
     this.restoreRequestId = 0,
+    this.chapterTransitionDirection = 0,
+    this.batteryLevel,
+    List<ReplaceRule> replaceRules = const <ReplaceRule>[],
+    this.refreshingChapters = false,
   }) : chapters = List<BookChapter>.unmodifiable(chapters),
-       bookmarks = List<Bookmark>.unmodifiable(bookmarks);
+       bookmarks = List<Bookmark>.unmodifiable(bookmarks),
+       replaceRules = List<ReplaceRule>.unmodifiable(replaceRules);
 
   /// 当前书架书籍。
   final Book? book;
@@ -94,8 +226,23 @@ final class ReaderUiState {
   /// 当前由路由层展示的目录、设置或书签面板。
   final ReaderSheet? activeSheet;
 
+  /// 当前章节内正文搜索状态。
+  final ReaderSearchState searchState;
+
   /// 每次章节或字体宽度配置变化时递增，通知路由按字符锚点重新定位。
   final int restoreRequestId;
+
+  /// 最近一次章节切换方向；正数表示下一章从右侧覆盖，负数表示上一章从左侧覆盖。
+  final int chapterTransitionDirection;
+
+  /// 平台最近一次返回的电量百分比；为空时页眉页脚隐藏电量。
+  final int? batteryLevel;
+
+  /// 当前书名或书源可用的完整正文替换规则列表。
+  final List<ReplaceRule> replaceRules;
+
+  /// 是否正在后台刷新后续或全部章节缓存。
+  final bool refreshingChapters;
 
   /// 当前章节；目录为空或索引越界时为 null。
   BookChapter? get currentChapter {
@@ -136,10 +283,16 @@ final class ReaderUiState {
     String? errorMessage,
     bool? menuVisible,
     ReaderSheet? activeSheet,
+    ReaderSearchState? searchState,
     int? restoreRequestId,
+    int? chapterTransitionDirection,
+    int? batteryLevel,
+    List<ReplaceRule>? replaceRules,
+    bool? refreshingChapters,
     bool clearContent = false,
     bool clearError = false,
     bool clearSheet = false,
+    bool clearBattery = false,
   }) {
     return ReaderUiState(
       book: book ?? this.book,
@@ -153,7 +306,13 @@ final class ReaderUiState {
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
       menuVisible: menuVisible ?? this.menuVisible,
       activeSheet: clearSheet ? null : activeSheet ?? this.activeSheet,
+      searchState: searchState ?? this.searchState,
       restoreRequestId: restoreRequestId ?? this.restoreRequestId,
+      chapterTransitionDirection:
+          chapterTransitionDirection ?? this.chapterTransitionDirection,
+      batteryLevel: clearBattery ? null : batteryLevel ?? this.batteryLevel,
+      replaceRules: replaceRules ?? this.replaceRules,
+      refreshingChapters: refreshingChapters ?? this.refreshingChapters,
     );
   }
 }
@@ -212,6 +371,15 @@ final class RetryReaderChapterIntent extends ReaderIntent {
   final bool forceRefresh;
 }
 
+/// 按指定范围强制刷新章节正文缓存。
+final class RefreshReaderChaptersIntent extends ReaderIntent {
+  /// 创建章节刷新 Intent。
+  const RefreshReaderChaptersIntent(this.scope);
+
+  /// 本次需要刷新的章节范围。
+  final ReaderRefreshScope scope;
+}
+
 /// 点击正文中央区域切换阅读菜单。
 final class ToggleReaderMenuIntent extends ReaderIntent {
   /// 创建菜单切换 Intent。
@@ -242,6 +410,15 @@ final class UpdateReaderConfigIntent extends ReaderIntent {
   final ReaderDisplayConfig config;
 }
 
+/// 更新阅读器平台系统信息，例如电量。
+final class UpdateReaderSystemInfoIntent extends ReaderIntent {
+  /// 创建系统信息更新 Intent。
+  const UpdateReaderSystemInfoIntent({this.batteryLevel});
+
+  /// 平台返回的电量百分比；为空表示当前不可用。
+  final int? batteryLevel;
+}
+
 /// 在当前字符位置添加书签。
 final class AddReaderBookmarkIntent extends ReaderIntent {
   /// 创建添加书签 Intent。
@@ -257,6 +434,18 @@ final class DeleteReaderBookmarkIntent extends ReaderIntent {
   final Bookmark bookmark;
 }
 
+/// 保存用户编辑后的书签备注。
+final class SaveReaderBookmarkNoteIntent extends ReaderIntent {
+  /// 创建书签备注保存 Intent。
+  const SaveReaderBookmarkNoteIntent(this.bookmark, this.content);
+
+  /// 需要更新备注的书签。
+  final Bookmark bookmark;
+
+  /// 用户编辑后的备注内容。
+  final String content;
+}
+
 /// 从书签跳转到对应章节和字符位置。
 final class OpenReaderBookmarkIntent extends ReaderIntent {
   /// 创建书签跳转 Intent。
@@ -264,6 +453,54 @@ final class OpenReaderBookmarkIntent extends ReaderIntent {
 
   /// 目标书签。
   final Bookmark bookmark;
+}
+
+/// 更新当前章节搜索词。
+final class UpdateReaderSearchQueryIntent extends ReaderIntent {
+  /// 创建搜索词更新 Intent。
+  const UpdateReaderSearchQueryIntent(this.query);
+
+  /// 用户输入的搜索词。
+  final String query;
+}
+
+/// 更新正文搜索范围。
+final class UpdateReaderSearchScopeIntent extends ReaderIntent {
+  /// 创建搜索范围更新 Intent。
+  const UpdateReaderSearchScopeIntent(this.scope);
+
+  /// 新的搜索范围。
+  final ReaderSearchScope scope;
+}
+
+/// 在当前章节执行正文搜索。
+final class SubmitReaderSearchIntent extends ReaderIntent {
+  /// 创建提交搜索 Intent。
+  const SubmitReaderSearchIntent();
+}
+
+/// 打开指定搜索结果并跳转到匹配位置。
+final class OpenReaderSearchResultIntent extends ReaderIntent {
+  /// 创建搜索结果跳转 Intent。
+  const OpenReaderSearchResultIntent(this.index);
+
+  /// 匹配结果索引。
+  final int index;
+}
+
+/// 按方向切换当前搜索结果。
+final class NavigateReaderSearchResultIntent extends ReaderIntent {
+  /// 创建搜索结果方向跳转 Intent。
+  const NavigateReaderSearchResultIntent(this.direction);
+
+  /// 前后方向，正数为下一个，负数为上一个。
+  final int direction;
+}
+
+/// 将当前书签列表导出到剪贴板。
+final class ExportReaderBookmarksIntent extends ReaderIntent {
+  /// 创建书签导出 Intent。
+  const ExportReaderBookmarksIntent();
 }
 
 /// 页面进入后台或路由暂时不可见时立即保存进度。
@@ -299,19 +536,19 @@ sealed class ReaderEffect {
 /// 进入沉浸阅读并按配置设置屏幕常亮。
 final class EnterReaderSystemEffect extends ReaderEffect {
   /// 创建进入阅读系统 Effect。
-  const EnterReaderSystemEffect(this.keepScreenOn);
+  const EnterReaderSystemEffect(this.config);
 
-  /// 是否请求平台保持屏幕常亮。
-  final bool keepScreenOn;
+  /// 进入阅读器时需要同步到平台的完整阅读配置。
+  final ReaderDisplayConfig config;
 }
 
 /// 阅读中更新屏幕常亮状态。
 final class UpdateReaderSystemEffect extends ReaderEffect {
   /// 创建更新系统 Effect。
-  const UpdateReaderSystemEffect(this.keepScreenOn);
+  const UpdateReaderSystemEffect(this.config);
 
-  /// 是否请求平台保持屏幕常亮。
-  final bool keepScreenOn;
+  /// 阅读中需要同步到平台的完整阅读配置。
+  final ReaderDisplayConfig config;
 }
 
 /// 离开阅读器并恢复系统栏和平台窗口原状态。
@@ -332,6 +569,21 @@ final class ShowReaderMessageEffect extends ReaderEffect {
   const ShowReaderMessageEffect(this.message);
 
   /// 用户可见消息。
+  final String message;
+}
+
+/// 请求路由层把文本写入系统剪贴板。
+final class CopyReaderTextEffect extends ReaderEffect {
+  /// 创建复制文本 Effect。
+  const CopyReaderTextEffect({
+    required this.text,
+    required this.message,
+  });
+
+  /// 需要写入剪贴板的文本。
+  final String text;
+
+  /// 复制完成后显示给用户的提示。
   final String message;
 }
 

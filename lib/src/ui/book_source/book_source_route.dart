@@ -20,6 +20,7 @@ final class BookSourceManagementRoute extends StatefulWidget {
   const BookSourceManagementRoute({
     required this.dependencies,
     this.platformBridge = const DefaultBookSourcePlatformBridge(),
+    this.embedded = false,
     super.key,
   });
 
@@ -28,6 +29,9 @@ final class BookSourceManagementRoute extends StatefulWidget {
 
   /// 文件和 WebView 登录平台边界。
   final BookSourcePlatformBridge platformBridge;
+
+  /// 是否嵌入应用一级导航；嵌入时不显示普通返回按钮。
+  final bool embedded;
 
   /// 创建路由状态。
   @override
@@ -275,7 +279,11 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
         /// 当前可渲染状态。
         final BookSourceManagementUiState state = snapshot.data ?? _viewModel.state;
         _syncDialog(state.dialog);
-        return BookSourceManagementScreen(state: state, onIntent: _viewModel.onIntent);
+        return BookSourceManagementScreen(
+          state: state,
+          onIntent: _viewModel.onIntent,
+          showBackButton: !widget.embedded,
+        );
       },
     );
   }

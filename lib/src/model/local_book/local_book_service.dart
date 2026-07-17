@@ -59,7 +59,7 @@ final class LocalBookImportCoordinator {
           ? parsed.book
           : _mergeExistingBook(existingBook, parsed.book);
       /// 事务写入结果。
-      final AppResult<void> saved = await _addBook.execute(mergedBook, parsed.chapters);
+      final AppResult<void> saved = await _addBook.save(mergedBook, parsed.chapters);
       switch (saved) {
         case AppSuccess<void>():
           return LocalBookImportResult(book: mergedBook, updated: existingBook != null);

@@ -52,6 +52,34 @@ final class BookDao {
     return rows.isEmpty ? null : bookFromMap(rows.first);
   }
 
+  /// 按书名和作者精确查询最近阅读的一条书架记录。
+  ///
+  /// Flutter 数据库只保存真实书架书，因此不需要 Android DAO 中的 `isNotShelf` 过滤条件。
+  Future<Book?> getShelfBookConflict(
+    String name,
+    String author, {
+    DatabaseExecutor? executor,
+  }) async {
+    /// 当前查询使用的数据库或事务执行器。
+    final DatabaseExecutor queryExecutor =
+        executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.books,
+      where: 'name = ? AND author = ? orderBy=durChapterTime DESC limit=1',
+      argumentCount: 2,
+    );
+    /// 最多包含一行的同名同作者查询结果。
+    final List<Map<String, Object?>> rows = await queryExecutor.query(
+      DatabaseTables.books,
+      where: 'name = ? AND author = ?',
+      whereArgs: <Object?>[name, author],
+      orderBy: 'durChapterTime DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : bookFromMap(rows.first);
+  }
+
   /// 观察全部书架书；订阅后立即查询一次，此后在 `books` 提交变化时重新查询。
   Stream<List<Book>> watchAll() async* {
     /// 当前观察依赖的表集合。

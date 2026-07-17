@@ -1,131 +1,58 @@
 import 'package:flutter/material.dart';
 
-import '../components/app_scaffold.dart';
-import '../theme/app_tokens.dart';
+import '../components/adaptive_app_scaffold.dart';
 import 'welcome_contract.dart';
 
-/// 只负责渲染欢迎页状态并发送 Intent 的无状态页面。
+/// 渲染应用一级导航和当前目的地页面的无状态主框架。
 final class WelcomeScreen extends StatelessWidget {
-  /// 创建欢迎页纯 UI。
+  /// 创建正式应用主框架。
   const WelcomeScreen({
     required this.state,
     required this.onIntent,
+    required this.body,
     super.key,
   });
 
-  /// ViewModel 提供的不可变页面状态。
+  /// ViewModel 提供的不可变导航状态。
   final WelcomeUiState state;
 
-  /// 把用户操作发送给 ViewModel 的统一入口。
+  /// 把主导航操作发送给 ViewModel 的统一入口。
   final ValueChanged<WelcomeIntent> onIntent;
 
-  /// 根据状态构建欢迎页，不读取数据库、网络或平台实现。
+  /// 路由层按当前状态组合的一级页面栈。
+  final Widget body;
+
+  /// 构建手机底部导航或宽屏侧栏，不直接执行页面导航。
   @override
   Widget build(BuildContext context) {
-    return AppScaffold(
-      appBar: AppBar(
-        title: Text(state.title),
-        actions: <Widget>[
-          IconButton(
-            onPressed: () {
-              onIntent(const OpenSettingsIntent());
-            },
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '设置',
-          ),
-        ],
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(SpacingToken.large),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(SpacingToken.xLarge),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Icon(
-                      Icons.auto_stories_outlined,
-                      size: 72,
-                      color: Theme.of(context).colorScheme.primary,
-                      semanticLabel: 'Legado Flutter 应用图标',
-                    ),
-                    const SizedBox(height: SpacingToken.large),
-                    Text(
-                      state.title,
-                      style: Theme.of(context).textTheme.headlineMedium,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: SpacingToken.medium),
-                    Text(
-                      state.description,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: SpacingToken.xLarge),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: FilledButton.icon(
-                        onPressed: () {
-                          onIntent(const ConfirmScaffoldIntent());
-                        },
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('验证骨架交互'),
-                      ),
-                    ),
-                    const SizedBox(height: SpacingToken.medium),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: FilledButton.tonalIcon(
-                        onPressed: () {
-                          onIntent(const OpenBookSourceManagementIntent());
-                        },
-                        icon: const Icon(Icons.source_outlined),
-                        label: const Text('打开书源管理'),
-                      ),
-                    ),
-                    const SizedBox(height: SpacingToken.medium),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: FilledButton.tonalIcon(
-                        onPressed: () {
-                          onIntent(const OpenSearchIntent());
-                        },
-                        icon: const Icon(Icons.search),
-                        label: const Text('搜索书籍'),
-                      ),
-                    ),
-                    const SizedBox(height: SpacingToken.medium),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: FilledButton.tonalIcon(
-                        onPressed: () {
-                          onIntent(const OpenBookshelfIntent());
-                        },
-                        icon: const Icon(Icons.library_books_outlined),
-                        label: const Text('打开书架'),
-                      ),
-                    ),
-                    const SizedBox(height: SpacingToken.medium),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: FilledButton.tonalIcon(
-                        onPressed: () {
-                          onIntent(const OpenLocalBookImportIntent());
-                        },
-                        icon: const Icon(Icons.upload_file_outlined),
-                        label: const Text('导入本地书'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+    return AdaptiveAppScaffold(
+      selectedIndex: state.selectedIndex,
+      onDestinationSelected: (int index) {
+        onIntent(SelectPrimaryDestinationIntent(index));
+      },
+      destinations: const <AppNavigationDestination>[
+        AppNavigationDestination(
+          icon: Icons.auto_stories_outlined,
+          selectedIcon: Icons.auto_stories,
+          label: '书架',
         ),
-      ),
+        AppNavigationDestination(
+          icon: Icons.search_outlined,
+          selectedIcon: Icons.search,
+          label: '搜索',
+        ),
+        AppNavigationDestination(
+          icon: Icons.hub_outlined,
+          selectedIcon: Icons.hub,
+          label: '书源',
+        ),
+        AppNavigationDestination(
+          icon: Icons.person_outline,
+          selectedIcon: Icons.person,
+          label: '我的',
+        ),
+      ],
+      body: body,
     );
   }
 }

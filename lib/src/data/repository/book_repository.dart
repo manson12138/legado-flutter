@@ -36,6 +36,14 @@ final class BookRepository
     return guardDataOperation<Book?>(() => _bookDao.getByUrl(bookUrl));
   }
 
+  /// 按 Android 精确语义查询同名同作者的最近阅读书籍。
+  @override
+  Future<Book?> getShelfBookConflict(String name, String author) {
+    return guardDataOperation<Book?>(
+      () => _bookDao.getShelfBookConflict(name, author),
+    );
+  }
+
   /// 原子写入书籍和目录，避免出现目录已保存但书籍缺失的中间状态。
   @override
   Future<void> addBook(Book book, List<BookChapter> chapters) {

@@ -13,9 +13,16 @@ import 'search_view_model.dart';
 /// 连接搜索 ViewModel 生命周期、Effect 和纯 UI 的路由层。
 final class SearchRoute extends StatefulWidget {
   /// 创建搜索路由。
-  const SearchRoute({required this.dependencies, super.key});
+  const SearchRoute({
+    required this.dependencies,
+    this.embedded = false,
+    super.key,
+  });
   /// 应用组合根依赖。
   final AppDependencies dependencies;
+
+  /// 是否嵌入应用一级导航；嵌入时不显示返回按钮。
+  final bool embedded;
 
   /// 创建路由状态。
   @override
@@ -85,7 +92,11 @@ final class _SearchRouteState extends State<SearchRoute> {
       builder: (BuildContext context, AsyncSnapshot<SearchUiState> snapshot) {
         /// 当前可渲染状态。
         final SearchUiState state = snapshot.data ?? _viewModel.state;
-        return SearchScreen(state: state, onIntent: _viewModel.onIntent);
+        return SearchScreen(
+          state: state,
+          onIntent: _viewModel.onIntent,
+          showBackButton: !widget.embedded,
+        );
       },
     );
   }

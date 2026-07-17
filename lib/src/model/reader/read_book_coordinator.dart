@@ -83,6 +83,12 @@ final class ReadBookCoordinator {
   /// 相邻章节预加载令牌集合。
   final List<HttpCancellationToken> _preloadTokens = <HttpCancellationToken>[];
 
+  /// 按章节 URL 保存连续预下载失败次数，达到三次后停止自动重试。
+  final Map<String, int> _preloadFailureCounts = <String, int>{};
+
+  /// 每次取消或替换预下载队列时递增，阻止旧 worker 继续领取新任务。
+  int _preloadGeneration = 0;
+
   /// 当前请求世代，确保快速切章后的旧结果不能覆盖新章节。
   int _generation = 0;
 
@@ -138,7 +144,7 @@ final class ReadBookCoordinator {
     }
   }
 
-  /// 在当前章节成功后顺序预加载前后章节，失败不会影响当前阅读。
+  /// 在当前章节成功后按 Android 范围并发预下载前后章节，失败不会影响当前阅读。
   Future<void> preloadAdjacent({
     required Book book,
     required List<BookChapter> chapters,
@@ -146,54 +152,97 @@ final class ReadBookCoordinator {
     required ReaderDisplayConfig config,
   }) async {
     _cancelPreloads('开始新的相邻章节预加载');
-    /// 相邻且可阅读的章节索引，下一章优先。
-    final List<int> candidates = <int>[currentIndex + 1, currentIndex - 1]
-        .where((int index) => index >= 0 && index < chapters.length && !chapters[index].isVolume)
-        .toList(growable: false);
+    /// 本轮预下载队列的稳定世代。
+    final int preloadGeneration = _preloadGeneration;
+    /// 用户配置的受控预下载数量。
+    final int preDownloadCount = config.preDownloadCount.clamp(0, 20).toInt();
+    if (preDownloadCount == 0) {
+      return;
+    }
+    /// 按下一章、上一章、后续范围和前序范围顺序保存候选章节。
+    final List<int> candidateIndices = <int>[currentIndex + 1, currentIndex - 1];
+    /// 从当前章加二开始的向后预下载偏移。
+    int forwardOffset = 2;
+    while (forwardOffset <= preDownloadCount) {
+      candidateIndices.add(currentIndex + forwardOffset);
+      forwardOffset += 1;
+    }
+    /// 向前预下载最多五章的受控数量。
+    final int backwardCount = preDownloadCount.clamp(0, 5).toInt();
+    /// 从当前章减二开始的向前预下载偏移。
+    int backwardOffset = 2;
+    while (backwardOffset <= backwardCount) {
+      candidateIndices.add(currentIndex - backwardOffset);
+      backwardOffset += 1;
+    }
+    /// 去除越界、卷标题、重复项和已经连续失败三次的稳定候选索引。
+    final List<int> candidates = <int>[];
+    /// 已经加入本轮队列的章节索引。
+    final Set<int> seenIndices = <int>{};
+    for (final int index in candidateIndices) {
+      if (index < 0 ||
+          index >= chapters.length ||
+          chapters[index].isVolume ||
+          !seenIndices.add(index) ||
+          (_preloadFailureCounts[chapters[index].url] ?? 0) >= 3) {
+        continue;
+      }
+      candidates.add(index);
+    }
     _logger.debug(
       tag: bookReaderContentLogTag,
       message: '相邻章节预加载开始 currentIndex=$currentIndex candidateCount=${candidates.length}',
     );
-    for (final int index in candidates) {
-      if (_currentToken != null) {
-        _logger.debug(
-          tag: bookReaderContentLogTag,
-          message: '相邻章节预加载让位于可见请求 remainingCandidateIndex=$index',
-        );
-        return;
-      }
-      /// 当前预加载令牌。
-      final HttpCancellationToken token = _cancellationTokenFactory();
-      _preloadTokens.add(token);
-      try {
-        /// 【搜书诊断日志】当前预加载章节不可逆标识。
-        final String chapterId = appLogDiagnosticId(chapters[index].url);
-        _logger.debug(
-          tag: bookReaderContentLogTag,
-          message: '相邻章节预加载单章开始 chapterIndex=$index chapterId=$chapterId',
-        );
-        await _load(
-          book: book,
-          chapter: chapters[index],
-          config: config,
-          token: token,
-        );
-        _logger.debug(
-          tag: bookReaderContentLogTag,
-          message: '相邻章节预加载单章完成 chapterIndex=$index chapterId=$chapterId',
-        );
-      } on Object catch (error) {
-        /// 【搜书诊断日志】预加载失败只记录并丢弃，当前阅读状态不受影响。
-        _logger.warning(
-          tag: bookReaderContentLogTag,
-          message: '相邻章节预加载单章失败 chapterIndex=$index '
-              'chapterId=${appLogDiagnosticId(chapters[index].url)}',
-          error: error,
-        );
-      } finally {
-        _preloadTokens.remove(token);
+    /// 下一个等待固定 worker 领取的候选位置。
+    int nextCandidate = 0;
+
+    /// 执行单个最多并发两个的预下载 worker。
+    Future<void> worker() async {
+      while (_currentToken == null &&
+          preloadGeneration == _preloadGeneration &&
+          nextCandidate < candidates.length) {
+        /// 当前 worker 独占领取的候选列表位置。
+        final int candidatePosition = nextCandidate;
+        nextCandidate += 1;
+        /// 当前需要预下载的章节索引。
+        final int index = candidates[candidatePosition];
+        /// 当前预加载令牌。
+        final HttpCancellationToken token = _cancellationTokenFactory();
+        _preloadTokens.add(token);
+        try {
+          await _load(
+            book: book,
+            chapter: chapters[index],
+            config: config,
+            token: token,
+          );
+          _preloadFailureCounts.remove(chapters[index].url);
+        } on Object catch (error) {
+          if (token.isCancelled || preloadGeneration != _preloadGeneration) {
+            continue;
+          }
+          /// 当前章节累计预下载失败次数。
+          final int failureCount =
+              (_preloadFailureCounts[chapters[index].url] ?? 0) + 1;
+          _preloadFailureCounts[chapters[index].url] = failureCount;
+          /// 【搜书诊断日志】预下载失败只更新内部状态，不污染当前正文错误。
+          _logger.warning(
+            tag: bookReaderContentLogTag,
+            message: '章节预下载失败 chapterIndex=$index failureCount=$failureCount '
+                'chapterId=${appLogDiagnosticId(chapters[index].url)}',
+            error: error,
+          );
+        } finally {
+          _preloadTokens.remove(token);
+        }
       }
     }
+
+    /// 实际预下载 worker 数量，Android 对齐上限为 2。
+    final int workerCount = candidates.length.clamp(0, 2).toInt();
+    await Future.wait<void>(
+      List<Future<void>>.generate(workerCount, (int index) => worker()),
+    );
   }
 
   /// 释放当前请求、预加载和有限内存缓存。
@@ -208,6 +257,7 @@ final class ReadBookCoordinator {
     _currentToken = null;
     _cancelPreloads('阅读页面已关闭');
     _memoryCache.clear();
+    _preloadFailureCounts.clear();
   }
 
   /// iOS/Android 触发内存警告时取消非关键预加载并清空可重建的章节内存缓存。
@@ -365,6 +415,7 @@ final class ReadBookCoordinator {
 
   /// 取消全部低优先级预加载令牌。
   void _cancelPreloads(String reason) {
+    _preloadGeneration += 1;
     if (_preloadTokens.isNotEmpty) {
       /// 【搜书诊断日志】取消原因由内部固定文案提供，不包含用户输入。
       _logger.debug(

@@ -4,11 +4,13 @@ import 'dart:math' as math;
 import '../../domain/gateway/bookmark_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
+import '../../domain/gateway/replace_rule_gateway.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/reading_progress.dart';
+import '../../domain/model/replace_rule.dart';
 import '../../domain/usecase/load_book_chapters_use_case.dart';
 import '../../domain/usecase/restore_reading_progress_use_case.dart';
 import '../../domain/usecase/save_reading_progress_use_case.dart';
@@ -28,6 +30,7 @@ final class ReaderViewModel {
     required RestoreReadingProgressUseCase restoreReadingProgress,
     required SaveReadingProgressUseCase saveReadingProgress,
     required BookmarkGateway bookmarkGateway,
+    required ReplaceRuleGateway replaceRuleGateway,
     required ReaderCacheGateway cacheGateway,
     required ReadBookCoordinator coordinator,
     required AppLogger logger,
@@ -36,6 +39,7 @@ final class ReaderViewModel {
        _restoreReadingProgress = restoreReadingProgress,
        _saveReadingProgress = saveReadingProgress,
        _bookmarkGateway = bookmarkGateway,
+       _replaceRuleGateway = replaceRuleGateway,
        _cacheGateway = cacheGateway,
        _coordinator = coordinator,
        _logger = logger;
@@ -60,6 +64,9 @@ final class ReaderViewModel {
 
   /// 书签持久化边界。
   final BookmarkGateway _bookmarkGateway;
+
+  /// 替换规则读取边界，用于展示当前书的完整可用规则列表。
+  final ReplaceRuleGateway _replaceRuleGateway;
 
   /// 稳定锚点、正文和显示配置缓存边界。
   final ReaderCacheGateway _cacheGateway;
@@ -97,6 +104,15 @@ final class ReaderViewModel {
   /// 是否已释放页面资源。
   bool _disposed = false;
 
+  /// 是否正在切换相邻章节，防止滚动边界重复通知创建并发切章。
+  bool _changingRelativeChapter = false;
+
+  /// 后台刷新章节世代，释放或再次刷新时让旧任务自然停止。
+  int _refreshGeneration = 0;
+
+  /// 整书搜索世代，避免旧搜索结果覆盖用户最新关键词。
+  int _searchGeneration = 0;
+
   /// 当前可同步读取的状态。
   ReaderUiState get state => _state;
 
@@ -124,23 +140,47 @@ final class ReaderViewModel {
         unawaited(_openChapter(chapterIndex, characterOffset: characterOffset));
       case RetryReaderChapterIntent(forceRefresh: final bool forceRefresh):
         unawaited(_loadCurrentChapter(forceRefresh: forceRefresh));
+      case RefreshReaderChaptersIntent(scope: final ReaderRefreshScope scope):
+        unawaited(_refreshChapters(scope));
       case ToggleReaderMenuIntent():
         _emit(_state.copyWith(menuVisible: !_state.menuVisible));
       case ShowReaderSheetIntent(sheet: final ReaderSheet sheet):
         _emit(_state.copyWith(activeSheet: sheet));
+        if (sheet is ReaderReplaceInfoSheet) {
+          unawaited(_loadReplaceRules());
+        }
       case DismissReaderSheetIntent():
         _emit(_state.copyWith(clearSheet: true));
       case UpdateReaderConfigIntent(config: final ReaderDisplayConfig config):
         unawaited(_updateConfig(config));
+      case UpdateReaderSystemInfoIntent(batteryLevel: final int? batteryLevel):
+        _emit(_state.copyWith(batteryLevel: batteryLevel, clearBattery: batteryLevel == null));
       case AddReaderBookmarkIntent():
         unawaited(_addBookmark());
       case DeleteReaderBookmarkIntent(bookmark: final Bookmark bookmark):
         unawaited(_deleteBookmark(bookmark));
+      case SaveReaderBookmarkNoteIntent(
+        bookmark: final Bookmark bookmark,
+        content: final String content,
+      ):
+        unawaited(_saveBookmarkNote(bookmark, content));
       case OpenReaderBookmarkIntent(bookmark: final Bookmark bookmark):
         _emit(_state.copyWith(clearSheet: true));
         unawaited(
           _openChapter(bookmark.chapterIndex, characterOffset: bookmark.chapterPos),
         );
+      case UpdateReaderSearchQueryIntent(query: final String query):
+        _updateSearchQuery(query);
+      case UpdateReaderSearchScopeIntent(scope: final ReaderSearchScope scope):
+        _updateSearchScope(scope);
+      case SubmitReaderSearchIntent():
+        unawaited(_submitSearch());
+      case OpenReaderSearchResultIntent(index: final int index):
+        unawaited(_openSearchResult(index));
+      case NavigateReaderSearchResultIntent(direction: final int direction):
+        unawaited(_navigateSearchResult(direction));
+      case ExportReaderBookmarksIntent():
+        _exportBookmarks();
       case PauseReaderIntent():
         unawaited(_saveProgress());
       case ReaderMemoryPressureIntent():
@@ -257,7 +297,7 @@ final class ReaderViewModel {
         ),
       );
       _subscribeBookmarks(book);
-      _effectController.add(EnterReaderSystemEffect(config.keepScreenOn));
+      _effectController.add(EnterReaderSystemEffect(config));
       await _loadCurrentChapter();
       _logger.info(
         tag: bookReaderEntryLogTag,
@@ -335,7 +375,10 @@ final class ReaderViewModel {
   }
 
   /// 加载当前章节并在成功后恢复字符锚点和启动相邻章预加载。
-  Future<void> _loadCurrentChapter({bool forceRefresh = false}) async {
+  Future<void> _loadCurrentChapter({
+    bool forceRefresh = false,
+    bool preserveCurrentContent = false,
+  }) async {
     /// 当前书籍。
     final Book? book = _state.book;
     /// 当前章节。
@@ -362,9 +405,9 @@ final class ReaderViewModel {
     _emit(
       _state.copyWith(
         loadState: ReaderLoadState.loading,
-        clearContent: true,
+        clearContent: !preserveCurrentContent,
         clearError: true,
-        menuVisible: true,
+        menuVisible: preserveCurrentContent ? false : true,
       ),
     );
     try {
@@ -393,6 +436,7 @@ final class ReaderViewModel {
           content: content,
           anchor: anchor,
           loadState: ReaderLoadState.ready,
+          searchState: const ReaderSearchState(),
           restoreRequestId: _state.restoreRequestId + 1,
           clearError: true,
         ),
@@ -499,25 +543,47 @@ final class ReaderViewModel {
 
   /// 切换到指定方向的下一可阅读章节。
   Future<void> _openRelativeChapter(int direction) async {
+    if (_changingRelativeChapter) {
+      return;
+    }
+    _changingRelativeChapter = true;
     /// 【搜书诊断日志】记录上下章操作和当前索引。
     _logger.info(
       tag: bookReaderContentLogTag,
       message: '用户切换相邻章节 direction=$direction currentIndex=${_state.currentChapterIndex}',
     );
-    /// 查找中的章节索引。
-    int index = _state.currentChapterIndex + direction;
-    while (index >= 0 && index < _state.chapters.length) {
-      if (!_state.chapters[index].isVolume) {
-        await _openChapter(index);
-        return;
+    try {
+      /// 查找中的章节索引。
+      int index = _state.currentChapterIndex + direction;
+      while (index >= 0 && index < _state.chapters.length) {
+        if (!_state.chapters[index].isVolume) {
+          /// 向上进入上一章时从章尾恢复，向下进入下一章时从章首开始。
+          final int characterOffset = direction < 0 ? 0x7FFFFFFF : 0;
+          await _openChapter(
+            index,
+            characterOffset: characterOffset,
+            preserveCurrentContent: true,
+            transitionDirection: direction,
+          );
+          return;
+        }
+        index += direction;
       }
-      index += direction;
+      _effectController.add(
+        ShowReaderMessageEffect(direction > 0 ? '已经是最后一章' : '已经是第一章'),
+      );
+    } finally {
+      _changingRelativeChapter = false;
     }
-    _effectController.add(ShowReaderMessageEffect(direction > 0 ? '已经是最后一章' : '已经是第一章'));
   }
 
   /// 保存当前章后打开目标章节，切换时字符位置默认从章首开始。
-  Future<void> _openChapter(int chapterIndex, {int characterOffset = 0}) async {
+  Future<void> _openChapter(
+    int chapterIndex, {
+    int characterOffset = 0,
+    bool preserveCurrentContent = false,
+    int transitionDirection = 0,
+  }) async {
     if (chapterIndex < 0 || chapterIndex >= _state.chapters.length) {
       _logger.warning(
         tag: bookReaderContentLogTag,
@@ -553,10 +619,285 @@ final class ReaderViewModel {
           characterOffset: _pendingCharacterOffset,
           context: '',
         ),
+        searchState: const ReaderSearchState(),
+        chapterTransitionDirection: transitionDirection,
         clearSheet: true,
       ),
     );
-    await _loadCurrentChapter();
+    await _loadCurrentChapter(preserveCurrentContent: preserveCurrentContent);
+  }
+
+  /// 更新搜索词并清理旧结果，避免用户改词后继续显示过期匹配。
+  void _updateSearchQuery(String query) {
+    _emit(
+      _state.copyWith(
+        searchState: ReaderSearchState(
+          query: query,
+          scope: _state.searchState.scope,
+        ),
+      ),
+    );
+  }
+
+  /// 更新搜索范围并保留当前输入词。
+  void _updateSearchScope(ReaderSearchScope scope) {
+    _emit(
+      _state.copyWith(
+        searchState: _state.searchState.copyWith(
+          scope: scope,
+          matches: const <ReaderSearchMatch>[],
+          currentIndex: 0,
+          submitted: false,
+          searching: false,
+        ),
+      ),
+    );
+  }
+
+  /// 在当前章节或整本书正文内执行简单文本搜索。
+  Future<void> _submitSearch() async {
+    /// 当前搜索词。
+    final String query = _state.searchState.query.trim();
+    if (query.isEmpty) {
+      _emit(
+        _state.copyWith(
+          searchState: _state.searchState.copyWith(
+            matches: const <ReaderSearchMatch>[],
+            currentIndex: 0,
+            submitted: true,
+            searching: false,
+          ),
+        ),
+      );
+      _effectController.add(const ShowReaderMessageEffect('请输入搜索内容'));
+      return;
+    }
+    _searchGeneration += 1;
+    /// 本次搜索世代。
+    final int generation = _searchGeneration;
+    /// 当前搜索范围。
+    final ReaderSearchScope scope = _state.searchState.scope;
+    _emit(
+      _state.copyWith(
+        searchState: _state.searchState.copyWith(
+          query: query,
+          matches: const <ReaderSearchMatch>[],
+          currentIndex: 0,
+          submitted: true,
+          searching: true,
+        ),
+      ),
+    );
+    /// 收集到的匹配结果。
+    final List<ReaderSearchMatch> matches = scope == ReaderSearchScope.wholeBook
+        ? await _searchWholeBook(query, generation)
+        : _searchText(
+            query: query,
+            text: _state.content?.text ?? '',
+            chapterIndex: _state.currentChapterIndex,
+            chapterTitle: _state.currentChapter?.title ?? '',
+          );
+    if (_disposed || generation != _searchGeneration) {
+      return;
+    }
+    if (matches.isEmpty && (_state.content?.text ?? '').isEmpty && scope == ReaderSearchScope.currentChapter) {
+      _emit(
+        _state.copyWith(
+          searchState: _state.searchState.copyWith(
+            query: query,
+            matches: const <ReaderSearchMatch>[],
+            currentIndex: 0,
+            submitted: true,
+            searching: false,
+          ),
+        ),
+      );
+      _effectController.add(const ShowReaderMessageEffect('当前章节没有可搜索正文'));
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        searchState: _state.searchState.copyWith(
+          query: query,
+          matches: matches,
+          currentIndex: 0,
+          submitted: true,
+          searching: false,
+        ),
+      ),
+    );
+    if (matches.isEmpty) {
+      _effectController.add(
+        ShowReaderMessageEffect(
+          scope == ReaderSearchScope.wholeBook ? '整本书没有匹配结果' : '当前章节没有匹配结果',
+        ),
+      );
+      return;
+    }
+    await _openSearchResult(0);
+  }
+
+  /// 搜索整本书的全部可阅读章节，遇到失败章节时继续处理后续章节。
+  Future<List<ReaderSearchMatch>> _searchWholeBook(String query, int generation) async {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null) {
+      return const <ReaderSearchMatch>[];
+    }
+    /// 整书搜索收集到的匹配项。
+    final List<ReaderSearchMatch> matches = <ReaderSearchMatch>[];
+    for (int index = 0; index < _state.chapters.length; index += 1) {
+      if (_disposed || generation != _searchGeneration) {
+        break;
+      }
+      /// 当前搜索章节。
+      final BookChapter chapter = _state.chapters[index];
+      if (chapter.isVolume) {
+        continue;
+      }
+      try {
+        /// 当前可见章节已经加载好的正文。
+        final ReaderChapterContent? visibleContent = _state.content;
+        /// 当前章节正文，当前章优先复用已经渲染的内容。
+        final ReaderChapterContent content = index == _state.currentChapterIndex && visibleContent != null
+            ? visibleContent
+            : await _coordinator.loadChapter(
+                book: book,
+                chapter: chapter,
+                config: _state.config,
+              );
+        matches.addAll(
+          _searchText(
+            query: query,
+            text: content.text,
+            chapterIndex: index,
+            chapterTitle: chapter.title,
+          ),
+        );
+      } on Object catch (error) {
+        _logger.warning(
+          tag: bookReaderContentLogTag,
+          message: '整书搜索跳过失败章节 chapterIndex=$index '
+              'chapterId=${appLogDiagnosticId(chapter.url)}',
+          error: error,
+        );
+      }
+    }
+    return matches;
+  }
+
+  /// 在指定文本中搜索关键词，并附带章节定位信息。
+  List<ReaderSearchMatch> _searchText({
+    required String query,
+    required String text,
+    required int chapterIndex,
+    required String chapterTitle,
+  }) {
+    if (text.isEmpty) {
+      return const <ReaderSearchMatch>[];
+    }
+    /// 小写后的正文，用于英文大小写不敏感匹配。
+    final String normalizedText = text.toLowerCase();
+    /// 小写后的搜索词。
+    final String normalizedQuery = query.toLowerCase();
+    /// 收集到的匹配结果。
+    final List<ReaderSearchMatch> matches = <ReaderSearchMatch>[];
+    /// 当前搜索起点。
+    int start = 0;
+    while (start < normalizedText.length) {
+      /// 本次命中的字符位置。
+      final int found = normalizedText.indexOf(normalizedQuery, start);
+      if (found < 0) {
+        break;
+      }
+      matches.add(
+        ReaderSearchMatch(
+          start: found,
+          end: found + query.length,
+          preview: _searchPreview(text, found, found + query.length),
+          chapterIndex: chapterIndex,
+          chapterTitle: chapterTitle,
+        ),
+      );
+      start = found + math.max(1, query.length);
+    }
+    return matches;
+  }
+
+  /// 截取搜索结果前后的短预览。
+  String _searchPreview(String text, int start, int end) {
+    /// 预览起点。
+    final int previewStart = math.max(0, start - 28);
+    /// 预览终点。
+    final int previewEnd = math.min(text.length, end + 42);
+    /// 原始预览文本。
+    final String raw = text.substring(previewStart, previewEnd);
+    return raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  /// 打开指定搜索结果。
+  Future<void> _openSearchResult(int index) async {
+    /// 当前匹配列表。
+    final List<ReaderSearchMatch> matches = _state.searchState.matches;
+    if (index < 0 || index >= matches.length) {
+      return;
+    }
+    /// 跳转前保留搜索状态，跨章节打开会重置当前章搜索状态。
+    final ReaderSearchState searchState = _state.searchState;
+    _emit(
+      _state.copyWith(
+        searchState: searchState.copyWith(currentIndex: index),
+      ),
+    );
+    /// 当前命中的搜索结果。
+    final ReaderSearchMatch match = matches[index];
+    /// 命中的章节索引；旧当前章结果为空时回退当前索引。
+    final int targetChapterIndex = match.chapterIndex ?? _state.currentChapterIndex;
+    if (targetChapterIndex != _state.currentChapterIndex) {
+      await _openChapter(targetChapterIndex, characterOffset: match.start);
+      _emit(
+        _state.copyWith(
+          activeSheet: const ReaderSearchSheet(),
+          searchState: searchState.copyWith(currentIndex: index),
+        ),
+      );
+      return;
+    }
+    _jumpToCharacterOffset(match.start);
+  }
+
+  /// 按前后方向切换搜索结果。
+  Future<void> _navigateSearchResult(int direction) async {
+    /// 当前匹配列表。
+    final List<ReaderSearchMatch> matches = _state.searchState.matches;
+    if (matches.isEmpty || direction == 0) {
+      return;
+    }
+    /// 环形切换后的目标结果索引。
+    final int target = (_state.searchState.currentIndex + direction) % matches.length;
+    /// Dart 负数取余仍为非负结果，此变量保留可读的合法索引。
+    final int normalizedTarget = target < 0 ? target + matches.length : target;
+    await _openSearchResult(normalizedTarget);
+  }
+
+  /// 跳转到当前章节内指定字符位置并保存稳定锚点。
+  void _jumpToCharacterOffset(int characterOffset) {
+    /// 当前章节。
+    final BookChapter? chapter = _state.currentChapter;
+    /// 当前正文。
+    final String? text = _state.content?.text;
+    if (chapter == null || text == null) {
+      return;
+    }
+    _pendingCharacterOffset = characterOffset.clamp(0, math.max(0, text.length - 1)).toInt();
+    _emit(
+      _state.copyWith(
+        anchor: _buildAnchor(chapter, text, _pendingCharacterOffset),
+        restoreRequestId: _state.restoreRequestId + 1,
+        menuVisible: false,
+      ),
+    );
+    unawaited(_saveProgress());
   }
 
   /// 保存书籍兼容进度和包含章节 URL 的稳定正文锚点。
@@ -616,11 +957,29 @@ final class ReaderViewModel {
       ),
     );
     await _cacheGateway.saveDisplayConfig(bookUrl, config);
-    if (previous.keepScreenOn != config.keepScreenOn) {
-      _effectController.add(UpdateReaderSystemEffect(config.keepScreenOn));
+    if (previous.keepScreenOn != config.keepScreenOn ||
+        previous.useSystemBrightness != config.useSystemBrightness ||
+        previous.readerBrightness != config.readerBrightness ||
+        previous.orientationMode != config.orientationMode) {
+      _effectController.add(UpdateReaderSystemEffect(config));
     }
     if (previous.useReplaceRules != config.useReplaceRules) {
       await _loadCurrentChapter();
+      return;
+    }
+    if (previous.preDownloadCount != config.preDownloadCount) {
+      /// 当前书籍事实。
+      final Book? book = _state.book;
+      if (book != null && _state.loadState == ReaderLoadState.ready) {
+        unawaited(
+          _coordinator.preloadAdjacent(
+            book: book,
+            chapters: _state.chapters,
+            currentIndex: _state.currentChapterIndex,
+            config: config,
+          ),
+        );
+      }
     }
   }
 
@@ -660,6 +1019,173 @@ final class ReaderViewModel {
   Future<void> _deleteBookmark(Bookmark bookmark) async {
     await _bookmarkGateway.deleteBookmark(bookmark.time);
     _effectController.add(const ShowReaderMessageEffect('书签已删除'));
+  }
+
+  /// 保存用户修改后的书签备注。
+  Future<void> _saveBookmarkNote(Bookmark bookmark, String content) async {
+    /// 规范化后的备注文本。
+    final String normalizedContent = content.trim();
+    /// 空备注回退到创建书签时的正文摘要。
+    final String nextContent = normalizedContent.isEmpty ? bookmark.bookText : normalizedContent;
+    await _bookmarkGateway.saveBookmark(
+      Bookmark(
+        time: bookmark.time,
+        bookName: bookmark.bookName,
+        bookAuthor: bookmark.bookAuthor,
+        chapterIndex: bookmark.chapterIndex,
+        chapterPos: bookmark.chapterPos,
+        chapterName: bookmark.chapterName,
+        bookText: bookmark.bookText,
+        content: nextContent,
+      ),
+    );
+    _emit(_state.copyWith(clearSheet: true));
+    _effectController.add(const ShowReaderMessageEffect('书签备注已保存'));
+  }
+
+  /// 把当前书签列表整理成可读文本并请求路由复制到剪贴板。
+  void _exportBookmarks() {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null) {
+      return;
+    }
+    if (_state.bookmarks.isEmpty) {
+      _effectController.add(const ShowReaderMessageEffect('还没有可导出的书签'));
+      return;
+    }
+    /// 导出文本行集合。
+    final List<String> lines = <String>[
+      '# ${book.name}',
+      '',
+    ];
+    for (final Bookmark bookmark in _state.bookmarks) {
+      lines.add('## ${bookmark.chapterName}');
+      lines.add('- 位置：${bookmark.chapterPos}');
+      if (bookmark.bookText.isNotEmpty) {
+        lines.add('- 原文：${bookmark.bookText.replaceAll(RegExp(r'\s+'), ' ').trim()}');
+      }
+      if (bookmark.content.isNotEmpty && bookmark.content != bookmark.bookText) {
+        lines.add('- 备注：${bookmark.content.replaceAll(RegExp(r'\s+'), ' ').trim()}');
+      }
+      lines.add('');
+    }
+    _effectController.add(
+      CopyReaderTextEffect(
+        text: lines.join('\n'),
+        message: '已复制 ${_state.bookmarks.length} 条书签到剪贴板',
+      ),
+    );
+  }
+
+  /// 读取并展示当前书可用的完整正文替换规则列表。
+  Future<void> _loadReplaceRules() async {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null) {
+      return;
+    }
+    try {
+      /// 适用于当前书名或书源的启用正文规则。
+      final List<ReplaceRule> rules = await _replaceRuleGateway.getEnabledContentRules(
+        book.name,
+        book.origin,
+      );
+      if (_disposed) {
+        return;
+      }
+      _emit(_state.copyWith(replaceRules: rules));
+    } on Object catch (error, stackTrace) {
+      _logger.error(
+        tag: bookReaderContentLogTag,
+        message: '替换规则列表读取失败 bookId=${appLogDiagnosticId(bookUrl)}',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _effectController.add(const ShowReaderMessageEffect('读取替换规则失败'));
+    }
+  }
+
+  /// 按范围后台强制刷新章节缓存；当前章刷新后立即回填可见正文。
+  Future<void> _refreshChapters(ReaderRefreshScope scope) async {
+    if (_state.refreshingChapters && scope != ReaderRefreshScope.currentChapter) {
+      _effectController.add(const ShowReaderMessageEffect('章节刷新正在进行'));
+      return;
+    }
+    if (scope == ReaderRefreshScope.currentChapter) {
+      await _loadCurrentChapter(forceRefresh: true, preserveCurrentContent: true);
+      return;
+    }
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null) {
+      return;
+    }
+    _refreshGeneration += 1;
+    /// 本次刷新世代。
+    final int generation = _refreshGeneration;
+    /// 需要刷新的章节索引。
+    final List<int> indexes = _refreshIndexes(scope);
+    if (indexes.isEmpty) {
+      _effectController.add(const ShowReaderMessageEffect('没有需要刷新的章节'));
+      return;
+    }
+    _emit(_state.copyWith(refreshingChapters: true));
+    _effectController.add(
+      ShowReaderMessageEffect(
+        scope == ReaderRefreshScope.followingChapters ? '开始刷新后续章节' : '开始刷新全部章节',
+      ),
+    );
+    /// 成功刷新的章节数。
+    int successCount = 0;
+    for (final int index in indexes) {
+      if (_disposed || generation != _refreshGeneration) {
+        break;
+      }
+      /// 当前刷新章节。
+      final BookChapter chapter = _state.chapters[index];
+      try {
+        await _coordinator.loadChapter(
+          book: book,
+          chapter: chapter,
+          config: _state.config,
+          forceRefresh: true,
+        );
+        successCount += 1;
+      } on Object catch (error) {
+        _logger.warning(
+          tag: bookReaderContentLogTag,
+          message: '后台刷新章节失败 chapterIndex=$index '
+              'chapterId=${appLogDiagnosticId(chapter.url)}',
+          error: error,
+        );
+      }
+    }
+    if (_disposed || generation != _refreshGeneration) {
+      return;
+    }
+    _emit(_state.copyWith(refreshingChapters: false));
+    _effectController.add(
+      ShowReaderMessageEffect('章节刷新完成：$successCount / ${indexes.length}'),
+    );
+  }
+
+  /// 根据用户选择的刷新范围生成可阅读章节索引。
+  List<int> _refreshIndexes(ReaderRefreshScope scope) {
+    /// 起始目录索引。
+    final int startIndex = switch (scope) {
+      ReaderRefreshScope.currentChapter => _state.currentChapterIndex,
+      ReaderRefreshScope.followingChapters => _state.currentChapterIndex + 1,
+      ReaderRefreshScope.allChapters => 0,
+    };
+    /// 收集到的章节索引。
+    final List<int> indexes = <int>[];
+    for (int index = startIndex; index < _state.chapters.length; index += 1) {
+      if (!_state.chapters[index].isVolume) {
+        indexes.add(index);
+      }
+    }
+    return indexes;
   }
 
   /// 保存当前稳定进度并请求路由进入整书换源，避免旧主键删除前丢失最后位置。
@@ -705,6 +1231,8 @@ final class ReaderViewModel {
     _anchorUpdateTimer?.cancel();
     _progressSaveTimer?.cancel();
     _bookmarkSubscription?.cancel();
+    _refreshGeneration += 1;
+    _searchGeneration += 1;
     _coordinator.dispose();
     _stateController.close();
     _effectController.close();

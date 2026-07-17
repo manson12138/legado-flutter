@@ -17,10 +17,17 @@ import 'bookshelf_view_model.dart';
 /// 连接书架 ViewModel、对话框、导航 Effect 和纯 UI 的路由层。
 final class BookshelfRoute extends StatefulWidget {
   /// 创建书架路由。
-  const BookshelfRoute({required this.dependencies, super.key});
+  const BookshelfRoute({
+    required this.dependencies,
+    this.embedded = false,
+    super.key,
+  });
 
   /// 应用组合根依赖。
   final AppDependencies dependencies;
+
+  /// 是否嵌入应用一级导航；嵌入时普通顶部栏不显示返回按钮。
+  final bool embedded;
 
   /// 创建路由状态。
   @override
@@ -202,7 +209,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         /// 当前可渲染状态。
         final BookshelfUiState state = snapshot.data ?? _viewModel.state;
         _syncDialog(state.dialog);
-        return BookshelfScreen(state: state, onIntent: _viewModel.onIntent);
+        return BookshelfScreen(
+          state: state,
+          onIntent: _viewModel.onIntent,
+          showBackButton: !widget.embedded,
+        );
       },
     );
   }

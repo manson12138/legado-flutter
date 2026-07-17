@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
@@ -33,6 +35,9 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
   /// Effect 订阅。
   late final StreamSubscription<BookInfoEffect> _effectSubscription;
 
+  /// 当前已经交给 Navigator 展示的书架冲突状态。
+  BookInfoShelfConflictDialog? _shownShelfConflict;
+
   /// 创建 ViewModel 并开始监听 Effect。
   @override
   void initState() {
@@ -40,8 +45,12 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
     _viewModel = BookInfoViewModel(
       arguments: widget.arguments,
       detailService: widget.dependencies.bookDetailService,
+      bookGroupGateway: widget.dependencies.bookGroupGateway,
       bookshelfGateway: widget.dependencies.bookshelfGateway,
       addBookToBookshelf: widget.dependencies.addBookToBookshelf,
+      changeBookSource: widget.dependencies.changeBookSource,
+      createBookshelfGroup: widget.dependencies.createBookshelfGroup,
+      replaceBooksGroup: widget.dependencies.replaceBooksGroup,
       saveBookChapters: widget.dependencies.saveBookChapters,
       cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
       logger: widget.dependencies.logger,
@@ -58,6 +67,41 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         }
       });
     }
+  }
+
+  /// 根据 UiState 同步展示一次同名同作者书架冲突对话框。
+  void _syncShelfConflict(BookInfoShelfConflictDialog? conflict) {
+    if (conflict == null || identical(conflict, _shownShelfConflict)) {
+      return;
+    }
+    _shownShelfConflict = conflict;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) async {
+      if (!mounted || !identical(conflict, _shownShelfConflict)) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext context) {
+          return _BookInfoShelfConflictDialog(
+            conflict: conflict,
+            onReplace: () {
+              Navigator.of(context).pop();
+              _viewModel.onIntent(const ReplaceBookInfoShelfConflictIntent());
+            },
+            onAddAsNew: () {
+              Navigator.of(context).pop();
+              _viewModel.onIntent(const AddBookInfoShelfConflictAsNewIntent());
+            },
+          );
+        },
+      );
+      if (identical(conflict, _shownShelfConflict)) {
+        _shownShelfConflict = null;
+        if (_viewModel.state.shelfConflict != null) {
+          _viewModel.onIntent(const DismissBookInfoShelfConflictIntent());
+        }
+      }
+    });
   }
 
   /// 执行导航和 Snackbar 副作用。
@@ -85,6 +129,60 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         );
       case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openFullSourceChange(bookUrl));
+      case CopyBookInfoTextEffect(
+        text: final String text,
+        message: final String message,
+      ):
+        unawaited(_copyText(text, message));
+      case ShareBookInfoEffect(title: final String title, text: final String text):
+        unawaited(_shareBookInfo(title: title, text: text));
+    }
+  }
+
+  /// 把详情页请求的文本写入系统剪贴板并反馈结果。
+  Future<void> _copyText(String text, String successMessage) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(successMessage)));
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('复制失败')));
+    }
+  }
+
+  /// 调用 Android/iOS 系统分享面板分享书籍基础信息。
+  Future<void> _shareBookInfo({required String title, required String text}) async {
+    try {
+      /// iPad 分享面板需要锚点；使用当前路由根节点的全局区域。
+      final RenderObject? renderObject = context.findRenderObject();
+      /// 系统分享面板在大屏设备上的弹出锚点。
+      final Rect? shareOrigin = renderObject is RenderBox
+          ? renderObject.localToGlobal(Offset.zero) & renderObject.size
+          : null;
+      await SharePlus.instance.share(
+        ShareParams(
+          text: text,
+          title: title,
+          subject: title,
+          sharePositionOrigin: shareOrigin,
+        ),
+      );
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('分享失败')));
     }
   }
 
@@ -155,8 +253,73 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       builder: (BuildContext context, AsyncSnapshot<BookInfoUiState> snapshot) {
         /// 当前可渲染状态。
         final BookInfoUiState state = snapshot.data ?? _viewModel.state;
+        _syncShelfConflict(state.shelfConflict);
         return BookInfoScreen(state: state, onIntent: _viewModel.onIntent);
       },
+    );
+  }
+}
+
+/// 展示现有来源与候选来源，并要求用户明确选择冲突处理方式。
+final class _BookInfoShelfConflictDialog extends StatelessWidget {
+  /// 创建同名同作者冲突对话框。
+  const _BookInfoShelfConflictDialog({
+    required this.conflict,
+    required this.onReplace,
+    required this.onAddAsNew,
+  });
+
+  /// 当前待确认的冲突事实。
+  final BookInfoShelfConflictDialog conflict;
+
+  /// 用候选来源替换现有书籍的回调。
+  final VoidCallback onReplace;
+
+  /// 明确保留两本书的回调。
+  final VoidCallback onAddAsNew;
+
+  /// 构建来源、目录和默认迁移含义说明。
+  @override
+  Widget build(BuildContext context) {
+    /// 现有书源的安全显示名称。
+    final String existingSource = conflict.existingBook.originName.isEmpty
+        ? '未知来源'
+        : conflict.existingBook.originName;
+    /// 候选书源的安全显示名称。
+    final String incomingSource = conflict.incomingBook.originName.isEmpty
+        ? '未知来源'
+        : conflict.incomingBook.originName;
+    return AlertDialog(
+      icon: const Icon(Icons.library_add_check_outlined),
+      title: const Text('书架中已有同名书籍'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '《${conflict.incomingBook.name}》 · '
+              '${conflict.incomingBook.author.isEmpty ? '未知作者' : conflict.incomingBook.author}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            Text('现有来源：$existingSource（${conflict.existingBook.totalChapterNum} 章）'),
+            const SizedBox(height: 8),
+            Text('新来源：$incomingSource（${conflict.incomingChapters.length} 章）'),
+            const SizedBox(height: 16),
+            const Text('推荐替换现有书源；阅读进度、分组、排序、备注、封面和单书阅读设置会尽量保留。'),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        TextButton(onPressed: onAddAsNew, child: const Text('仍然新增一本')),
+        FilledButton(onPressed: onReplace, child: const Text('替换并保留数据')),
+      ],
     );
   }
 }

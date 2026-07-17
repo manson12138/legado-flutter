@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 
 import '../api/cookie/cookie_manager.dart';
 import '../api/cookie/flutter_webview_cookie_bridge.dart';
@@ -46,6 +47,7 @@ import '../domain/usecase/import_book_sources_use_case.dart';
 import '../domain/usecase/load_book_chapters_use_case.dart';
 import '../domain/usecase/restore_reading_progress_use_case.dart';
 import '../domain/usecase/replace_books_group_use_case.dart';
+import '../domain/usecase/resolve_book_shelf_state_use_case.dart';
 import '../domain/usecase/save_book_chapters_use_case.dart';
 import '../domain/usecase/save_reading_progress_use_case.dart';
 import '../help/logging/app_logger.dart';
@@ -67,6 +69,7 @@ import '../model/local_book/local_book_storage.dart';
 import '../model/local_book/txt_local_book_parser.dart';
 import '../model/local_book/pdf_local_book_parser.dart';
 import '../model/local_book/umd_local_book_parser.dart';
+import 'default_book_source_bootstrapper.dart';
 
 /// 保存应用级共享依赖的组合根容器。
 ///
@@ -87,6 +90,7 @@ final class AppDependencies {
     required this.readerCacheGateway,
     required this.searchHistoryGateway,
     required this.cookieManager,
+    required this.defaultBookSourceBootstrapper,
     required this.importBookSources,
     required this.bookSourceImportTextResolver,
     required this.addBookToBookshelf,
@@ -222,12 +226,18 @@ final class AppDependencies {
       storage: localBookStorage,
       parserRegistry: localBookParserRegistry,
     );
+    /// 按 Android 语义解析书籍是否已经入架或存在同名同作者冲突。
+    final ResolveBookShelfStateUseCase resolveBookShelfState =
+        ResolveBookShelfStateUseCase(bookRepository);
+    /// 供详情新增、本地书更新和书架刷新复用的书籍保存业务动作。
+    final AddBookToBookshelfUseCase addBookToBookshelf =
+        AddBookToBookshelfUseCase(bookRepository, resolveBookShelfState);
     /// M08.1 编排文件复制、解析和书架事务的导入协调器。
     final LocalBookImportCoordinator localBookImportCoordinator = LocalBookImportCoordinator(
       storage: localBookStorage,
       parserRegistry: localBookParserRegistry,
       bookshelfGateway: bookRepository,
-      addBook: AddBookToBookshelfUseCase(bookRepository),
+      addBook: addBookToBookshelf,
     );
     /// M06 普通书源详情与目录编排服务。
     final BookDetailService bookDetailService = BookDetailService(
@@ -235,6 +245,9 @@ final class AppDependencies {
       standardService: standardBookSourceService,
       logger: logger,
     );
+    /// 书源 JSON 导入 UseCase，供管理页面和启动内置书源导入共同复用。
+    final ImportBookSourcesUseCase importBookSources =
+        ImportBookSourcesUseCase(bookSourceRepository);
 
     return AppDependencies(
       logger: logger,
@@ -249,9 +262,15 @@ final class AppDependencies {
       readerCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
       cookieManager: cookieManager,
-      importBookSources: ImportBookSourcesUseCase(bookSourceRepository),
+      defaultBookSourceBootstrapper: DefaultBookSourceBootstrapper(
+        sourceGateway: bookSourceRepository,
+        importBookSources: importBookSources,
+        assetBundle: rootBundle,
+        logger: logger,
+      ),
+      importBookSources: importBookSources,
       bookSourceImportTextResolver: bookSourceImportTextResolver,
-      addBookToBookshelf: AddBookToBookshelfUseCase(bookRepository),
+      addBookToBookshelf: addBookToBookshelf,
       deleteBooksFromBookshelf: DeleteBooksFromBookshelfUseCase(bookRepository),
       createBookshelfGroup: CreateBookshelfGroupUseCase(bookGroupRepository),
       changeBookSource: ChangeBookSourceUseCase(bookRepository, readerRepository),
@@ -304,6 +323,9 @@ final class AppDependencies {
 
   /// 普通 HTTP、登录 WebView 与 JavaScript 页面请求共用的统一 Cookie 管理器。
   final LegadoCookieManager cookieManager;
+
+  /// 启动期按需导入 Flutter assets 内置书源的业务协调器。
+  final DefaultBookSourceBootstrapper defaultBookSourceBootstrapper;
 
   /// 书源 JSON 导入业务动作。
   final ImportBookSourcesUseCase importBookSources;

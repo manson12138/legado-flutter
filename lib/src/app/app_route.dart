@@ -3,7 +3,7 @@ abstract final class AppRoute {
   /// M1 欢迎页，也是当前应用启动路由。
   static const String welcome = '/';
 
-  /// 应用设置页面。
+  /// 应用“我的”页面；保留旧路由名称以兼容已有导航调用。
   static const String settings = '/settings';
 
   /// 设置中的沙盒日志管理页面。

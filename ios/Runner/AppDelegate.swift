@@ -13,6 +13,9 @@ import UIKit
   /// Dart 阅读设置最近请求的常亮状态，前后台切换后据此恢复而不复制阅读业务。
   private var readerRequestedKeepScreenOn: Bool = false
 
+  /// 首次进入阅读器前的屏幕亮度，退出或跟随系统时用于恢复。
+  private var originalScreenBrightness: CGFloat?
+
   /// 完成 iOS 宿主启动并把生命周期继续交给 FlutterAppDelegate。
   ///
   /// - Parameters:
@@ -88,6 +91,7 @@ import UIKit
       switch call.method {
       case "enterReader":
         self?.enterReaderWindow(enabled)
+        self?.setReaderBrightness(arguments)
         result(nil)
       case "setKeepScreenOn":
         self?.setReaderKeepScreenOn(enabled)
@@ -95,6 +99,11 @@ import UIKit
       case "exitReader":
         self?.exitReaderWindow()
         result(nil)
+      case "setBrightness":
+        self?.setReaderBrightness(arguments)
+        result(nil)
+      case "getBatteryLevel":
+        result(self?.readBatteryLevel())
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -106,6 +115,9 @@ import UIKit
   private func enterReaderWindow(_ enabled: Bool) {
     if originalIdleTimerDisabled == nil {
       originalIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+    }
+    if originalScreenBrightness == nil {
+      originalScreenBrightness = UIScreen.main.brightness
     }
     readerRequestedKeepScreenOn = enabled
     setReaderKeepScreenOn(enabled)
@@ -120,6 +132,50 @@ import UIKit
   /// 离开阅读器时恢复进入前的自动锁屏状态。
   private func exitReaderWindow() {
     restoreOriginalIdleTimerState(UIApplication.shared)
+    restoreOriginalBrightness()
+  }
+
+  /// 阅读中按 Dart 设置更新屏幕亮度；跟随系统时恢复进入阅读器前亮度。
+  ///
+  /// - Parameter arguments: Dart 传入的亮度参数 Map。
+  private func setReaderBrightness(_ arguments: [String: Any]?) {
+    if originalScreenBrightness == nil {
+      originalScreenBrightness = UIScreen.main.brightness
+    }
+    /// 是否跟随系统亮度；缺失时按系统亮度处理。
+    let useSystemBrightness = arguments?["useSystemBrightness"] as? Bool ?? true
+    if useSystemBrightness {
+      restoreOriginalBrightness()
+      return
+    }
+    /// Dart 传入的阅读亮度，范围由 Dart 层预先收窄。
+    let brightness = arguments?["brightness"] as? Double ?? 0.5
+    UIScreen.main.brightness = CGFloat(min(max(brightness, 0.05), 1.0))
+  }
+
+  /// 恢复进入阅读器之前的屏幕亮度。
+  private func restoreOriginalBrightness() {
+    guard let restoreValue = originalScreenBrightness else {
+      return
+    }
+    UIScreen.main.brightness = restoreValue
+    originalScreenBrightness = nil
+  }
+
+  /// 读取 iOS 当前电量百分比；不可用时返回 nil 交给 Dart 隐藏。
+  private func readBatteryLevel() -> Int? {
+    /// 当前设备对象，电量监控需要临时开启。
+    let device = UIDevice.current
+    /// 调用前的电量监控状态，读取后恢复。
+    let originalMonitoringEnabled = device.isBatteryMonitoringEnabled
+    device.isBatteryMonitoringEnabled = true
+    defer {
+      device.isBatteryMonitoringEnabled = originalMonitoringEnabled
+    }
+    if device.batteryState == .unknown || device.batteryLevel < 0 {
+      return nil
+    }
+    return Int((device.batteryLevel * 100).rounded()).clamped(to: 0...100)
   }
 
   /// 将自动锁屏恢复到进入阅读器之前的状态，并清除本次阅读会话标记。
@@ -133,5 +189,13 @@ import UIKit
     application.isIdleTimerDisabled = restoreValue
     originalIdleTimerDisabled = nil
     readerRequestedKeepScreenOn = false
+  }
+}
+
+/// 为整数提供闭区间收窄，避免平台异常值越过 Dart UI 边界。
+private extension Int {
+  /// 将整数限制在给定闭区间内。
+  func clamped(to range: ClosedRange<Int>) -> Int {
+    return min(max(self, range.lowerBound), range.upperBound)
   }
 }

@@ -12,6 +12,7 @@ final class BookSourceManagementScreen extends StatelessWidget {
   const BookSourceManagementScreen({
     required this.state,
     required this.onIntent,
+    this.showBackButton = true,
     super.key,
   });
 
@@ -20,6 +21,9 @@ final class BookSourceManagementScreen extends StatelessWidget {
 
   /// 页面所有操作的统一 Intent 入口。
   final ValueChanged<BookSourceManagementIntent> onIntent;
+
+  /// 非选择模式下是否展示返回按钮。
+  final bool showBackButton;
 
   /// 构建包含筛选、列表、选择模式和入口操作的页面。
   @override
@@ -35,13 +39,16 @@ final class BookSourceManagementScreen extends StatelessWidget {
       },
       child: AppScaffold(
         appBar: AppBar(
-          leading: IconButton(
-            tooltip: selecting ? '退出选择' : '返回',
-            onPressed: () {
-              onIntent(const BackFromBookSourceManagementIntent());
-            },
-            icon: Icon(selecting ? Icons.close : Icons.arrow_back),
-          ),
+          automaticallyImplyLeading: false,
+          leading: selecting || showBackButton
+              ? IconButton(
+                  tooltip: selecting ? '退出选择' : '返回',
+                  onPressed: () {
+                    onIntent(const BackFromBookSourceManagementIntent());
+                  },
+                  icon: Icon(selecting ? Icons.close : Icons.arrow_back),
+                )
+              : null,
           title: Text(selecting ? '已选择 ${state.selectedUrls.length} 项' : '书源管理'),
           actions: selecting
               ? <Widget>[
@@ -89,12 +96,12 @@ final class BookSourceManagementScreen extends StatelessWidget {
         ),
         floatingActionButton: selecting
             ? null
-            : FloatingActionButton.extended(
+            : FloatingActionButton.small(
                 onPressed: () {
                   onIntent(const RequestAddBookSourceIntent());
                 },
-                icon: const Icon(Icons.add),
-                label: const Text('新增书源'),
+                tooltip: '新增书源',
+                child: const Icon(Icons.add),
               ),
         bottomNavigationBar: selecting
             ? _SelectionActions(state: state, onIntent: onIntent)
@@ -109,16 +116,40 @@ final class BookSourceManagementScreen extends StatelessWidget {
                 SpacingToken.medium,
                 SpacingToken.small,
               ),
-              child: SearchBar(
-                hintText: '搜索名称、URL 或分组',
-                leading: const Icon(Icons.search),
+              child: TextFormField(
+                key: ValueKey<String>('book-source-${state.query.isEmpty}'),
+                initialValue: state.query,
                 onChanged: (String value) {
                   onIntent(ChangeBookSourceQueryIntent(value));
                 },
+                decoration: InputDecoration(
+                  hintText: '搜索书源',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: SpacingToken.mediumSmall,
+                    vertical: SpacingToken.small,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(RadiusToken.pill),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(RadiusToken.pill),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(RadiusToken.pill),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 1,
+                    ),
+                  ),
+                ),
               ),
             ),
             SizedBox(
-              height: 48,
+              height: 40,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
@@ -174,14 +205,15 @@ final class BookSourceManagementScreen extends StatelessWidget {
             : null,
       );
     }
-    return ListView.builder(
+    return ListView.separated(
       padding: const EdgeInsets.fromLTRB(
         SpacingToken.medium,
         SpacingToken.small,
         SpacingToken.medium,
-        96,
+        72,
       ),
       itemCount: sources.length,
+      separatorBuilder: (BuildContext context, int index) => const Divider(indent: 12),
       itemBuilder: (BuildContext context, int index) {
         /// 当前稳定 URL 主键书源。
         final BookSource source = sources[index];
@@ -239,10 +271,9 @@ final class _BookSourceCard extends StatelessWidget {
   /// 构建单个书源卡片。
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: SpacingToken.small),
+    return Material(
+      color: selected ? Theme.of(context).colorScheme.secondaryContainer : Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(RadiusToken.medium),
         onLongPress: () {
           onIntent(ToggleBookSourceSelectionIntent(source.bookSourceUrl));
         },
@@ -256,7 +287,7 @@ final class _BookSourceCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: SpacingToken.medium,
-            vertical: SpacingToken.mediumSmall,
+            vertical: SpacingToken.small,
           ),
           child: Row(
             children: <Widget>[
@@ -271,7 +302,7 @@ final class _BookSourceCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(source.bookSourceName, style: Theme.of(context).textTheme.titleMedium),
+                    Text(source.bookSourceName, style: Theme.of(context).textTheme.titleSmall),
                     const SizedBox(height: SpacingToken.xSmall),
                     Text(
                       source.bookSourceUrl,
@@ -290,20 +321,24 @@ final class _BookSourceCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Switch(
-                value: source.enabled,
-                onChanged: busy
-                    ? null
-                    : (bool enabled) {
-                        onIntent(
-                          SetSingleBookSourceEnabledIntent(
-                            sourceUrl: source.bookSourceUrl,
-                            enabled: enabled,
-                          ),
-                        );
-                      },
+              Transform.scale(
+                scale: 0.8,
+                child: Switch(
+                  value: source.enabled,
+                  onChanged: busy
+                      ? null
+                      : (bool enabled) {
+                          onIntent(
+                            SetSingleBookSourceEnabledIntent(
+                              sourceUrl: source.bookSourceUrl,
+                              enabled: enabled,
+                            ),
+                          );
+                        },
+                ),
               ),
               PopupMenuButton<String>(
+                iconSize: 18,
                 enabled: !busy,
                 onSelected: (String value) {
                   switch (value) {

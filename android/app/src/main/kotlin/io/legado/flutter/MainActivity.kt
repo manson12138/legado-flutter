@@ -3,6 +3,10 @@ package io.legado.flutter
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.util.Log
 
 /**
@@ -22,6 +26,9 @@ class MainActivity : FlutterActivity() {
     /** 首次进入阅读器前窗口是否已经由其他功能设置常亮；退出时据此恢复。 */
     private var originalKeepScreenOn: Boolean? = null
 
+    /** 首次进入阅读器前窗口亮度；退出或跟随系统时据此恢复。 */
+    private var originalScreenBrightness: Float? = null
+
     /** 注册 M08 阅读器最小平台通道。 */
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -34,7 +41,12 @@ class MainActivity : FlutterActivity() {
                 "enterReader" -> {
                     /** Dart 传入的初始常亮状态；缺失参数安全回退为关闭。 */
                     val enabled = call.argument<Boolean>("enabled") ?: false
+                    /** Dart 传入是否跟随系统亮度；缺失时按系统亮度处理。 */
+                    val useSystemBrightness = call.argument<Boolean>("useSystemBrightness") ?: true
+                    /** Dart 传入的阅读亮度，范围由 Dart 层收窄。 */
+                    val brightness = call.argument<Double>("brightness") ?: 0.5
                     enterReaderWindow(enabled)
+                    setReaderBrightness(useSystemBrightness, brightness)
                     result.success(null)
                 }
 
@@ -48,6 +60,19 @@ class MainActivity : FlutterActivity() {
                 "exitReader" -> {
                     exitReaderWindow()
                     result.success(null)
+                }
+
+                "setBrightness" -> {
+                    /** Dart 传入是否跟随系统亮度；缺失时按系统亮度处理。 */
+                    val useSystemBrightness = call.argument<Boolean>("useSystemBrightness") ?: true
+                    /** Dart 传入的阅读亮度，范围由 Dart 层收窄。 */
+                    val brightness = call.argument<Double>("brightness") ?: 0.5
+                    setReaderBrightness(useSystemBrightness, brightness)
+                    result.success(null)
+                }
+
+                "getBatteryLevel" -> {
+                    result.success(readBatteryLevel())
                 }
 
                 else -> result.notImplemented()
@@ -93,6 +118,9 @@ class MainActivity : FlutterActivity() {
             originalKeepScreenOn =
                 window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
         }
+        if (originalScreenBrightness == null) {
+            originalScreenBrightness = window.attributes.screenBrightness
+        }
         setReaderKeepScreenOn(enabled)
     }
 
@@ -108,12 +136,59 @@ class MainActivity : FlutterActivity() {
     /** 离开阅读器时恢复进入前的窗口常亮状态。 */
     private fun exitReaderWindow() {
         /** 阅读器进入前的原始常亮状态。 */
-        val restoreKeepScreenOn = originalKeepScreenOn ?: return
-        if (restoreKeepScreenOn) {
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val restoreKeepScreenOn = originalKeepScreenOn
+        if (restoreKeepScreenOn != null) {
+            if (restoreKeepScreenOn) {
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            originalKeepScreenOn = null
         }
-        originalKeepScreenOn = null
+        restoreReaderBrightness()
+    }
+
+    /** 阅读中按设置更新窗口亮度；跟随系统时恢复进入阅读器前的窗口亮度。 */
+    private fun setReaderBrightness(useSystemBrightness: Boolean, brightness: Double) {
+        if (originalScreenBrightness == null) {
+            originalScreenBrightness = window.attributes.screenBrightness
+        }
+        /** 当前窗口属性副本，用于写入阅读亮度。 */
+        val attributes = window.attributes
+        if (useSystemBrightness) {
+            attributes.screenBrightness = originalScreenBrightness ?: -1f
+        } else {
+            attributes.screenBrightness = brightness.toFloat().coerceIn(0.05f, 1f)
+        }
+        window.attributes = attributes
+    }
+
+    /** 恢复进入阅读器之前的窗口亮度。 */
+    private fun restoreReaderBrightness() {
+        /** 阅读器进入前的窗口亮度，空值表示本次没有改过亮度。 */
+        val restoreBrightness = originalScreenBrightness ?: return
+        /** 当前窗口属性副本，用于恢复亮度。 */
+        val attributes = window.attributes
+        attributes.screenBrightness = restoreBrightness
+        window.attributes = attributes
+        originalScreenBrightness = null
+    }
+
+    /** 读取 Android 当前电量百分比；系统未返回时交给 Dart 隐藏电量。 */
+    private fun readBatteryLevel(): Int? {
+        /** Android M 及以上可直接从 BatteryManager 读取百分比。 */
+        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+        val directLevel = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        if (directLevel != null && directLevel >= 0) {
+            return directLevel.coerceIn(0, 100)
+        }
+        /** 兼容路径：读取系统电量广播的最近粘性值。 */
+        val batteryStatus: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        if (level < 0 || scale <= 0) {
+            return null
+        }
+        return ((level * 100f) / scale).toInt().coerceIn(0, 100)
     }
 }

@@ -35,6 +35,12 @@ final class BookSourceRepository implements BookSourceGateway {
     return guardDataStream<List<BookSource>>(_bookSourceDao.watchAll());
   }
 
+  /// 一次性读取全部书源，供启动默认数据导入等非观察场景使用。
+  @override
+  Future<List<BookSource>> getAll() {
+    return guardDataOperation<List<BookSource>>(_bookSourceDao.getAll);
+  }
+
   /// 按书源 URL 查询并转换数据错误。
   @override
   Future<BookSource?> getByUrl(String sourceUrl) {

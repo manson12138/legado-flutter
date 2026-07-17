@@ -3,13 +3,19 @@ import 'package:flutter/material.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../components/app_scaffold.dart';
+import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 import 'search_contract.dart';
 
 /// 只渲染搜索状态并发送 Intent 的无状态页面。
 final class SearchScreen extends StatelessWidget {
   /// 创建搜索纯 UI。
-  const SearchScreen({required this.state, required this.onIntent, super.key});
+  const SearchScreen({
+    required this.state,
+    required this.onIntent,
+    this.showBackButton = true,
+    super.key,
+  });
 
   /// ViewModel 提供的不可变状态。
   final SearchUiState state;
@@ -17,16 +23,22 @@ final class SearchScreen extends StatelessWidget {
   /// 用户操作统一入口。
   final ValueChanged<SearchIntent> onIntent;
 
+  /// 顶部栏是否展示返回按钮。
+  final bool showBackButton;
+
   /// 构建搜索输入、筛选、进度、错误和增量结果。
   @override
   Widget build(BuildContext context) {
     return AppScaffold(
       appBar: AppBar(
-        leading: IconButton(
-          onPressed: () => onIntent(const BackFromSearchIntent()),
-          icon: const Icon(Icons.arrow_back),
-          tooltip: '返回',
-        ),
+        automaticallyImplyLeading: false,
+        leading: showBackButton
+            ? IconButton(
+                onPressed: () => onIntent(const BackFromSearchIntent()),
+                icon: const Icon(Icons.arrow_back),
+                tooltip: '返回',
+              )
+            : null,
         title: const Text('搜索书籍'),
         actions: <Widget>[
           PopupMenuButton<String>(
@@ -229,23 +241,73 @@ final class _SearchBody extends StatelessWidget {
     if (state.results.isEmpty) {
       return Center(child: Text(state.failures.isEmpty ? '没有找到结果' : '全部书源均未返回可用结果'));
     }
-    return ListView.separated(
-      padding: const EdgeInsets.all(SpacingToken.medium),
-      itemCount: state.results.length,
-      separatorBuilder: (BuildContext context, int index) => const SizedBox(height: SpacingToken.small),
-      itemBuilder: (BuildContext context, int index) {
-        /// 当前稳定结果组。
-        final BookSearchResultGroup group = state.results[index];
-        return Card(
-          key: ValueKey<String>(group.key),
-          child: ListTile(
-            leading: const Icon(Icons.menu_book_outlined),
-            title: Text(group.primary.name),
-            subtitle: Text('${group.primary.author}\n${group.primary.originName} · ${group.books.length} 个来源'),
-            isThreeLine: true,
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => onIntent(OpenSearchResultIntent(group, group.primary)),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        /// 宽屏下把结果约束在舒适阅读宽度内的水平留白。
+        final double horizontalPadding = constraints.maxWidth > LayoutToken.contentMaxWidth
+            ? (constraints.maxWidth - LayoutToken.contentMaxWidth) / 2
+            : SpacingToken.medium;
+        return ListView.separated(
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPadding,
+            vertical: SpacingToken.small,
           ),
+          itemCount: state.results.length,
+          separatorBuilder: (BuildContext context, int index) => const Divider(),
+          itemBuilder: (BuildContext context, int index) {
+            /// 当前稳定结果组。
+            final BookSearchResultGroup group = state.results[index];
+            return Material(
+              key: ValueKey<String>(group.key),
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => onIntent(OpenSearchResultIntent(group, group.primary)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: SpacingToken.small),
+                  child: Row(
+                    children: <Widget>[
+                      SizedBox(
+                        width: 35,
+                        height: 51,
+                        child: BookCover(
+                          coverUrl: group.primary.coverUrl,
+                          semanticLabel: '${group.primary.name}封面',
+                        ),
+                      ),
+                      const SizedBox(width: SpacingToken.mediumSmall),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              group.primary.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            Text(
+                              group.primary.author.isEmpty ? '未知作者' : group.primary.author,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: SpacingToken.xSmall),
+                            Text(
+                              '${group.primary.originName} · ${group.books.length} 个来源',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );

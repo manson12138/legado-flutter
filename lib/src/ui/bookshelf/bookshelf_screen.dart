@@ -9,12 +9,20 @@ import 'bookshelf_contract.dart';
 /// 只消费 BookshelfUiState 并发送 Intent 的无状态书架页面。
 final class BookshelfScreen extends StatelessWidget {
   /// 创建书架纯 UI。
-  const BookshelfScreen({required this.state, required this.onIntent, super.key});
+  const BookshelfScreen({
+    required this.state,
+    required this.onIntent,
+    this.showBackButton = true,
+    super.key,
+  });
 
   /// ViewModel 提供的完整不可变状态。
   final BookshelfUiState state;
   /// 用户操作统一入口。
   final ValueChanged<BookshelfIntent> onIntent;
+
+  /// 普通模式顶部栏是否展示返回按钮。
+  final bool showBackButton;
 
   /// 构建选择模式或普通模式顶部栏和共享页面状态。
   @override
@@ -37,11 +45,14 @@ final class BookshelfScreen extends StatelessWidget {
   /// 构建普通顶部栏。
   PreferredSizeWidget _normalAppBar() {
     return AppBar(
-      leading: IconButton(
-        onPressed: () => onIntent(const BackFromBookshelfIntent()),
-        icon: const Icon(Icons.arrow_back),
-        tooltip: '返回',
-      ),
+      automaticallyImplyLeading: false,
+      leading: showBackButton
+          ? IconButton(
+              onPressed: () => onIntent(const BackFromBookshelfIntent()),
+              icon: const Icon(Icons.arrow_back),
+              tooltip: '返回',
+            )
+          : null,
       title: const Text('书架'),
       actions: <Widget>[
         IconButton(
@@ -133,10 +144,28 @@ final class _BookshelfControls extends StatelessWidget {
             initialValue: state.query,
             onChanged: (String value) => onIntent(ChangeBookshelfQueryIntent(value)),
             decoration: InputDecoration(
-              isDense: true,
-              hintText: '搜索书名、作者、来源或分类',
-              prefixIcon: const Icon(Icons.search),
-              border: const OutlineInputBorder(),
+              hintText: '搜索书架',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: SpacingToken.mediumSmall,
+                vertical: SpacingToken.small,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(RadiusToken.pill),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(RadiusToken.pill),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(RadiusToken.pill),
+                borderSide: BorderSide(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 1,
+                ),
+              ),
               suffixIcon: PopupMenuButton<BookshelfSortMode>(
                 tooltip: '选择排序',
                 icon: const Icon(Icons.sort),
@@ -313,8 +342,8 @@ final class _BookshelfList extends StatelessWidget {
             onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
             onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
             leading: SizedBox(
-              width: 48,
-              height: 64,
+              width: 28,
+              height: 40,
               child: BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面'),
             ),
             title: Text(item.book.name),
@@ -357,15 +386,28 @@ final class _BookshelfGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        /// 根据可用宽度计算列数，至少两列。
-        final int columns = (constraints.maxWidth / 150).floor().clamp(2, 6).toInt();
+        /// 宽屏下把封面网格约束在统一内容宽度内的水平留白。
+        final double horizontalPadding = constraints.maxWidth > LayoutToken.contentMaxWidth
+            ? (constraints.maxWidth - LayoutToken.contentMaxWidth) / 2
+            : SpacingToken.medium;
+        /// 根据实际内容宽度计算列数，至少两列且最多六列。
+        final double contentWidth = constraints.maxWidth - horizontalPadding * 2;
+        /// 每个书籍卡片期望占用的宽度，在上一版紧凑值上继续缩小约 30%。
+        const double targetTileWidth = 88;
+        /// 通过卡片左右留白缩小书籍视觉宽度，同时保持封面顶部继续铺满卡片。
+        const double cardHorizontalInset = 4;
+        /// 当前响应式网格列数，手机通常显示三列，宽屏最多显示十列。
+        final int columns = (contentWidth / targetTileWidth).floor().clamp(3, 10).toInt();
         return GridView.builder(
-          padding: const EdgeInsets.all(SpacingToken.medium),
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPadding,
+            vertical: SpacingToken.medium,
+          ),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            crossAxisSpacing: SpacingToken.medium,
-            mainAxisSpacing: SpacingToken.medium,
-            childAspectRatio: 0.62,
+            crossAxisSpacing: SpacingToken.small,
+            mainAxisSpacing: SpacingToken.small,
+            childAspectRatio: 0.64,
           ),
           itemCount: state.books.length,
           itemBuilder: (BuildContext context, int index) {
@@ -373,49 +415,57 @@ final class _BookshelfGrid extends StatelessWidget {
             final BookshelfBookItem item = state.books[index];
             /// 是否已选择。
             final bool selected = state.selectedBookUrls.contains(item.book.bookUrl);
-            return Card(
-              key: ValueKey<String>(item.book.bookUrl),
-              color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
-                onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Expanded(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: <Widget>[
-                          BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面', borderRadius: BorderRadius.zero),
-                          if (item.unreadChapterCount > 0)
-                            Positioned(top: 6, right: 6, child: Badge(label: Text('${item.unreadChapterCount}'))),
-                          if (selected)
-                            const Positioned(top: 6, left: 6, child: Icon(Icons.check_circle)),
-                          if (!state.selectionMode)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: IconButton.filledTonal(
-                                onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
-                                icon: const Icon(Icons.info_outline),
-                                tooltip: '书籍详情',
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: cardHorizontalInset),
+              child: Card(
+                key: ValueKey<String>(item.book.bookUrl),
+                color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
+                  onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: <Widget>[
+                            BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面', borderRadius: BorderRadius.zero),
+                            if (item.unreadChapterCount > 0)
+                              Positioned(top: 4, right: 4, child: Badge(label: Text('${item.unreadChapterCount}'))),
+                            if (selected)
+                              const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
+                            if (!state.selectionMode)
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: IconButton(
+                                  onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
+                                  icon: const Icon(Icons.info_outline, size: 16),
+                                  tooltip: '书籍详情',
+                                ),
                               ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(SpacingToken.xSmall),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              item.book.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodyMedium,
                             ),
-                        ],
+                            Text(item.book.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                          ],
+                        ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(SpacingToken.small),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(item.book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          Text(item.book.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );

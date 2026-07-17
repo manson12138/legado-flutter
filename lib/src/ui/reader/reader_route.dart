@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
@@ -11,7 +12,9 @@ import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../../platform/reader_platform_service.dart';
 import '../theme/app_tokens.dart';
+import 'reader_action_sheets.dart';
 import 'reader_contract.dart';
+import 'reader_settings_sheet.dart';
 import 'reader_screen.dart';
 import 'reader_view_model.dart';
 
@@ -54,6 +57,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   /// 瞬时滚动控制器，不写入业务状态。
   final ScrollController _scrollController = ScrollController();
 
+  /// 阅读器键盘监听焦点，用于接收桌面键盘和 Android 音量键事件。
+  final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'ReaderVolumeKeyFocus');
+
   /// 系统栏和屏幕常亮平台服务。
   final ReaderPlatformService _platformService = const MethodChannelReaderPlatformService();
 
@@ -62,6 +68,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
 
   /// 最近已经执行的字符锚点恢复请求编号。
   int _lastRestoreRequestId = -1;
+
+  /// 阅读器系统信息刷新定时器，用于轮询电量等低频信息。
+  Timer? _systemInfoTimer;
 
   /// 程序化退出前允许 Navigator 真正弹出当前路由。
   bool _allowPop = false;
@@ -87,6 +96,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       restoreReadingProgress: widget.dependencies.restoreReadingProgress,
       saveReadingProgress: widget.dependencies.saveReadingProgress,
       bookmarkGateway: widget.dependencies.bookmarkGateway,
+      replaceRuleGateway: widget.dependencies.replaceRuleGateway,
       cacheGateway: widget.dependencies.readerCacheGateway,
       coordinator: widget.dependencies.createReadBookCoordinator(),
       logger: widget.dependencies.logger,
@@ -115,8 +125,12 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       unawaited(
         _platformService.enterReader(
           keepScreenOn: _viewModel.state.config.keepScreenOn,
+          useSystemBrightness: _viewModel.state.config.useSystemBrightness,
+          readerBrightness: _viewModel.state.config.readerBrightness,
+          orientationMode: _viewModel.state.config.orientationMode,
         ),
       );
+      unawaited(_refreshSystemInfo());
       return;
     }
     if (state == AppLifecycleState.inactive ||
@@ -150,18 +164,34 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       return;
     }
     switch (effect) {
-      case EnterReaderSystemEffect(keepScreenOn: final bool keepScreenOn):
+      case EnterReaderSystemEffect(config: final ReaderDisplayConfig config):
         /// 【搜书诊断日志】收到该 Effect 表示书籍、目录和阅读配置初始化成功。
         widget.dependencies.logger.info(
           tag: bookReaderEntryLogTag,
           message: '阅读器初始化通过，进入阅读系统模式 '
-              'bookId=${appLogDiagnosticId(widget.bookUrl)} keepScreenOn=$keepScreenOn',
+              'bookId=${appLogDiagnosticId(widget.bookUrl)} keepScreenOn=${config.keepScreenOn}',
         );
-        unawaited(_platformService.enterReader(keepScreenOn: keepScreenOn));
-      case UpdateReaderSystemEffect(keepScreenOn: final bool keepScreenOn):
-        unawaited(_platformService.setKeepScreenOn(keepScreenOn));
+        unawaited(
+          _platformService.enterReader(
+            keepScreenOn: config.keepScreenOn,
+            useSystemBrightness: config.useSystemBrightness,
+            readerBrightness: config.readerBrightness,
+            orientationMode: config.orientationMode,
+          ),
+        );
+        _startSystemInfoTimer();
+      case UpdateReaderSystemEffect(config: final ReaderDisplayConfig config):
+        unawaited(_platformService.setKeepScreenOn(config.keepScreenOn));
+        unawaited(
+          _platformService.setBrightness(
+            useSystemBrightness: config.useSystemBrightness,
+            value: config.readerBrightness,
+          ),
+        );
+        unawaited(_platformService.setOrientation(config.orientationMode));
       case ExitReaderSystemEffect():
         unawaited(_platformService.exitReader());
+        _stopSystemInfoTimer();
       case CloseReaderRouteEffect():
         widget.dependencies.logger.info(
           tag: bookReaderEntryLogTag,
@@ -179,6 +209,11 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           }
         });
       case ShowReaderMessageEffect(message: final String message):
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      case CopyReaderTextEffect(text: final String text, message: final String message):
+        unawaited(Clipboard.setData(ClipboardData(text: text)));
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(message)));
@@ -211,6 +246,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     if (result == null) {
       await _platformService.enterReader(
         keepScreenOn: _viewModel.state.config.keepScreenOn,
+        useSystemBrightness: _viewModel.state.config.useSystemBrightness,
+        readerBrightness: _viewModel.state.config.readerBrightness,
+        orientationMode: _viewModel.state.config.orientationMode,
       );
       return;
     }
@@ -230,6 +268,100 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         ),
       ),
     );
+  }
+
+  /// 启动低频系统信息刷新，避免每帧读取电量。
+  void _startSystemInfoTimer() {
+    _systemInfoTimer?.cancel();
+    unawaited(_refreshSystemInfo());
+    _systemInfoTimer = Timer.periodic(const Duration(minutes: 1), (Timer timer) {
+      unawaited(_refreshSystemInfo());
+    });
+  }
+
+  /// 停止系统信息刷新。
+  void _stopSystemInfoTimer() {
+    _systemInfoTimer?.cancel();
+    _systemInfoTimer = null;
+  }
+
+  /// 从平台读取电量等系统信息并发送给 ViewModel。
+  Future<void> _refreshSystemInfo() async {
+    if (!mounted) {
+      return;
+    }
+    /// 平台返回的电量百分比；为空表示宿主不可用或系统拒绝。
+    final int? batteryLevel = await _platformService.getBatteryLevel();
+    if (!mounted) {
+      return;
+    }
+    _viewModel.onIntent(UpdateReaderSystemInfoIntent(batteryLevel: batteryLevel));
+  }
+
+  /// 处理音量键翻页；打开面板或用户关闭开关时不拦截系统按键。
+  void _handleReaderKey(KeyEvent event, ReaderUiState state) {
+    if (event is! KeyDownEvent ||
+        state.loadState != ReaderLoadState.ready ||
+        state.activeSheet != null ||
+        state.config.readingMode != ReaderReadingMode.continuous ||
+        !state.config.volumeKeyTurnPage) {
+      return;
+    }
+    /// 当前物理或逻辑按键。
+    final LogicalKeyboardKey logicalKey = event.logicalKey;
+    if (logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+      _openPreviousContinuousPageOrChapter(state);
+      return;
+    }
+    if (logicalKey == LogicalKeyboardKey.audioVolumeDown) {
+      _openNextContinuousPageOrChapter(state);
+    }
+  }
+
+  /// 连续阅读模式下优先向上滚动一个视口，到达顶部后进入上一章。
+  void _openPreviousContinuousPageOrChapter(ReaderUiState state) {
+    if (_scrollController.hasClients) {
+      /// 当前连续阅读滚动位置。
+      final ScrollPosition position = _scrollController.position;
+      /// 向上翻一屏后的目标像素。
+      final double target = (position.pixels - position.viewportDimension)
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      if (target < position.pixels) {
+        _scrollController.animateTo(
+          target,
+          duration: DurationToken.medium,
+          curve: AnimationToken.standard,
+        );
+        return;
+      }
+    }
+    if (state.canGoPrevious) {
+      _viewModel.onIntent(const OpenPreviousChapterIntent());
+    }
+  }
+
+  /// 连续阅读模式下优先向下滚动一个视口，到达底部后进入下一章。
+  void _openNextContinuousPageOrChapter(ReaderUiState state) {
+    if (_scrollController.hasClients) {
+      /// 当前连续阅读滚动位置。
+      final ScrollPosition position = _scrollController.position;
+      /// 向下翻一屏后的目标像素。
+      final double target = (position.pixels + position.viewportDimension)
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      if (target > position.pixels) {
+        _scrollController.animateTo(
+          target,
+          duration: DurationToken.medium,
+          curve: AnimationToken.standard,
+        );
+        return;
+      }
+    }
+    if (state.canGoNext) {
+      _viewModel.onIntent(const OpenNextChapterIntent());
+    }
   }
 
   /// 根据稳定字符锚点换算本次布局的临时滚动偏移，字体变化后可重复执行。
@@ -287,7 +419,11 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       );
       if (identical(sheet, _shownSheet)) {
         _shownSheet = null;
-        _viewModel.onIntent(const DismissReaderSheetIntent());
+        if (identical(_viewModel.state.activeSheet, sheet)) {
+          _viewModel.onIntent(const DismissReaderSheetIntent());
+        } else {
+          _syncSheet(_viewModel.state.activeSheet);
+        }
       }
     });
   }
@@ -296,7 +432,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   Widget _buildSheet(ReaderSheet sheet, ReaderUiState state) {
     return switch (sheet) {
       ReaderTocSheet() => _ReaderTocSheetBody(state: state, onIntent: _viewModel.onIntent),
-      ReaderSettingsSheet() => _ReaderSettingsSheetBody(
+      ReaderSettingsSheet() => ReaderSettingsSheetBody(
         initialConfig: state.config,
         onApply: (ReaderDisplayConfig config) {
           Navigator.of(context).pop();
@@ -307,6 +443,16 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         bookmarks: state.bookmarks,
         onIntent: _viewModel.onIntent,
       ),
+      ReaderSearchSheet() => ReaderSearchSheetBody(
+        state: state,
+        onIntent: _viewModel.onIntent,
+      ),
+      ReaderBookmarkEditSheet(bookmark: final Bookmark bookmark) => ReaderBookmarkEditSheetBody(
+        bookmark: bookmark,
+        onIntent: _viewModel.onIntent,
+      ),
+      ReaderReplaceInfoSheet() => ReaderReplaceInfoSheetBody(state: state),
+      ReaderFutureFeaturesSheet() => const ReaderFutureFeaturesSheetBody(),
     };
   }
 
@@ -314,8 +460,10 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _stopSystemInfoTimer();
     _effectSubscription.cancel();
     _scrollController.dispose();
+    _keyboardFocusNode.dispose();
     _viewModel.dispose();
     unawaited(_platformService.exitReader());
     super.dispose();
@@ -339,10 +487,17 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           final ReaderUiState state = snapshot.data ?? _viewModel.state;
           _restoreScrollPosition(state);
           _syncSheet(state.activeSheet);
-          return ReaderScreen(
-            state: state,
-            onIntent: _viewModel.onIntent,
-            scrollController: _scrollController,
+          return KeyboardListener(
+            focusNode: _keyboardFocusNode,
+            autofocus: true,
+            onKeyEvent: (KeyEvent event) {
+              _handleReaderKey(event, state);
+            },
+            child: ReaderScreen(
+              state: state,
+              onIntent: _viewModel.onIntent,
+              scrollController: _scrollController,
+            ),
           );
         },
       ),
@@ -351,7 +506,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
 }
 
 /// 展示完整目录并高亮当前章节。
-final class _ReaderTocSheetBody extends StatelessWidget {
+final class _ReaderTocSheetBody extends StatefulWidget {
   /// 创建目录面板。
   const _ReaderTocSheetBody({required this.state, required this.onIntent});
 
@@ -361,31 +516,83 @@ final class _ReaderTocSheetBody extends StatelessWidget {
   /// 阅读 Intent 入口。
   final ValueChanged<ReaderIntent> onIntent;
 
+  /// 创建目录筛选和滚动定位状态。
+  @override
+  State<_ReaderTocSheetBody> createState() => _ReaderTocSheetBodyState();
+}
+
+/// 持有目录显示选项和滚动控制器。
+final class _ReaderTocSheetBodyState extends State<_ReaderTocSheetBody> {
+  /// 每一行目录的近似高度，用于初始定位当前章节。
+  static const double _rowExtent = 56;
+
+  /// 是否显示卷标题。
+  bool _showVolumes = true;
+
+  /// 目录滚动控制器。
+  late final ScrollController _scrollController;
+
+  /// 初始化目录滚动位置。
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController(
+      initialScrollOffset: _initialOffset(widget.state),
+    );
+  }
+
+  /// 释放目录滚动控制器。
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   /// 构建可跳转目录列表。
   @override
   Widget build(BuildContext context) {
+    /// 当前筛选后的目录行。
+    final List<int> visibleIndexes = _visibleChapterIndexes(widget.state);
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.78,
       child: Column(
         children: <Widget>[
-          const ListTile(title: Text('目录')),
+          ListTile(
+            title: const Text('目录'),
+            subtitle: Text('当前第 ${widget.state.currentChapterIndex + 1} 章'),
+            trailing: FilterChip(
+              selected: _showVolumes,
+              label: const Text('卷标题'),
+              onSelected: (bool selected) {
+                setState(() {
+                  _showVolumes = selected;
+                });
+              },
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
             child: ListView.builder(
-              itemCount: state.chapters.length,
+              controller: _scrollController,
+              itemExtent: _rowExtent,
+              itemCount: visibleIndexes.length,
               itemBuilder: (BuildContext context, int index) {
+                /// 原始章节索引。
+                final int chapterIndex = visibleIndexes[index];
                 /// 当前目录章节。
-                final BookChapter chapter = state.chapters[index];
+                final BookChapter chapter = widget.state.chapters[chapterIndex];
                 return ListTile(
-                  selected: index == state.currentChapterIndex,
+                  selected: chapterIndex == widget.state.currentChapterIndex,
                   enabled: !chapter.isVolume,
-                  leading: chapter.isVolume ? const Icon(Icons.folder_outlined) : Text('${index + 1}'),
+                  leading: chapter.isVolume
+                      ? const Icon(Icons.folder_outlined)
+                      : Text('${chapterIndex + 1}'),
                   title: Text(chapter.title),
                   onTap: chapter.isVolume
                       ? null
                       : () {
                           Navigator.of(context).pop();
-                          onIntent(OpenReaderChapterIntent(index));
+                          widget.onIntent(OpenReaderChapterIntent(chapterIndex));
                         },
                 );
               },
@@ -395,161 +602,31 @@ final class _ReaderTocSheetBody extends StatelessWidget {
       ),
     );
   }
-}
 
-/// 在本地草稿中调整显示配置，仅点击应用时持久化并触发重排。
-final class _ReaderSettingsSheetBody extends StatefulWidget {
-  /// 创建显示设置面板。
-  const _ReaderSettingsSheetBody({required this.initialConfig, required this.onApply});
-
-  /// 打开面板时的配置快照。
-  final ReaderDisplayConfig initialConfig;
-
-  /// 应用完整配置回调。
-  final ValueChanged<ReaderDisplayConfig> onApply;
-
-  /// 创建设置面板状态。
-  @override
-  State<_ReaderSettingsSheetBody> createState() => _ReaderSettingsSheetBodyState();
-}
-
-/// 持有尚未应用的滑杆和颜色草稿。
-final class _ReaderSettingsSheetBodyState extends State<_ReaderSettingsSheetBody> {
-  /// 当前草稿配置。
-  late ReaderDisplayConfig _draft;
-
-  /// 初始化草稿。
-  @override
-  void initState() {
-    super.initState();
-    _draft = widget.initialConfig;
+  /// 计算当前章节在筛选列表中的初始滚动偏移。
+  double _initialOffset(ReaderUiState state) {
+    /// 当前筛选后的目录行。
+    final List<int> indexes = _visibleChapterIndexes(state);
+    /// 当前章节在筛选列表中的位置。
+    final int visibleIndex = indexes.indexOf(state.currentChapterIndex);
+    if (visibleIndex <= 0) {
+      return 0;
+    }
+    return (visibleIndex * _rowExtent - _rowExtent * 2).clamp(0, double.infinity).toDouble();
   }
 
-  /// 构建字号、行距、段距、边距、颜色、替换和常亮设置。
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(SpacingToken.medium),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Text('显示设置', style: Theme.of(context).textTheme.titleLarge),
-          _slider(
-            label: '字号 ${_draft.fontSize.toStringAsFixed(0)}',
-            value: _draft.fontSize,
-            min: 14,
-            max: 32,
-            divisions: 18,
-            onChanged: (double value) => _update(_draft.copyWith(fontSize: value)),
-          ),
-          _slider(
-            label: '行距 ${_draft.lineHeight.toStringAsFixed(1)}',
-            value: _draft.lineHeight,
-            min: 1.2,
-            max: 2.4,
-            divisions: 12,
-            onChanged: (double value) => _update(_draft.copyWith(lineHeight: value)),
-          ),
-          _slider(
-            label: '段距 ${_draft.paragraphSpacing.toStringAsFixed(0)}',
-            value: _draft.paragraphSpacing,
-            min: 0,
-            max: 32,
-            divisions: 16,
-            onChanged: (double value) => _update(_draft.copyWith(paragraphSpacing: value)),
-          ),
-          _slider(
-            label: '左右边距 ${_draft.horizontalPadding.toStringAsFixed(0)}',
-            value: _draft.horizontalPadding,
-            min: 8,
-            max: 48,
-            divisions: 20,
-            onChanged: (double value) => _update(_draft.copyWith(horizontalPadding: value)),
-          ),
-          const SizedBox(height: SpacingToken.small),
-          const Text('阅读配色'),
-          Wrap(
-            spacing: SpacingToken.small,
-            children: <Widget>[
-              _colorChoice('纸张', 0xFFFFFBF2, 0xFF2B2925),
-              _colorChoice('护眼', 0xFFE7F0DB, 0xFF263322),
-              _colorChoice('深色', 0xFF171A17, 0xFFDDE5DA),
-            ],
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _draft.useReplaceRules,
-            title: const Text('应用替换规则'),
-            subtitle: const Text('关闭后从原始正文缓存重新生成显示内容'),
-            onChanged: (bool value) => _update(_draft.copyWith(useReplaceRules: value)),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _draft.keepScreenOn,
-            title: const Text('阅读时保持屏幕常亮'),
-            onChanged: (bool value) => _update(_draft.copyWith(keepScreenOn: value)),
-          ),
-          const SizedBox(height: SpacingToken.medium),
-          FilledButton(
-            onPressed: () => widget.onApply(_draft),
-            child: const Text('应用'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 构建带标签的显示配置滑杆。
-  Widget _slider({
-    required String label,
-    required double value,
-    required double min,
-    required double max,
-    required int divisions,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(label),
-        Slider(
-          value: value,
-          min: min,
-          max: max,
-          divisions: divisions,
-          onChanged: onChanged,
-        ),
-      ],
-    );
-  }
-
-  /// 构建一个背景与文字颜色组合选项。
-  Widget _colorChoice(String label, int background, int foreground) {
-    /// 当前是否选择该配色。
-    final bool selected = _draft.backgroundColorValue == background &&
-        _draft.textColorValue == foreground;
-    return ChoiceChip(
-      selected: selected,
-      avatar: CircleAvatar(backgroundColor: Color(background)),
-      label: Text(label),
-      onSelected: (bool value) {
-        if (value) {
-          _update(
-            _draft.copyWith(
-              backgroundColorValue: background,
-              textColorValue: foreground,
-            ),
-          );
-        }
-      },
-    );
-  }
-
-  /// 更新本地草稿并刷新面板控件。
-  void _update(ReaderDisplayConfig config) {
-    setState(() {
-      _draft = config;
-    });
+  /// 根据卷标题开关生成可见目录索引。
+  List<int> _visibleChapterIndexes(ReaderUiState state) {
+    /// 可见目录索引。
+    final List<int> indexes = <int>[];
+    for (int index = 0; index < state.chapters.length; index += 1) {
+      /// 当前章节。
+      final BookChapter chapter = state.chapters[index];
+      if (_showVolumes || !chapter.isVolume || index == state.currentChapterIndex) {
+        indexes.add(index);
+      }
+    }
+    return indexes;
   }
 }
 
@@ -571,7 +648,16 @@ final class _ReaderBookmarksSheetBody extends StatelessWidget {
       height: MediaQuery.sizeOf(context).height * 0.65,
       child: Column(
         children: <Widget>[
-          const ListTile(title: Text('书签')),
+          ListTile(
+            title: const Text('书签'),
+            trailing: TextButton.icon(
+              onPressed: bookmarks.isEmpty
+                  ? null
+                  : () => onIntent(const ExportReaderBookmarksIntent()),
+              icon: const Icon(Icons.content_copy),
+              label: const Text('导出'),
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
             child: bookmarks.isEmpty
@@ -592,10 +678,25 @@ final class _ReaderBookmarksSheetBody extends StatelessWidget {
                           Navigator.of(context).pop();
                           onIntent(OpenReaderBookmarkIntent(bookmark));
                         },
-                        trailing: IconButton(
-                          onPressed: () => onIntent(DeleteReaderBookmarkIntent(bookmark)),
-                          icon: const Icon(Icons.delete_outline),
-                          tooltip: '删除书签',
+                        trailing: Wrap(
+                          spacing: SpacingToken.xSmall,
+                          children: <Widget>[
+                            IconButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                onIntent(
+                                  ShowReaderSheetIntent(ReaderBookmarkEditSheet(bookmark)),
+                                );
+                              },
+                              icon: const Icon(Icons.edit_outlined),
+                              tooltip: '编辑书签',
+                            ),
+                            IconButton(
+                              onPressed: () => _confirmDelete(context, bookmark),
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: '删除书签',
+                            ),
+                          ],
                         ),
                       );
                     },
@@ -604,5 +705,33 @@ final class _ReaderBookmarksSheetBody extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 二次确认后删除书签，避免误触丢失备注。
+  Future<void> _confirmDelete(BuildContext context, Bookmark bookmark) async {
+    /// 用户确认结果。
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              title: const Text('删除书签'),
+              content: const Text('确定删除这条书签吗？'),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('删除'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (confirmed) {
+      onIntent(DeleteReaderBookmarkIntent(bookmark));
+    }
   }
 }

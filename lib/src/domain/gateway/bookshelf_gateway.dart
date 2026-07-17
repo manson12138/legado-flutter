@@ -9,6 +9,9 @@ abstract interface class BookshelfGateway {
   /// 按未经规范化的书籍 URL 查询书架书。
   Future<Book?> getBook(String bookUrl);
 
+  /// 按书名和作者精确查询最近阅读的一条书架记录。
+  Future<Book?> getShelfBookConflict(String name, String author);
+
   /// 在一个事务中写入书籍及可选完整目录。
   Future<void> addBook(Book book, List<BookChapter> chapters);
 
