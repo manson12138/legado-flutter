@@ -161,6 +161,8 @@ Map<String, Object?> bookSourceToMap(BookSource source) => <String, Object?>{
       'customButton': boolToSqlite(source.customButton),
       'homepageModules': source.homepageModules,
       'extraFieldsJson': source.extraFieldsJson,
+      'sourceScore': source.sourceScore,
+      'pinned': boolToSqlite(source.pinned),
     };
 
 /// 从 `book_sources` 表行恢复 [BookSource]。
@@ -202,6 +204,8 @@ BookSource bookSourceFromMap(Map<String, Object?> row) {
     customButton: reader.requiredBool('customButton'),
     homepageModules: reader.nullableString('homepageModules'),
     extraFieldsJson: reader.nullableString('extraFieldsJson'),
+    sourceScore: reader.requiredInt('sourceScore'),
+    pinned: reader.requiredBool('pinned'),
   );
 }
 

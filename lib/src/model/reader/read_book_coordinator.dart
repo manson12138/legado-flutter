@@ -347,10 +347,26 @@ final class ReadBookCoordinator {
         throw const ReadBookException('原书源已不存在');
       }
       /// 普通规则或 JavaScript 混合链路解析后的正文页。
-      final ParsedContentPage parsed = await _standardService.loadContent(
-        source: source,
-        chapter: chapter,
-        cancellationToken: token,
+      final ParsedContentPage parsed;
+      try {
+        parsed = await _standardService.loadContent(
+          source: source,
+          chapter: chapter,
+          cancellationToken: token,
+        );
+      } catch (error) {
+        /// 只在真正发生网络请求的分支里计分，缓存命中不算；失败扣一分。
+        unawaited(
+          _sourceGateway
+              .recordSourceOutcome(source.bookSourceUrl, delta: -1)
+              .catchError((Object _) {}),
+        );
+        rethrow;
+      }
+      unawaited(
+        _sourceGateway
+            .recordSourceOutcome(source.bookSourceUrl, delta: 1)
+            .catchError((Object _) {}),
       );
       _logger.info(
         tag: bookReaderContentLogTag,

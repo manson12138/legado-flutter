@@ -714,8 +714,13 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
             Expanded(
               child: _BookInfoActionCard(
                 icon: Icons.manage_search,
-                label: state.group.books.length > 1 || state.inBookshelf ? '书源 / 换源' : '书源',
+                label: state.switchingSource
+                    ? '切换中'
+                    : state.group.books.length > 1 || state.inBookshelf
+                        ? '书源 / 换源'
+                        : '书源',
                 enabled: state.group.books.length > 1 || (state.inBookshelf && state.book != null && state.book?.origin != 'loc_book'),
+                loading: state.switchingSource,
                 onTap: state.group.books.length > 1
                     ? () => _showSourceChoices(context, state, onIntent)
                     : () => onIntent(const OpenBookInfoFullSourceChangeIntent()),
@@ -1169,6 +1174,7 @@ final class _BookInfoActionCard extends StatelessWidget {
     required this.label,
     required this.enabled,
     required this.onTap,
+    this.loading = false,
   });
 
   /// 操作图标。
@@ -1183,13 +1189,16 @@ final class _BookInfoActionCard extends StatelessWidget {
   /// 点击回调；为空时只展示状态。
   final VoidCallback? onTap;
 
+  /// 是否正在后台执行该操作；为 true 时用小转圈替换图标并禁用点击，不影响卡片本身继续显示。
+  final bool loading;
+
   /// 构建稳定高度的操作卡，避免状态文案切换时布局跳动。
   @override
   Widget build(BuildContext context) {
     /// 当前主题颜色。
     final ColorScheme colors = Theme.of(context).colorScheme;
-    /// 实际点击回调。
-    final VoidCallback? action = enabled ? onTap : null;
+    /// 实际点击回调；加载中禁止重复触发。
+    final VoidCallback? action = enabled && !loading ? onTap : null;
     return Semantics(
       button: action != null,
       enabled: enabled,
@@ -1207,7 +1216,14 @@ final class _BookInfoActionCard extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Icon(icon, color: enabled ? colors.primary : colors.onSurfaceVariant),
+                  if (loading)
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: colors.primary),
+                    )
+                  else
+                    Icon(icon, color: enabled ? colors.primary : colors.onSurfaceVariant),
                   const SizedBox(height: SpacingToken.xSmall),
                   Text(
                     label,

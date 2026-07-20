@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -112,6 +112,15 @@ final class LegadoDatabase {
         }
         if (oldVersion < 3) {
           await _createSchemaV3(upgradedDatabase);
+        }
+        if (oldVersion < 4) {
+          logOperation(operation: 'ALTER_TABLE', table: 'book_sources');
+          await upgradedDatabase.execute(
+            'ALTER TABLE book_sources ADD COLUMN sourceScore INTEGER NOT NULL DEFAULT 0',
+          );
+          await upgradedDatabase.execute(
+            'ALTER TABLE book_sources ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0',
+          );
         }
       },
     );
@@ -217,6 +226,8 @@ final class LegadoDatabase {
         customButton INTEGER NOT NULL DEFAULT 0,
         homepageModules TEXT,
         extraFieldsJson TEXT,
+        sourceScore INTEGER NOT NULL DEFAULT 0,
+        pinned INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (bookSourceUrl)
       )
     ''');
