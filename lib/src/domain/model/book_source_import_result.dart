@@ -28,6 +28,7 @@ final class BookSourceImportResult {
     required this.overwritten,
     required this.skipped,
     required this.invalid,
+    this.blockedAdult = 0,
     List<BookSourceImportIssue> issues = const <BookSourceImportIssue>[],
   }) : issues = List<BookSourceImportIssue>.unmodifiable(issues);
 
@@ -45,6 +46,9 @@ final class BookSourceImportResult {
 
   /// 无法转换为有效书源的数量。
   final int invalid;
+
+  /// 因命中成人内容屏蔽而拒绝导入的数量。
+  final int blockedAdult;
 
   /// 每条无效记录的安全错误摘要。
   final List<BookSourceImportIssue> issues;

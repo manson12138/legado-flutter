@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../../api/http/http_contract.dart';
 import '../../api/js/js_engine.dart';
+import '../../domain/gateway/adult_content_gateway.dart';
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
@@ -18,11 +19,13 @@ final class BookSearchCoordinator {
   const BookSearchCoordinator({
     required BookSourceGateway sourceGateway,
     required StandardBookSourceService standardService,
+    required AdultContentGateway adultContentGateway,
     required HttpCancellationTokenFactory cancellationTokenFactory,
     required AppLogger logger,
     this.maximumConcurrency = 4,
   }) : _sourceGateway = sourceGateway,
        _standardService = standardService,
+       _adultContentGateway = adultContentGateway,
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger;
 
@@ -31,6 +34,9 @@ final class BookSearchCoordinator {
 
   /// 普通规则搜索服务。
   final StandardBookSourceService _standardService;
+
+  /// 成人内容屏蔽边界；搜索、整书换源和单章换源共用同一份结果过滤。
+  final AdultContentGateway _adultContentGateway;
 
   /// 每个书源独立取消令牌工厂。
   final HttpCancellationTokenFactory _cancellationTokenFactory;
@@ -132,22 +138,24 @@ final class BookSearchCoordinator {
           final Duration timeout = Duration(
             milliseconds: source.respondTime.clamp(10000, 60000).toInt(),
           );
-          /// 当前书源结果。
-          final List<SearchBook> books = await _standardService
-              .search(
-                source: source,
-                keyword: keyword,
-                page: 1,
-                receivedAt: DateTime.now().millisecondsSinceEpoch,
-                cancellationToken: token,
-              )
-              .timeout(
-                timeout,
-                onTimeout: () {
-                  token.cancel('单书源搜索超时');
-                  throw TimeoutException('单书源搜索超时');
-                },
-              );
+          /// 当前书源结果，已按成人内容屏蔽设置过滤。
+          final List<SearchBook> books = await _filterAdultBooks(
+            await _standardService
+                .search(
+                  source: source,
+                  keyword: keyword,
+                  page: 1,
+                  receivedAt: DateTime.now().millisecondsSinceEpoch,
+                  cancellationToken: token,
+                )
+                .timeout(
+                  timeout,
+                  onTimeout: () {
+                    token.cancel('单书源搜索超时');
+                    throw TimeoutException('单书源搜索超时');
+                  },
+                ),
+          );
           if (!run.isCancelled) {
             succeeded += 1;
             _logger.info(
@@ -257,6 +265,28 @@ final class BookSearchCoordinator {
       message: '多书源调度结束 cancelled=${run.isCancelled} completed=$completed/${sources.length} '
           'succeeded=$succeeded failed=$failed elapsedMs=${runStopwatch.elapsedMilliseconds}',
     );
+  }
+
+  /// 按成人内容屏蔽设置过滤单书源结果；屏蔽关闭时原样返回，不逐条判定。
+  Future<List<SearchBook>> _filterAdultBooks(List<SearchBook> books) async {
+    if (books.isEmpty || !await _adultContentGateway.isBlockingEnabled()) {
+      return books;
+    }
+    /// 通过成人内容判定的可展示结果。
+    final List<SearchBook> filtered = <SearchBook>[];
+    for (final SearchBook book in books) {
+      /// 当前结果是否命中成人内容判定。
+      final bool adult = await _adultContentGateway.isAdultBook(
+        name: book.name,
+        author: book.author,
+        kind: book.kind,
+        intro: book.intro,
+      );
+      if (!adult) {
+        filtered.add(book);
+      }
+    }
+    return filtered;
   }
 
   /// 将异常转换为不泄漏请求数据的稳定分类。

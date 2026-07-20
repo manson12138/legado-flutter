@@ -651,6 +651,7 @@ final class _ImportSummaryView extends StatelessWidget {
             Text('覆盖：${result.overwritten}'),
             Text('跳过：${result.skipped}'),
             Text('无效：${result.invalid}'),
+            if (result.blockedAdult > 0) Text('已屏蔽成人内容书源：${result.blockedAdult}'),
             if (result.issues.isNotEmpty) ...<Widget>[
               const SizedBox(height: SpacingToken.medium),
               const Text('失败详情：'),

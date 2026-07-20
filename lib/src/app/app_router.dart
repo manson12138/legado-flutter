@@ -12,6 +12,7 @@ import '../ui/bookshelf/bookshelf_route.dart';
 import '../ui/reader/book_reader_route.dart';
 import '../ui/local_book_import/local_book_import_route.dart';
 import '../ui/log_management/log_management_route.dart';
+import '../ui/about/about_route.dart';
 import '../ui/settings/settings_route.dart';
 import '../help/logging/app_logger.dart';
 import 'app_dependencies.dart';
@@ -65,6 +66,13 @@ final class AppRouter {
           settings: settings,
           builder: (BuildContext context) {
             return LogManagementRoute(dependencies: dependencies);
+          },
+        );
+      case AppRoute.about:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return AboutRoute(dependencies: dependencies);
           },
         );
       case AppRoute.bookSourceManagement:

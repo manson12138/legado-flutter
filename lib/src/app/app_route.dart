@@ -9,6 +9,9 @@ abstract final class AppRoute {
   /// 设置中的沙盒日志管理页面。
   static const String logManagement = '/settings/logs';
 
+  /// “我的”页面中的“关于”页面。
+  static const String about = '/settings/about';
+
   /// M5 书源管理页面。
   static const String bookSourceManagement = '/book-sources';
 

@@ -69,7 +69,7 @@ final class SettingsRoute extends StatelessWidget {
                 Navigator.of(context).pushNamed(AppRoute.logManagement);
               },
               onOpenAbout: () {
-                _showAbout(context);
+                Navigator.of(context).pushNamed(AppRoute.about);
               },
             );
           },
@@ -176,19 +176,6 @@ final class SettingsRoute extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-
-  /// 展示应用名称、当前 Flutter 版本和数据边界说明。
-  void _showAbout(BuildContext context) {
-    showAboutDialog(
-      context: context,
-      applicationName: 'Legado Flutter',
-      applicationVersion: '1.0.0+1',
-      applicationIcon: const Icon(Icons.auto_stories, size: 36),
-      children: const <Widget>[
-        Text('Android 与 iOS 共用的简约阅读客户端。书架、书源和阅读数据默认保存在本机。'),
-      ],
     );
   }
 }

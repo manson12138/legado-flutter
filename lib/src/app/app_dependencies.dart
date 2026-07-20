@@ -26,12 +26,14 @@ import '../data/dao/replace_rule_dao.dart';
 import '../data/dao/download_task_dao.dart';
 import '../data/local/legado_database.dart';
 import '../data/model/book_source_import_decoder.dart';
+import '../data/repository/adult_content_repository.dart';
 import '../data/repository/book_repository.dart';
 import '../data/repository/book_group_repository.dart';
 import '../data/repository/book_source_repository.dart';
 import '../data/repository/download_repository.dart';
 import '../data/repository/search_history_repository.dart';
 import '../data/repository/reader_repository.dart';
+import '../domain/gateway/adult_content_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
 import '../domain/gateway/bookshelf_gateway.dart';
 import '../domain/gateway/book_group_gateway.dart';
@@ -86,6 +88,7 @@ final class AppDependencies {
   const AppDependencies({
     required this.logger,
     required this.logManager,
+    required this.adultContentGateway,
     required this.bookSourceGateway,
     required this.bookshelfGateway,
     required this.bookGroupGateway,
@@ -151,13 +154,6 @@ final class AppDependencies {
     );
     /// M07 用户分组 Repository。
     final BookGroupRepository bookGroupRepository = BookGroupRepository(bookGroupDao);
-    /// 书源 Repository，组合 DAO 与不可信 JSON 解码边界。
-    final BookSourceRepository bookSourceRepository = BookSourceRepository(
-      database,
-      bookSourceDao,
-      cacheDao,
-      const BookSourceImportDecoder(),
-    );
     /// 统一 Dio 实例；随后安装会遮盖认证信息的应用日志拦截器。
     final Dio dio = Dio(
       BaseOptions(
@@ -177,6 +173,21 @@ final class AppDependencies {
     );
     /// 统一 HTTP 实现。
     final UnifiedHttpClient httpClient = DioUnifiedHttpClient(dio, cookieManager);
+    /// 成人内容屏蔽 Repository；供搜索、换源和书源导入共用同一套判定。
+    final AdultContentRepository adultContentRepository = AdultContentRepository(
+      cacheDao,
+      rootBundle,
+      httpClient,
+      logger,
+    );
+    /// 书源 Repository，组合 DAO、不可信 JSON 解码边界与成人内容屏蔽判定。
+    final BookSourceRepository bookSourceRepository = BookSourceRepository(
+      database,
+      bookSourceDao,
+      cacheDao,
+      const BookSourceImportDecoder(),
+      adultContentRepository,
+    );
     /// 扫码书源中的 HTTP/HTTPS 地址下载与字符集解码服务。
     final BookSourceImportTextResolver bookSourceImportTextResolver =
         BookSourceImportTextResolver(
@@ -279,6 +290,7 @@ final class AppDependencies {
     return AppDependencies(
       logger: logger,
       logManager: logManager,
+      adultContentGateway: adultContentRepository,
       bookSourceGateway: bookSourceRepository,
       bookshelfGateway: bookRepository,
       bookGroupGateway: bookGroupRepository,
@@ -322,6 +334,9 @@ final class AppDependencies {
 
   /// 设置页使用的日志文件查看、删除和 ADB 回显能力。
   final AppLogManager logManager;
+
+  /// 成人内容屏蔽领域边界，供搜索、换源和书源导入共用同一套判定。
+  final AdultContentGateway adultContentGateway;
 
   /// 书源领域边界，供后续网络和规则 UseCase 通过构造参数使用。
   final BookSourceGateway bookSourceGateway;
@@ -416,6 +431,7 @@ final class AppDependencies {
     return BookSearchCoordinator(
       sourceGateway: bookSourceGateway,
       standardService: standardBookSourceService,
+      adultContentGateway: adultContentGateway,
       cancellationTokenFactory: createHttpCancellationToken,
       logger: logger,
     );

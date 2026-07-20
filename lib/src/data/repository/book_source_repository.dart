@@ -1,3 +1,4 @@
+import '../../domain/gateway/adult_content_gateway.dart';
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/book_source_import_result.dart';
@@ -18,6 +19,7 @@ final class BookSourceRepository implements BookSourceGateway {
     this._bookSourceDao,
     this._cacheDao,
     this._importDecoder,
+    this._adultContentGateway,
   );
 
   /// 用于导入事务和提交后通知的数据库入口。
@@ -28,6 +30,8 @@ final class BookSourceRepository implements BookSourceGateway {
   final CacheDao _cacheDao;
   /// 隔离外部 JSON 和持久化实体的书源解码器。
   final BookSourceImportDecoder _importDecoder;
+  /// 成人内容屏蔽边界，导入时拒绝命中的书源。
+  final AdultContentGateway _adultContentGateway;
 
   /// 观察全部书源，不向上层暴露 sqflite 流或行对象。
   @override
@@ -87,12 +91,23 @@ final class BookSourceRepository implements BookSourceGateway {
         int overwritten = 0;
         /// 跳过书源数量。
         int skipped = 0;
+        /// 因命中成人内容屏蔽而拒绝导入的数量。
+        int blockedAdult = 0;
         await _database.transaction<void>((transaction) async {
           /// 同批已经处理的 URL，重复记录只采用首条。
           final Set<String> seenUrls = <String>{};
           for (final BookSource source in batch.sources) {
             if (!seenUrls.add(source.bookSourceUrl)) {
               skipped += 1;
+              continue;
+            }
+            if (await _adultContentGateway.isAdultSource(
+              name: source.bookSourceName,
+              group: source.bookSourceGroup,
+              comment: source.bookSourceComment,
+              url: source.bookSourceUrl,
+            )) {
+              blockedAdult += 1;
               continue;
             }
             /// 当前数据库中的同 URL 书源。
@@ -121,6 +136,7 @@ final class BookSourceRepository implements BookSourceGateway {
           overwritten: overwritten,
           skipped: skipped,
           invalid: batch.issues.length,
+          blockedAdult: blockedAdult,
           issues: batch.issues,
         );
       });
