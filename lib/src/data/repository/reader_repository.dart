@@ -412,7 +412,7 @@ final class ReaderRepository
     return fallback;
   }
 
-  /// 把持久化名称收窄为受支持的阅读方向策略。
+  /// 把持久化名称收窄为受支持的阅读方向策略；旧缓存缺少该字段时按 App 竖屏锁定默认值回退。
   ReaderOrientationMode _orientationMode(Object? value) {
     if (value is String) {
       for (final ReaderOrientationMode mode in ReaderOrientationMode.values) {
@@ -421,7 +421,7 @@ final class ReaderRepository
         }
       }
     }
-    return ReaderOrientationMode.system;
+    return ReaderOrientationMode.portrait;
   }
 
   /// 生成不泄漏原始 URL 的正文缓存键。

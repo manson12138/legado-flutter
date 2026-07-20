@@ -553,6 +553,8 @@ final class _BookInfoHero extends StatelessWidget {
                     coverUrl: coverUrl,
                     semanticLabel: '${book.name}封面',
                     borderRadius: BorderRadius.circular(RadiusToken.medium),
+                    bookName: book.name,
+                    bookAuthor: book.author,
                   ),
                 ),
               ),

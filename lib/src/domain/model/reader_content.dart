@@ -182,7 +182,7 @@ final class ReaderDisplayConfig {
     this.showBattery = true,
     this.useSystemBrightness = true,
     this.readerBrightness = 0.5,
-    this.orientationMode = ReaderOrientationMode.system,
+    this.orientationMode = ReaderOrientationMode.portrait,
   });
 
   /// 正文字号，单位为逻辑像素。

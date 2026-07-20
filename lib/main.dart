@@ -21,6 +21,11 @@ void main() {
     () async {
       WidgetsFlutterBinding.ensureInitialized();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      // App 固定竖屏，不支持横屏；阅读器可以按单书配置临时切换，退出阅读器后会自行恢复本设置。
+      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
 
       /// 默认日志器写入应用私有沙盒，并同时向设置页提供日志管理能力。
       final FileAppLogger fileLogger = await FileAppLogger.create();

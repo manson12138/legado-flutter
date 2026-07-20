@@ -106,10 +106,13 @@ final class MethodChannelReaderPlatformService implements ReaderPlatformService 
   }
 
   /// 取消阅读器常亮并恢复应用统一 edge-to-edge 系统栏模式。
+  ///
+  /// 方向恢复为竖屏锁定而不是“跟随系统”——App 整体固定竖屏，阅读器允许单书临时
+  /// 跟随系统或锁定横屏，但离开阅读器后必须回到 App 级竖屏锁定，不能遗留成自由旋转。
   @override
   Future<void> exitReader() async {
     await _invokePlatform('exitReader', <String, Object?>{'enabled': false});
-    await setOrientation(ReaderOrientationMode.system);
+    await setOrientation(ReaderOrientationMode.portrait);
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
