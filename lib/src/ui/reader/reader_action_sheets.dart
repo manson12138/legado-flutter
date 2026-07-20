@@ -484,16 +484,6 @@ final class _ReaderFutureFeature {
 /// P4 依赖型能力清单，不把未完成能力伪装成可用按钮。
 const List<_ReaderFutureFeature> _futureFeatures = <_ReaderFutureFeature>[
   _ReaderFutureFeature(
-    icon: Icons.swap_calls,
-    title: '单章换源',
-    reason: '等待 M11 单章候选搜索、章节内容保存和回滚策略。',
-  ),
-  _ReaderFutureFeature(
-    icon: Icons.download_outlined,
-    title: '离线下载',
-    reason: '等待下载队列、范围选择、失败重试和存储策略。',
-  ),
-  _ReaderFutureFeature(
     icon: Icons.record_voice_over_outlined,
     title: '朗读 / TTS',
     reason: '等待音频焦点、后台播放、媒体按钮和 TTS 配置迁移。',

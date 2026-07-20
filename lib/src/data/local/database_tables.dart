@@ -18,4 +18,6 @@ abstract final class DatabaseTables {
   static const String caches = 'caches';
   /// 净化规则表，对应 Android `replace_rules`。
   static const String replaceRules = 'replace_rules';
+  /// 离线下载队列表，Flutter 新增，Android 无对应持久表（队列状态只在内存）。
+  static const String downloadTasks = 'download_tasks';
 }

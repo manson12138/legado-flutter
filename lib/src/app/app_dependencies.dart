@@ -23,11 +23,13 @@ import '../data/dao/cookie_dao.dart';
 import '../data/dao/cache_dao.dart';
 import '../data/dao/bookmark_dao.dart';
 import '../data/dao/replace_rule_dao.dart';
+import '../data/dao/download_task_dao.dart';
 import '../data/local/legado_database.dart';
 import '../data/model/book_source_import_decoder.dart';
 import '../data/repository/book_repository.dart';
 import '../data/repository/book_group_repository.dart';
 import '../data/repository/book_source_repository.dart';
+import '../data/repository/download_repository.dart';
 import '../data/repository/search_history_repository.dart';
 import '../data/repository/reader_repository.dart';
 import '../domain/gateway/bookmark_gateway.dart';
@@ -56,6 +58,8 @@ import '../model/web_book/standard_source_parser.dart';
 import '../model/web_book/standard_source_service.dart';
 import '../model/web_book/book_detail_service.dart';
 import '../model/web_book/book_search_coordinator.dart';
+import '../model/web_book/change_chapter_source_coordinator.dart';
+import '../model/reader/download_coordinator.dart';
 import '../model/web_book/change_source_coordinator.dart';
 import '../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import '../model/book_source/book_source_import_text_resolver.dart';
@@ -108,6 +112,7 @@ final class AppDependencies {
     required this.localBookImportCoordinator,
     required this.localBookContentService,
     required this.localBookStorage,
+    required this.downloadCoordinator,
   });
 
   /// 根据启动阶段已经创建的基础设施实例组装应用依赖。
@@ -133,6 +138,8 @@ final class AppDependencies {
     final BookmarkDao bookmarkDao = BookmarkDao(database);
     /// 正文替换规则 DAO，只由 ReaderRepository 访问。
     final ReplaceRuleDao replaceRuleDao = ReplaceRuleDao(database);
+    /// 离线下载队列 DAO，只由 DownloadRepository 访问。
+    final DownloadTaskDao downloadTaskDao = DownloadTaskDao(database);
     /// 书籍、目录和进度共用的 Repository 实现。
     final BookRepository bookRepository = BookRepository(
       database,
@@ -248,6 +255,19 @@ final class AppDependencies {
     /// 书源 JSON 导入 UseCase，供管理页面和启动内置书源导入共同复用。
     final ImportBookSourcesUseCase importBookSources =
         ImportBookSourcesUseCase(bookSourceRepository);
+    /// 离线下载队列持久化 Repository。
+    final DownloadRepository downloadRepository = DownloadRepository(downloadTaskDao);
+    /// App 级单例离线下载队列调度器；由本组合根长期持有，跨页面继续运行。
+    final DownloadCoordinator downloadCoordinator = DownloadCoordinator(
+      downloadGateway: downloadRepository,
+      chapterGateway: bookRepository,
+      bookshelfGateway: bookRepository,
+      bookSourceGateway: bookSourceRepository,
+      cacheGateway: readerRepository,
+      standardService: standardBookSourceService,
+      cancellationTokenFactory: () => DioHttpCancellationToken(),
+      logger: logger,
+    );
 
     return AppDependencies(
       logger: logger,
@@ -285,6 +305,7 @@ final class AppDependencies {
       localBookImportCoordinator: localBookImportCoordinator,
       localBookContentService: localBookContentService,
       localBookStorage: localBookStorage,
+      downloadCoordinator: downloadCoordinator,
     );
   }
 
@@ -375,6 +396,10 @@ final class AppDependencies {
   /// M08.1 本地书应用私有副本路径解析服务。
   final LocalBookStorage localBookStorage;
 
+  /// App 级单例离线下载队列调度器；关闭下载面板或退出阅读器后仍继续运行，
+  /// 与其余按页面生命周期创建的 `create*Coordinator()` 工厂方法不同。
+  final DownloadCoordinator downloadCoordinator;
+
   /// 创建页面生命周期独占的受控多书源搜索协调器。
   BookSearchCoordinator createBookSearchCoordinator() {
     return BookSearchCoordinator(
@@ -390,6 +415,16 @@ final class AppDependencies {
     return ChangeSourceCoordinator(
       searchCoordinator: createBookSearchCoordinator(),
       detailService: bookDetailService,
+      logger: logger,
+    );
+  }
+
+  /// 创建面板生命周期独占的单章换源候选协调器；书籍级搜索基础设施与整书换源共用。
+  ChangeChapterSourceCoordinator createChangeChapterSourceCoordinator() {
+    return ChangeChapterSourceCoordinator(
+      searchCoordinator: createBookSearchCoordinator(),
+      detailService: bookDetailService,
+      standardService: standardBookSourceService,
       logger: logger,
     );
   }

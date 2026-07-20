@@ -5,15 +5,20 @@ import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../../platform/reader_platform_service.dart';
+import '../change_chapter_source/change_chapter_source_contract.dart';
+import '../change_chapter_source/change_chapter_source_screen.dart';
+import '../change_chapter_source/change_chapter_source_view_model.dart';
 import '../theme/app_tokens.dart';
 import 'reader_action_sheets.dart';
 import 'reader_contract.dart';
+import 'reader_download_sheet.dart';
 import 'reader_settings_sheet.dart';
 import 'reader_screen.dart';
 import 'reader_view_model.dart';
@@ -453,6 +458,32 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       ),
       ReaderReplaceInfoSheet() => ReaderReplaceInfoSheetBody(state: state),
       ReaderFutureFeaturesSheet() => const ReaderFutureFeaturesSheetBody(),
+      ReaderChangeChapterSourceSheet(
+        chapterIndex: final int chapterIndex,
+        chapterTitle: final String chapterTitle,
+      ) =>
+        state.book == null
+            ? const SizedBox.shrink()
+            : _ChangeChapterSourceSheetHost(
+                dependencies: widget.dependencies,
+                book: state.book!,
+                chapterIndex: chapterIndex,
+                chapterTitle: chapterTitle,
+                totalChapterCount: state.chapters.length,
+                onReplace: (int index, String content) {
+                  Navigator.of(context).pop();
+                  _viewModel.onIntent(SaveReaderChapterSourceContentIntent(index, content));
+                },
+                onDismiss: () => Navigator.of(context).pop(),
+              ),
+      ReaderDownloadSheet() => state.book == null
+          ? const SizedBox.shrink()
+          : ReaderDownloadSheetBody(
+              coordinator: widget.dependencies.downloadCoordinator,
+              book: state.book!,
+              chapters: state.chapters,
+              currentChapterIndex: state.currentChapterIndex,
+            ),
     };
   }
 
@@ -733,5 +764,109 @@ final class _ReaderBookmarksSheetBody extends StatelessWidget {
     if (confirmed) {
       onIntent(DeleteReaderBookmarkIntent(bookmark));
     }
+  }
+}
+
+/// 承载单章换源面板独立 ViewModel 生命周期，正文拉取成功后回调外层阅读器保存。
+final class _ChangeChapterSourceSheetHost extends StatefulWidget {
+  /// 创建单章换源面板宿主。
+  const _ChangeChapterSourceSheetHost({
+    required this.dependencies,
+    required this.book,
+    required this.chapterIndex,
+    required this.chapterTitle,
+    required this.totalChapterCount,
+    required this.onReplace,
+    required this.onDismiss,
+  });
+
+  /// 应用组合根依赖。
+  final AppDependencies dependencies;
+
+  /// 正在被单章换源的书籍事实；书籍主键本身不会改变。
+  final Book book;
+
+  /// 待替换正文的目标章节索引。
+  final int chapterIndex;
+
+  /// 待替换正文的目标章节标题。
+  final String chapterTitle;
+
+  /// 打开面板时目标书籍的完整目录长度。
+  final int totalChapterCount;
+
+  /// 候选正文拉取完成后的回调，由外层阅读器负责保存和重新加载。
+  final void Function(int chapterIndex, String content) onReplace;
+
+  /// 用户主动关闭面板且不替换任何正文时的回调。
+  final VoidCallback onDismiss;
+
+  /// 创建面板宿主状态。
+  @override
+  State<_ChangeChapterSourceSheetHost> createState() => _ChangeChapterSourceSheetHostState();
+}
+
+/// 持有单章换源面板独立 ViewModel 和 Effect 订阅。
+final class _ChangeChapterSourceSheetHostState extends State<_ChangeChapterSourceSheetHost> {
+  /// 面板生命周期内唯一 ViewModel。
+  late final ChangeChapterSourceViewModel _viewModel;
+
+  /// Effect 订阅。
+  late final StreamSubscription<ChangeChapterSourceEffect> _effectSubscription;
+
+  /// 创建 ViewModel 并订阅 Effect。
+  @override
+  void initState() {
+    super.initState();
+    _viewModel = ChangeChapterSourceViewModel(
+      book: widget.book,
+      chapterIndex: widget.chapterIndex,
+      chapterTitle: widget.chapterTitle,
+      totalChapterCount: widget.totalChapterCount,
+      coordinator: widget.dependencies.createChangeChapterSourceCoordinator(),
+      cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
+      logger: widget.dependencies.logger,
+    );
+    _effectSubscription = _viewModel.effects.listen(_handleEffect);
+  }
+
+  /// 把候选正文回调给外层阅读器保存，或按用户操作关闭面板。
+  void _handleEffect(ChangeChapterSourceEffect effect) {
+    switch (effect) {
+      case ShowChangeChapterSourceMessageEffect(message: final String message):
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      case ReplaceChangeChapterSourceContentEffect(
+        chapterIndex: final int chapterIndex,
+        content: final String content,
+      ):
+        widget.onReplace(chapterIndex, content);
+      case DismissChangeChapterSourceEffect():
+        widget.onDismiss();
+    }
+  }
+
+  /// 释放 Effect 订阅和 ViewModel。
+  @override
+  void dispose() {
+    _effectSubscription.cancel();
+    _viewModel.dispose();
+    super.dispose();
+  }
+
+  /// 订阅状态并渲染单章换源纯 UI。
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<ChangeChapterSourceUiState>(
+      stream: _viewModel.states,
+      initialData: _viewModel.state,
+      builder: (BuildContext context, AsyncSnapshot<ChangeChapterSourceUiState> snapshot) {
+        return ChangeChapterSourceSheetBody(
+          state: snapshot.data ?? _viewModel.state,
+          onIntent: _viewModel.onIntent,
+        );
+      },
+    );
   }
 }

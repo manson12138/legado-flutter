@@ -7,6 +7,7 @@ import '../../domain/model/book_source.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/cache.dart';
 import '../../domain/model/cookie.dart';
+import '../../domain/model/download_task.dart';
 import '../../domain/model/read_config.dart';
 import '../../domain/model/replace_rule.dart';
 import '../../domain/model/search_book.dart';
@@ -385,6 +386,28 @@ Cache cacheFromMap(Map<String, Object?> row) {
     key: reader.requiredString('key'),
     value: reader.nullableString('value'),
     deadline: reader.requiredInt('deadline'),
+  );
+}
+
+/// 将 [DownloadTask] 转换为 `download_tasks` 表写入参数。
+Map<String, Object?> downloadTaskToMap(DownloadTask task) => <String, Object?>{
+      'bookUrl': task.bookUrl,
+      'chapterIndex': task.chapterIndex,
+      'status': task.status.name,
+      'retryCount': task.retryCount,
+      'updatedAt': task.updatedAt,
+    };
+
+/// 从 `download_tasks` 表行恢复 [DownloadTask]。
+DownloadTask downloadTaskFromMap(Map<String, Object?> row) {
+  /// 对当前下载任务行执行安全类型读取的解析器。
+  final SqliteRowReader reader = SqliteRowReader(row);
+  return DownloadTask(
+    bookUrl: reader.requiredString('bookUrl'),
+    chapterIndex: reader.requiredInt('chapterIndex'),
+    status: DownloadTaskStatus.values.byName(reader.requiredString('status')),
+    retryCount: reader.requiredInt('retryCount'),
+    updatedAt: reader.requiredInt('updatedAt'),
   );
 }
 

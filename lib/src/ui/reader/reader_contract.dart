@@ -91,6 +91,24 @@ final class ReaderFutureFeaturesSheet extends ReaderSheet {
   const ReaderFutureFeaturesSheet();
 }
 
+/// 单章换源面板，只替换传入章节的正文，不改变书籍主键。
+final class ReaderChangeChapterSourceSheet extends ReaderSheet {
+  /// 创建单章换源面板标识。
+  const ReaderChangeChapterSourceSheet(this.chapterIndex, this.chapterTitle);
+
+  /// 待替换正文的目标章节索引。
+  final int chapterIndex;
+
+  /// 待替换正文的目标章节标题，用于候选目录模糊匹配。
+  final String chapterTitle;
+}
+
+/// 离线下载面板，管理当前书的章节下载队列。
+final class ReaderDownloadSheet extends ReaderSheet {
+  /// 创建离线下载面板标识。
+  const ReaderDownloadSheet();
+}
+
 /// 当前章节内搜索结果项。
 final class ReaderSearchMatch {
   /// 创建稳定的章节内搜索结果。
@@ -399,6 +417,18 @@ final class ShowReaderSheetIntent extends ReaderIntent {
 final class DismissReaderSheetIntent extends ReaderIntent {
   /// 创建关闭面板 Intent。
   const DismissReaderSheetIntent();
+}
+
+/// 把单章换源面板拉取到的候选正文写入目标章节的永久缓存并重新加载当前章节。
+final class SaveReaderChapterSourceContentIntent extends ReaderIntent {
+  /// 创建单章换源正文保存 Intent。
+  const SaveReaderChapterSourceContentIntent(this.chapterIndex, this.content);
+
+  /// 待替换正文的目标章节索引。
+  final int chapterIndex;
+
+  /// 候选来源已拉取到的章节正文。
+  final String content;
 }
 
 /// 保存新的显示、替换或常亮配置。

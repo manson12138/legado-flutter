@@ -227,6 +227,16 @@ final class _ReaderTopBar extends StatelessWidget {
                     onIntent(
                       const RefreshReaderChaptersIntent(ReaderRefreshScope.allChapters),
                     );
+                  case _ReaderTopMenuAction.chapterSource:
+                    if (state.currentChapter case final BookChapter chapter) {
+                      onIntent(
+                        ShowReaderSheetIntent(
+                          ReaderChangeChapterSourceSheet(state.currentChapterIndex, chapter.title),
+                        ),
+                      );
+                    }
+                  case _ReaderTopMenuAction.download:
+                    onIntent(const ShowReaderSheetIntent(ReaderDownloadSheet()));
                   case _ReaderTopMenuAction.futureFeatures:
                     onIntent(const ShowReaderSheetIntent(ReaderFutureFeaturesSheet()));
                 }
@@ -264,6 +274,16 @@ final class _ReaderTopBar extends StatelessWidget {
                     enabled: state.loadState == ReaderLoadState.ready &&
                         !state.refreshingChapters,
                     child: const Text('刷新全部章节'),
+                  ),
+                  PopupMenuItem<_ReaderTopMenuAction>(
+                    value: _ReaderTopMenuAction.chapterSource,
+                    enabled: !isLocalBook && state.currentChapter != null,
+                    child: const Text('单章换源'),
+                  ),
+                  PopupMenuItem<_ReaderTopMenuAction>(
+                    value: _ReaderTopMenuAction.download,
+                    enabled: !isLocalBook && state.book != null,
+                    child: const Text('下载'),
                   ),
                   const PopupMenuItem<_ReaderTopMenuAction>(
                     value: _ReaderTopMenuAction.futureFeatures,
@@ -305,6 +325,12 @@ enum _ReaderTopMenuAction {
 
   /// 后台刷新全部章节正文缓存。
   refreshAll,
+
+  /// 打开单章换源面板。
+  chapterSource,
+
+  /// 打开离线下载面板。
+  download,
 
   /// 打开后续能力边界说明。
   futureFeatures,

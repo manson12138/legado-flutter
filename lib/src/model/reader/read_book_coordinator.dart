@@ -260,6 +260,16 @@ final class ReadBookCoordinator {
     _preloadFailureCounts.clear();
   }
 
+  /// 清除指定章节的内存处理结果缓存。
+  ///
+  /// 单章换源或离线下载把新正文直接写入持久缓存后，若该章节此刻正被阅读，内存 LRU
+  /// 里仍会留着旧正文——不清掉的话，下一次 [loadChapter] 会先命中这份过期内存结果，
+  /// 用户看不到刚替换或刚下载的新内容，需要等内存缓存自然被挤出才会生效。
+  void invalidateChapter(String chapterUrl) {
+    _memoryCache.remove('$chapterUrl#replace=true');
+    _memoryCache.remove('$chapterUrl#replace=false');
+  }
+
   /// iOS/Android 触发内存警告时取消非关键预加载并清空可重建的章节内存缓存。
   ///
   /// 当前可见正文仍由 ReaderUiState 持有，稳定锚点和持久缓存不受影响，因此页面可以继续

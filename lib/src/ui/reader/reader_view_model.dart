@@ -187,6 +187,11 @@ final class ReaderViewModel {
         _coordinator.handleMemoryPressure();
       case OpenReaderBookSourceChangeIntent():
         unawaited(_requestBookSourceChange());
+      case SaveReaderChapterSourceContentIntent(
+        chapterIndex: final int chapterIndex,
+        content: final String content,
+      ):
+        unawaited(_saveChapterSourceContent(chapterIndex, content));
       case CloseReaderIntent():
         unawaited(_close());
     }
@@ -1199,6 +1204,43 @@ final class ReaderViewModel {
     await _saveProgress();
     _emit(_state.copyWith(menuVisible: false));
     _effectController.add(OpenReaderBookSourceChangeEffect(book.bookUrl));
+  }
+
+  /// 把单章换源候选正文写入目标章节永久缓存，使其不再受 7 天普通缓存有效期约束；
+  /// 目标章节正是当前可见章节时清除内存缓存并立即重新加载，让新正文马上显示。
+  Future<void> _saveChapterSourceContent(int chapterIndex, String content) async {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null || chapterIndex < 0 || chapterIndex >= _state.chapters.length) {
+      _emit(_state.copyWith(clearSheet: true));
+      return;
+    }
+    /// 待替换正文的目标章节。
+    final BookChapter chapter = _state.chapters[chapterIndex];
+    try {
+      await _cacheGateway.saveChapterContent(book.bookUrl, chapter.url, content, 0);
+      _coordinator.invalidateChapter(chapter.url);
+      _logger.info(
+        tag: bookSourceChangeLogTag,
+        message: '单章换源正文已保存 bookId=${appLogDiagnosticId(bookUrl)} '
+            'chapterId=${appLogDiagnosticId(chapter.url)} contentLength=${content.length}',
+      );
+      _emit(_state.copyWith(clearSheet: true));
+      if (chapterIndex == _state.currentChapterIndex) {
+        await _loadCurrentChapter(preserveCurrentContent: true);
+      }
+      _effectController.add(const ShowReaderMessageEffect('单章换源已完成'));
+    } on Object catch (error, stackTrace) {
+      _logger.error(
+        tag: bookSourceChangeLogTag,
+        message: '单章换源正文保存失败 bookId=${appLogDiagnosticId(bookUrl)} '
+            'chapterId=${appLogDiagnosticId(chapter.url)}',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _emit(_state.copyWith(clearSheet: true));
+      _effectController.add(const ShowReaderMessageEffect('单章换源保存失败'));
+    }
   }
 
   /// 正常退出前立即保存进度并恢复平台窗口状态。
