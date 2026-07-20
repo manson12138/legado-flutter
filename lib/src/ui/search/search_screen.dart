@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
+import '../../domain/model/search_book.dart';
 import '../components/app_scaffold.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
@@ -179,7 +180,7 @@ final class _SearchProgress extends StatelessWidget {
   }
 }
 
-/// 展示单源失败摘要和重试入口。
+/// 展示单源失败摘要和重试入口；只作为辅助信息，不与正常结果争抢注意力。
 final class _SearchFailures extends StatelessWidget {
   /// 创建失败区域。
   const _SearchFailures({required this.state, required this.onIntent});
@@ -188,24 +189,39 @@ final class _SearchFailures extends StatelessWidget {
   /// Intent 入口。
   final ValueChanged<SearchIntent> onIntent;
 
-  /// 构建错误摘要卡片。
+  /// 构建弱化的失败摘要，用中性小字代替醒目的错误色卡片。
   @override
   Widget build(BuildContext context) {
+    /// 当前配色，弱化文字统一使用次要前景色。
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    /// 弱化文字样式。
+    final TextStyle? mutedStyle = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
     return Padding(
-      padding: const EdgeInsets.all(SpacingToken.medium),
-      child: Card(
-        color: Theme.of(context).colorScheme.errorContainer,
+      padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          title: Text('${state.failures.length} 个书源失败'),
+          dense: true,
+          tilePadding: EdgeInsets.zero,
+          collapsedIconColor: scheme.onSurfaceVariant,
+          iconColor: scheme.onSurfaceVariant,
+          title: Text('${state.failures.length} 个书源未返回结果', style: mutedStyle),
           trailing: TextButton(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: SpacingToken.small),
+            ),
             onPressed: state.searching ? null : () => onIntent(const RetryFailedSourcesIntent()),
-            child: const Text('重试失败项'),
+            child: const Text('重试'),
           ),
           children: state.failures.map((BookSearchSourceFailure failure) {
             return ListTile(
               dense: true,
-              title: Text(failure.sourceName),
-              subtitle: Text('${failure.category}：${failure.message}'),
+              visualDensity: VisualDensity.compact,
+              title: Text(failure.sourceName, style: Theme.of(context).textTheme.bodySmall),
+              subtitle: Text('${failure.category}：${failure.message}', style: mutedStyle),
             );
           }).toList(growable: false),
         ),
@@ -269,10 +285,7 @@ final class _SearchBody extends StatelessWidget {
                       SizedBox(
                         width: 35,
                         height: 51,
-                        child: BookCover(
-                          coverUrl: group.primary.coverUrl,
-                          semanticLabel: '${group.primary.name}封面',
-                        ),
+                        child: _SearchResultCover(group: group),
                       ),
                       const SizedBox(width: SpacingToken.mediumSmall),
                       Expanded(
@@ -309,6 +322,75 @@ final class _SearchBody extends StatelessWidget {
             );
           },
         );
+      },
+    );
+  }
+}
+
+/// 依次尝试候选组内多个来源的封面地址，某个地址显示不出来时自动换下一个同名候选的封面。
+final class _SearchResultCover extends StatefulWidget {
+  /// 创建候选组封面。
+  const _SearchResultCover({required this.group});
+
+  /// 当前同名同作者候选组。
+  final BookSearchResultGroup group;
+
+  /// 创建尝试进度状态。
+  @override
+  State<_SearchResultCover> createState() => _SearchResultCoverState();
+}
+
+/// 持有当前尝试到第几个候选地址。
+final class _SearchResultCoverState extends State<_SearchResultCover> {
+  /// 当前正在尝试的候选下标。
+  int _index = 0;
+
+  /// 候选组切换（例如重新提交搜索）时重置尝试进度。
+  @override
+  void didUpdateWidget(covariant _SearchResultCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.group.key != widget.group.key) {
+      _index = 0;
+    }
+  }
+
+  /// 按候选组结果顺序去重后的可用封面地址。
+  List<String> _candidateUrls() {
+    /// 已经出现过的地址，避免重复尝试同一张图。
+    final Set<String> seen = <String>{};
+    /// 去重后的候选地址。
+    final List<String> urls = <String>[];
+    for (final SearchBook book in widget.group.books) {
+      /// 当前候选来源的封面地址。
+      final String url = book.coverUrl?.trim() ?? '';
+      if (url.isNotEmpty && seen.add(url)) {
+        urls.add(url);
+      }
+    }
+    return urls;
+  }
+
+  /// 依次尝试候选地址，全部失败后交给 [BookCover] 展示统一占位。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前候选组内可尝试的全部封面地址。
+    final List<String> candidates = _candidateUrls();
+    /// 候选组书名，用于无障碍说明。
+    final String semanticLabel = '${widget.group.primary.name}封面';
+    if (_index >= candidates.length) {
+      return BookCover(coverUrl: null, semanticLabel: semanticLabel);
+    }
+    /// 本次尝试的候选下标，供失败回调核对是否仍然有效。
+    final int attemptIndex = _index;
+    return BookCover(
+      key: ValueKey<String>(candidates[attemptIndex]),
+      coverUrl: candidates[attemptIndex],
+      semanticLabel: semanticLabel,
+      onError: () {
+        if (!mounted || _index != attemptIndex) {
+          return;
+        }
+        setState(() => _index = attemptIndex + 1);
       },
     );
   }

@@ -421,35 +421,58 @@ final class _BookshelfGrid extends StatelessWidget {
                 key: ValueKey<String>(item.book.bookUrl),
                 color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
                 clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
-                  onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Expanded(
+                      // 封面区域单独响应点击：进入阅读，和下方书名作者区域的详情跳转分开。
+                      child: InkWell(
+                        onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
+                        onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
                         child: Stack(
                           fit: StackFit.expand,
                           children: <Widget>[
                             BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面', borderRadius: BorderRadius.zero),
-                            if (item.unreadChapterCount > 0)
-                              Positioned(top: 4, right: 4, child: Badge(label: Text('${item.unreadChapterCount}'))),
                             if (selected)
                               const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
-                            if (!state.selectionMode)
+                            if (item.unreadChapterCount > 0)
                               Positioned(
-                                bottom: 0,
+                                left: 0,
                                 right: 0,
-                                child: IconButton(
-                                  onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
-                                  icon: const Icon(Icons.info_outline, size: 16),
-                                  tooltip: '书籍详情',
+                                bottom: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: SpacingToken.xSmall,
+                                    vertical: 2,
+                                  ),
+                                  color: Colors.black.withValues(alpha: 0.45),
+                                  alignment: Alignment.centerRight,
+                                  child: Text(
+                                    '${item.unreadChapterCount} 章未读',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
                               ),
                           ],
                         ),
                       ),
-                      Padding(
+                    ),
+                    // 书名作者区域单独响应点击：正常模式下进入详情，选择模式下仍然切换选中。
+                    InkWell(
+                      onTap: () {
+                        if (state.selectionMode) {
+                          onIntent(TapBookshelfBookIntent(item.book.bookUrl));
+                        } else {
+                          onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl));
+                        }
+                      },
+                      onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
+                      child: Padding(
                         padding: const EdgeInsets.all(SpacingToken.xSmall),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,8 +487,8 @@ final class _BookshelfGrid extends StatelessWidget {
                           ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );

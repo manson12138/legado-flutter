@@ -10,6 +10,7 @@ final class BookCover extends StatelessWidget {
     required this.semanticLabel,
     this.fit = BoxFit.cover,
     this.borderRadius = const BorderRadius.all(Radius.circular(8)),
+    this.onError,
     super.key,
   });
 
@@ -21,6 +22,8 @@ final class BookCover extends StatelessWidget {
   final BoxFit fit;
   /// 统一圆角。
   final BorderRadius borderRadius;
+  /// 图片解码或加载失败时的回调，供调用方切换到其他候选地址；不影响本组件仍会展示占位。
+  final VoidCallback? onError;
 
   /// 构建使用 Flutter ImageCache 的图片，并在失败时展示稳定占位。
   @override
@@ -29,6 +32,9 @@ final class BookCover extends StatelessWidget {
     final String value = coverUrl?.trim() ?? '';
     /// 封面失败占位构建器。
     Widget fallback(BuildContext context, Object? error, StackTrace? stackTrace) {
+      if (error != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => onError?.call());
+      }
       return ColoredBox(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: Center(
@@ -42,6 +48,9 @@ final class BookCover extends StatelessWidget {
     }
 
     if (value.isEmpty) {
+      if (onError != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => onError?.call());
+      }
       return ClipRRect(borderRadius: borderRadius, child: fallback(context, null, null));
     }
     /// 可解析的封面 URI。
