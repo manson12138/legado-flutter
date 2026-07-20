@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,12 +78,12 @@ final class _BookCoverState extends State<BookCover> {
     _attemptUrl = trimmed.isEmpty ? null : trimmed;
     if (_attemptUrl == null) {
       /// 原始地址为空时没有“加载失败”事件可依赖，直接主动查一次缓存。
-      WidgetsBinding.instance.addPostFrameCallback((_) => _tryCacheFallback());
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_tryCacheFallback()));
     }
   }
 
   /// 从缓存里找一个和刚失败地址不同的候选；找不到就走向调用方的 onExhausted。
-  void _tryCacheFallback() {
+  Future<void> _tryCacheFallback() async {
     if (!mounted || _usedCacheFallback) {
       return;
     }
@@ -96,7 +97,10 @@ final class _BookCoverState extends State<BookCover> {
       return;
     }
     /// 缓存里已知可用的地址。
-    final String? cached = CoverUrlCache.instance.lookup(name: name, author: author);
+    final String? cached = await CoverUrlCache.instance.lookup(name: name, author: author);
+    if (!mounted) {
+      return;
+    }
     if (cached == null || cached == widget.coverUrl?.trim()) {
       widget.onExhausted?.call();
       return;
@@ -126,7 +130,7 @@ final class _BookCoverState extends State<BookCover> {
       return;
     }
     if (!_usedCacheFallback) {
-      _tryCacheFallback();
+      unawaited(_tryCacheFallback());
       return;
     }
     if (_attemptUrl != null) {

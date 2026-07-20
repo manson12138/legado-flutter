@@ -37,6 +37,7 @@ import '../domain/gateway/bookshelf_gateway.dart';
 import '../domain/gateway/book_group_gateway.dart';
 import '../domain/gateway/book_source_gateway.dart';
 import '../domain/gateway/chapter_gateway.dart';
+import '../domain/gateway/cover_cache_gateway.dart';
 import '../domain/gateway/reading_progress_gateway.dart';
 import '../domain/gateway/reader_cache_gateway.dart';
 import '../domain/gateway/replace_rule_gateway.dart';
@@ -73,6 +74,7 @@ import '../model/local_book/local_book_storage.dart';
 import '../model/local_book/txt_local_book_parser.dart';
 import '../model/local_book/pdf_local_book_parser.dart';
 import '../model/local_book/umd_local_book_parser.dart';
+import '../ui/components/cover_url_cache.dart';
 import 'default_book_source_bootstrapper.dart';
 
 /// 保存应用级共享依赖的组合根容器。
@@ -92,6 +94,7 @@ final class AppDependencies {
     required this.bookmarkGateway,
     required this.replaceRuleGateway,
     required this.readerCacheGateway,
+    required this.coverCacheGateway,
     required this.searchHistoryGateway,
     required this.cookieManager,
     required this.defaultBookSourceBootstrapper,
@@ -211,12 +214,16 @@ final class AppDependencies {
     );
     /// M06 搜索历史 Repository，通过缓存表保持独立数据边界。
     final SearchHistoryRepository searchHistoryRepository = SearchHistoryRepository(cacheDao);
-    /// M08 正文缓存、稳定锚点、显示配置、书签和替换规则 Repository。
+    /// M08 正文缓存、稳定锚点、显示配置、书签、替换规则和封面地址缓存 Repository。
     final ReaderRepository readerRepository = ReaderRepository(
       cacheDao,
       bookmarkDao,
       replaceRuleDao,
     );
+    // BookCover 深埋在书架/搜索/详情等无状态 Screen 里，不经过路由层依赖注入；
+    // 用组合根这一次性调用把持久化实现接进去，避免逐个页面 Screen/Route 都要新增
+    // 参数传递这套跨页面展示缓存。
+    CoverUrlCache.instance.configure(readerRepository);
     /// M08.1 应用私有本地书副本管理器。
     const LocalBookStorage localBookStorage = LocalBookStorage();
     /// M08.1 当前已经真实实现的 TXT 与 EPUB 解析器注册表。
@@ -280,6 +287,7 @@ final class AppDependencies {
       bookmarkGateway: readerRepository,
       replaceRuleGateway: readerRepository,
       readerCacheGateway: readerRepository,
+      coverCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
       cookieManager: cookieManager,
       defaultBookSourceBootstrapper: DefaultBookSourceBootstrapper(
@@ -338,6 +346,9 @@ final class AppDependencies {
 
   /// 阅读器正文缓存、稳定锚点和显示配置边界。
   final ReaderCacheGateway readerCacheGateway;
+
+  /// 跨页面“已知可显示封面地址”缓存边界，供 [CoverUrlCache] 持久化。
+  final CoverCacheGateway coverCacheGateway;
 
   /// 搜索历史持久化边界。
   final SearchHistoryGateway searchHistoryGateway;

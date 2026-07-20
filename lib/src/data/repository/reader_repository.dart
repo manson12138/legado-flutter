@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import '../../domain/gateway/bookmark_gateway.dart';
+import '../../domain/gateway/cover_cache_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/gateway/replace_rule_gateway.dart';
 import '../../domain/model/bookmark.dart';
@@ -16,7 +17,7 @@ import '../local/data_error.dart';
 
 /// 组合阅读缓存、书签和替换规则 DAO，实现 M08 阅读数据边界。
 final class ReaderRepository
-    implements BookmarkGateway, ReplaceRuleGateway, ReaderCacheGateway {
+    implements BookmarkGateway, ReplaceRuleGateway, ReaderCacheGateway, CoverCacheGateway {
   /// 创建阅读数据 Repository。
   const ReaderRepository(this._cacheDao, this._bookmarkDao, this._replaceRuleDao);
 
@@ -434,6 +435,26 @@ final class ReaderRepository
 
   /// 生成不泄漏原始 URL 的显示配置缓存键。
   String _configKey(String bookUrl) => 'reader:config:${_digest(bookUrl)}';
+
+  /// 查找同一本书之前在任意页面成功显示过的封面地址；写入时用 deadline=0 永久保存，
+  /// 应用重启后仍然可用。
+  @override
+  Future<String?> getCoverUrl(String name, String author) {
+    return guardDataOperation<String?>(
+      () => _cacheDao.getValidValue(_coverKey(name, author), DateTime.now().millisecondsSinceEpoch),
+    );
+  }
+
+  /// 永久记录一次成功加载的封面地址，覆盖同一本书之前记住的旧地址。
+  @override
+  Future<void> saveCoverUrl(String name, String author, String url) {
+    return guardDataOperation<void>(
+      () => _cacheDao.upsert(Cache(key: _coverKey(name, author), value: url, deadline: 0)),
+    );
+  }
+
+  /// 生成不泄漏书名/作者原文的封面地址缓存键。
+  String _coverKey(String name, String author) => 'cover:${_digest('$name\n$author')}';
 
   /// 使用 SHA-256 将不受信任 URL 转换为固定长度缓存键片段。
   String _digest(String value) => sha256.convert(utf8.encode(value)).toString();
