@@ -8,6 +8,7 @@ import '../../help/logging/app_logger.dart';
 import '../reader/chapter_title_matcher.dart';
 import 'book_detail_service.dart';
 import 'book_search_coordinator.dart';
+import 'standard_source_parser.dart';
 import 'standard_source_service.dart';
 
 /// 候选来源完成目录加载后的预览：目录、来源上下文和预选章节位置。

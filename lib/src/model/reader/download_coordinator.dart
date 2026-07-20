@@ -11,6 +11,7 @@ import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/download_task.dart';
 import '../../help/logging/app_logger.dart';
+import '../web_book/standard_source_parser.dart';
 import '../web_book/standard_source_service.dart';
 
 /// App 级单例离线下载队列调度器，对应 Android `CacheBook`/`CacheBookModel` 的第一批职责。
