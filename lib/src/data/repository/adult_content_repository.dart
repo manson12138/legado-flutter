@@ -43,8 +43,8 @@ final class AdultContentRepository implements AdultContentGateway {
   /// 远程更新后落地的关键词覆盖缓存键。
   static const String _keywordOverrideCacheKey = 'flutter_adult_content_keywords_override';
 
-  /// Flutter assets 中内置关键词库的稳定路径。
-  static const String _keywordAssetPath = 'assets/default_data/adult_keywords.json';
+  /// Flutter assets 中内置 Base64 关键词库的稳定路径。
+  static const String _keywordAssetPath = 'assets/default_data/adult_keywords.txt';
 
   /// Flutter assets 中内置 Base64 域名黑名单的稳定路径。
   static const String _domainAssetPath = 'assets/default_data/adult_domains.txt';
@@ -173,7 +173,7 @@ final class AdultContentRepository implements AdultContentGateway {
     }
   }
 
-  /// 读取当前生效关键词库；优先使用远程更新覆盖，否则回退内置 assets。
+  /// 读取当前生效关键词库；优先使用远程更新覆盖（明文 JSON），否则回退内置 Base64 assets。
   Future<Set<String>> _keywords() async {
     if (_keywordCache != null) {
       return _keywordCache!;
@@ -181,9 +181,9 @@ final class AdultContentRepository implements AdultContentGateway {
     try {
       /// 缓存表中保存的远程更新覆盖 JSON 文本。
       final String? override = (await _cacheDao.get(_keywordOverrideCacheKey))?.value;
-      /// 最终使用的关键词 JSON 文本来源。
-      final String json = override ?? await _assetBundle.loadString(_keywordAssetPath);
-      final Set<String> keywords = _decodeKeywordList(json).toSet();
+      final Set<String> keywords = override != null
+          ? _decodeKeywordList(override).toSet()
+          : _decodeBase64Lines(await _assetBundle.loadString(_keywordAssetPath));
       _keywordCache = keywords;
       return keywords;
     } catch (error, stackTrace) {
@@ -201,19 +201,7 @@ final class AdultContentRepository implements AdultContentGateway {
     try {
       /// 内置域名黑名单原始文本，每行一个 Base64 编码域名。
       final String raw = await _assetBundle.loadString(_domainAssetPath);
-      final Set<String> domains = <String>{};
-      for (final String line in raw.split('\n')) {
-        /// 去除换行和空白后的单行 Base64 文本。
-        final String trimmed = line.trim();
-        if (trimmed.isEmpty) {
-          continue;
-        }
-        try {
-          domains.add(utf8.decode(base64.decode(trimmed)));
-        } on FormatException {
-          continue;
-        }
-      }
+      final Set<String> domains = _decodeBase64Lines(raw);
       _domainCache = domains;
       return domains;
     } catch (error, stackTrace) {
@@ -221,6 +209,25 @@ final class AdultContentRepository implements AdultContentGateway {
       _domainCache = const <String>{};
       return const <String>{};
     }
+  }
+
+  /// 解析每行一个 Base64 编码值的内置文本；解码失败的单行会被跳过，不影响其余判定。
+  Set<String> _decodeBase64Lines(String raw) {
+    /// 解码成功的值集合。
+    final Set<String> values = <String>{};
+    for (final String line in raw.split('\n')) {
+      /// 去除换行和空白后的单行 Base64 文本。
+      final String trimmed = line.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      try {
+        values.add(utf8.decode(base64.decode(trimmed)));
+      } on FormatException {
+        continue;
+      }
+    }
+    return values;
   }
 
   /// 解析不可信关键词 JSON 数组；格式无效时返回空列表而不是抛出异常。
