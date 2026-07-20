@@ -39,7 +39,7 @@
 | Android minSdk | `26` |
 | iOS Bundle Identifier | `io.legado.flutter` |
 | iOS Deployment Target | `16.0` |
-| 独立数据库 | `legado_flutter.db`，当前 Schema v2 |
+| 独立数据库 | `legado_flutter.db`，当前 Schema v4 |
 | 原 Android 参考实现 | `app/src/main/java/io/legado/app/` |
 | 重写文档主目录 | `docs/flutter-rewrite/` |
 
@@ -448,7 +448,9 @@ AI 在 `flutter_app/` 或 `docs/flutter-rewrite/` 下新增任何手写文件时
 - 新增、删除或重命名稳定路由；
 - 新增功能目录或改变 Route / ViewModel / Screen 分层；
 - Gateway、Repository、UseCase 或组合根职责发生变化；
-- 数据库 Schema 版本、表或主键语义变化；
+- 数据库 Schema 版本、表或主键语义变化——修改 `LegadoDatabase.schemaVersion` 时必须同时给
+  新字段补 `onUpgrade` 的 `ALTER TABLE` 迁移分支，并同步把 `flutter_app/pubspec.yaml` 的
+  `version` build number（`+` 后面的整数）加一，让带 Schema 变化的构建始终能从版本号区分；
 - 新增原生通道、Flutter 插件或平台差异；
 - JavaScript、WebView、Cookie 或本地书格式的支持边界变化；
 - 阶段门禁正式由用户确认通过。
