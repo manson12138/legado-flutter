@@ -31,4 +31,15 @@ printf '正在启动应用 %s...\n' "${PACKAGE_NAME}"
 adb -s "${DEVICE_SERIAL}" shell am start \
   -n "${PACKAGE_NAME}/${MAIN_ACTIVITY}"
 
+# 把固定命名的构建产物重命名为带版本名、版本号和打包时间戳的归档文件名。
+# 不直接改 Gradle 的输出文件名——Flutter 构建流程按固定文件名 app-release.apk 查找
+# Gradle 产物再复制，改了 Gradle 侧命名会导致 flutter build apk 找不到产物而失败。
+readonly BUILD_TIMESTAMP="$(date '+%Y-%m-%d-%H-%M')"
+readonly PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | head -1 | sed 's/^version:[[:space:]]*//')"
+readonly VERSION_NAME="${PUBSPEC_VERSION%%+*}"
+readonly VERSION_CODE="${PUBSPEC_VERSION##*+}"
+readonly ARCHIVE_PATH="build/app/outputs/flutter-apk/legado-release-${VERSION_NAME}-${VERSION_CODE}-${BUILD_TIMESTAMP}.apk"
+mv "${APK_PATH}" "${ARCHIVE_PATH}"
+printf '已重命名为：%s\n' "${ARCHIVE_PATH}"
+
 printf '构建、安装和启动已完成。\n'
