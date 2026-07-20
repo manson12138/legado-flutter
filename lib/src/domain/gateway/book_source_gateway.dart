@@ -44,4 +44,10 @@ abstract interface class BookSourceGateway {
 
   /// 在单一事务中删除多个书源，不触碰书架表。
   Future<void> deleteByUrls(Set<String> sourceUrls);
+
+  /// 累加书源成功率分值：搜索成功、目录/正文加载成功传入正数，失败传入负数。
+  Future<void> recordSourceOutcome(String sourceUrl, {required int delta});
+
+  /// 设置或取消书源置顶。
+  Future<void> setPinned(String sourceUrl, {required bool pinned});
 }

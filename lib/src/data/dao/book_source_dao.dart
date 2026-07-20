@@ -132,6 +132,47 @@ final class BookSourceDao {
     }
   }
 
+  /// 原子累加成功率分值，不做读改写，避免搜索/详情/阅读并发写入时互相覆盖。
+  Future<void> adjustScore(String sourceUrl, int delta) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.bookSources,
+      where: 'bookSourceUrl = ? (sourceScore += $delta)',
+      argumentCount: 2,
+    );
+    await database.rawUpdate(
+      'UPDATE ${DatabaseTables.bookSources} SET sourceScore = sourceScore + ? WHERE bookSourceUrl = ?',
+      <Object?>[delta, sourceUrl],
+    );
+    _database.changeNotifier.notifyTables(<String>{DatabaseTables.bookSources});
+  }
+
+  /// 设置或取消书源置顶；低频用户操作，直接读改写整行。
+  Future<void> setPinned(String sourceUrl, bool pinned) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    /// 当前书源；不存在时忽略。
+    final BookSource? source = await getByUrl(sourceUrl);
+    if (source == null) {
+      return;
+    }
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.bookSources,
+      where: 'bookSourceUrl = ? (pinned = $pinned)',
+      argumentCount: 1,
+    );
+    await database.update(
+      DatabaseTables.bookSources,
+      <String, Object?>{'pinned': boolToSqlite(pinned)},
+      where: 'bookSourceUrl = ?',
+      whereArgs: <Object?>[sourceUrl],
+    );
+    _database.changeNotifier.notifyTables(<String>{DatabaseTables.bookSources});
+  }
+
   /// 按主键删除书源；外键会级联删除该书源的搜索缓存。
   Future<void> deleteByUrl(
     String sourceUrl, {

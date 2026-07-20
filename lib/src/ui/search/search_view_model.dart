@@ -239,6 +239,13 @@ final class SearchViewModel {
       if (!candidates.any((SearchBook value) => value.origin == book.origin && value.bookUrl == book.bookUrl)) {
         candidates.add(book);
       }
+      /// 置顶优先，其余按成功率从高到低；排序后 primary（books.first）始终是最佳来源。
+      candidates.sort((SearchBook left, SearchBook right) {
+        if (left.pinned != right.pinned) {
+          return left.pinned ? -1 : 1;
+        }
+        return right.sourceScore.compareTo(left.sourceScore);
+      });
     }
     /// 不可变结果组。
     final List<BookSearchResultGroup> groups = _resultBooks.entries.map((entry) {

@@ -368,6 +368,8 @@ final class StandardBookSourceParser {
           latestChapterTitle: _nullable(latestChapter),
           time: receivedAt,
           originOrder: source.customOrder,
+          sourceScore: source.sourceScore,
+          pinned: source.pinned,
         ),
       );
     }
@@ -873,6 +875,8 @@ final class StandardBookSourceParser {
           ),
           time: receivedAt,
           originOrder: source.customOrder,
+          sourceScore: source.sourceScore,
+          pinned: source.pinned,
         ),
       );
     }

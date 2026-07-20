@@ -104,6 +104,8 @@ final class BookSourceManagementViewModel {
         enabled: final bool enabled,
       ):
         _setEnabled(<String>{sourceUrl}, enabled);
+      case PinBookSourceIntent(sourceUrl: final String sourceUrl, pinned: final bool pinned):
+        _setPinned(sourceUrl, pinned);
       case SetSelectedBookSourcesEnabledIntent(enabled: final bool enabled):
         _setEnabled(_state.selectedUrls, enabled);
       case RequestSetBookSourceGroupIntent():
@@ -342,6 +344,14 @@ final class BookSourceManagementViewModel {
     );
   }
 
+  /// 切换单个书源的置顶状态。
+  Future<void> _setPinned(String sourceUrl, bool pinned) async {
+    await _runWrite(
+      operation: () => _gateway.setPinned(sourceUrl, pinned: pinned),
+      successMessage: pinned ? '已置顶' : '已取消置顶',
+    );
+  }
+
   /// 保存选中书源的新分组。
   Future<void> _saveGroup(String group) async {
     /// 当前对话框保存的目标 URL。
@@ -443,6 +453,8 @@ final class BookSourceManagementViewModel {
       customButton: original?.customButton ?? false,
       homepageModules: original?.homepageModules,
       extraFieldsJson: original?.extraFieldsJson,
+      sourceScore: original?.sourceScore ?? 0,
+      pinned: original?.pinned ?? false,
     );
     await _runWrite(
       operation: () async {

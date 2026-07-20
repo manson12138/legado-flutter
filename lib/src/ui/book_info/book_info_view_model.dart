@@ -2,7 +2,9 @@ import 'dart:async';
 
 import '../../api/http/http_contract.dart';
 import '../../domain/gateway/book_group_gateway.dart';
+import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
+import '../../domain/gateway/chapter_gateway.dart';
 import '../../domain/model/add_book_to_bookshelf_result.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
@@ -29,6 +31,8 @@ final class BookInfoViewModel {
     required BookDetailService detailService,
     required BookGroupGateway bookGroupGateway,
     required BookshelfGateway bookshelfGateway,
+    required ChapterGateway chapterGateway,
+    required BookSourceGateway bookSourceGateway,
     required AddBookToBookshelfUseCase addBookToBookshelf,
     required ChangeBookSourceUseCase changeBookSource,
     required CreateBookshelfGroupUseCase createBookshelfGroup,
@@ -39,6 +43,8 @@ final class BookInfoViewModel {
   }) : _detailService = detailService,
        _bookGroupGateway = bookGroupGateway,
        _bookshelfGateway = bookshelfGateway,
+       _chapterGateway = chapterGateway,
+       _bookSourceGateway = bookSourceGateway,
        _addBookToBookshelf = addBookToBookshelf,
        _changeBookSource = changeBookSource,
        _createBookshelfGroup = createBookshelfGroup,
@@ -57,6 +63,10 @@ final class BookInfoViewModel {
   final BookGroupGateway _bookGroupGateway;
   /// 书架查询边界。
   final BookshelfGateway _bookshelfGateway;
+  /// 本地目录读取边界，用于已入库书籍的缓存优先展示。
+  final ChapterGateway _chapterGateway;
+  /// 书源查询和成功率写入边界。
+  final BookSourceGateway _bookSourceGateway;
   /// 加入书架事务 UseCase。
   final AddBookToBookshelfUseCase _addBookToBookshelf;
   /// 原子替换冲突书籍并迁移阅读事实的 UseCase。
@@ -195,7 +205,10 @@ final class BookInfoViewModel {
   }
 
   /// 加载当前来源详情，成功后继续加载完整目录。
-  Future<void> _loadDetails() async {
+  ///
+  /// `silent` 为 true 时用于本地命中后的后台静默刷新：不设置任何加载态、不清空已展示
+  /// 内容，成功了才悄悄更新界面，失败只记日志不打断阅读体验。
+  Future<void> _loadDetails({bool silent = false}) async {
     _cancelRequest();
     _generation += 1;
     /// 本次详情请求世代。
@@ -206,13 +219,61 @@ final class BookInfoViewModel {
     final Stopwatch stopwatch = Stopwatch()..start();
     _logger.info(
       tag: bookDetailLogTag,
-      message: '详情页加载开始 generation=$generation bookId=$bookId '
+      message: '详情页加载开始 generation=$generation bookId=$bookId silent=$silent '
           'sourceId=${appLogDiagnosticId(_state.selectedBook.origin)}',
     );
+    if (!silent) {
+      /// 本地书架中同 URL 的已知书籍；命中时立即展示本地数据，不显示整页加载。
+      final Book? storedBook = await _bookshelfGateway.getBook(_state.selectedBook.bookUrl);
+      if (generation != _generation) {
+        return;
+      }
+      if (storedBook != null) {
+        /// 本地持久化目录。
+        final List<BookChapter> storedChapters = await _chapterGateway.getChapterList(storedBook.bookUrl);
+        if (generation != _generation) {
+          return;
+        }
+        _snapshot = null;
+        _emit(
+          _state.copyWith(
+            loadingInfo: false,
+            loadingToc: false,
+            switchingSource: false,
+            book: storedBook,
+            chapters: storedChapters,
+            inBookshelf: true,
+            clearInfoError: true,
+            clearTocError: true,
+          ),
+        );
+        _logger.info(
+          tag: bookDetailLogTag,
+          message: '详情页命中本地数据 generation=$generation bookId=$bookId '
+              'chapterCount=${storedChapters.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+        unawaited(_loadDetails(silent: true));
+        return;
+      }
+    }
+    /// 换源场景下是否已经有旧数据可以在网络加载期间继续展示；本地缓存命中分支已提前返回。
+    final bool hasExistingContent = !silent && _state.book != null;
     /// 本次详情取消令牌。
     final HttpCancellationToken token = _cancellationTokenFactory();
     _token = token;
-    _emit(_state.copyWith(loadingInfo: true, loadingToc: false, clearBook: true, chapters: const <BookChapter>[], clearInfoError: true, clearTocError: true));
+    if (!silent) {
+      _emit(
+        _state.copyWith(
+          loadingInfo: !hasExistingContent,
+          switchingSource: hasExistingContent,
+          loadingToc: false,
+          clearBook: !hasExistingContent,
+          chapters: hasExistingContent ? _state.chapters : const <BookChapter>[],
+          clearInfoError: true,
+          clearTocError: true,
+        ),
+      );
+    }
     try {
       /// 当前来源解析快照。
       final BookDetailSnapshot snapshot = await _detailService.loadDetails(
@@ -227,31 +288,45 @@ final class BookInfoViewModel {
         return;
       }
       _snapshot = snapshot;
-      /// 数据库中同 URL 书籍。
-      final Book? storedBook = await _bookshelfGateway.getBook(snapshot.book.bookUrl);
-      _emit(_state.copyWith(loadingInfo: false, book: snapshot.book, inBookshelf: storedBook != null));
-      _logger.info(
-        tag: bookDetailLogTag,
-        message: '详情页字段加载完成 generation=$generation bookId=$bookId '
-            'inBookshelf=${storedBook != null} elapsedMs=${stopwatch.elapsedMilliseconds}',
-      );
-      await _loadToc(expectedGeneration: generation);
+      if (!silent) {
+        /// 数据库中同 URL 书籍。
+        final Book? storedBook = await _bookshelfGateway.getBook(snapshot.book.bookUrl);
+        _emit(_state.copyWith(loadingInfo: false, book: snapshot.book, inBookshelf: storedBook != null));
+        _logger.info(
+          tag: bookDetailLogTag,
+          message: '详情页字段加载完成 generation=$generation bookId=$bookId '
+              'inBookshelf=${storedBook != null} elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+      }
+      await _loadToc(expectedGeneration: generation, silent: silent);
     } catch (error, stackTrace) {
       if (generation == _generation) {
-        _logger.error(
-          tag: bookDetailLogTag,
-          message: '详情页加载失败 generation=$generation bookId=$bookId '
-              'elapsedMs=${stopwatch.elapsedMilliseconds}',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        _emit(_state.copyWith(loadingInfo: false, infoError: _message(error, '详情加载失败')));
+        if (silent) {
+          _logger.warning(
+            tag: bookDetailLogTag,
+            message: '详情页静默刷新失败 generation=$generation bookId=$bookId '
+                'elapsedMs=${stopwatch.elapsedMilliseconds}',
+            error: error,
+          );
+        } else {
+          _logger.error(
+            tag: bookDetailLogTag,
+            message: '详情页加载失败 generation=$generation bookId=$bookId '
+                'elapsedMs=${stopwatch.elapsedMilliseconds}',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          _emit(_state.copyWith(loadingInfo: false, switchingSource: false, infoError: _message(error, '详情加载失败')));
+        }
       }
     }
   }
 
   /// 加载分页完整目录，并在书已存在时原子替换持久化目录。
-  Future<void> _loadToc({int? expectedGeneration}) async {
+  ///
+  /// `silent` 为 true 时不设置 `loadingToc`/`switchingSource`，失败只记日志不展示错误；
+  /// 两种模式成功后都会累加书源成功率，失败都会扣分（来源同一份网络请求）。
+  Future<void> _loadToc({int? expectedGeneration, bool silent = false}) async {
     /// 当前详情快照。
     final BookDetailSnapshot? snapshot = _snapshot;
     if (snapshot == null) {
@@ -266,12 +341,14 @@ final class BookInfoViewModel {
     final Stopwatch stopwatch = Stopwatch()..start();
     _logger.info(
       tag: bookTocLogTag,
-      message: '详情页目录加载开始 generation=$generation bookId=$bookId',
+      message: '详情页目录加载开始 generation=$generation bookId=$bookId silent=$silent',
     );
     /// 目录请求使用的新取消令牌。
     final HttpCancellationToken token = _cancellationTokenFactory();
     _token = token;
-    _emit(_state.copyWith(loadingToc: true, clearTocError: true));
+    if (!silent) {
+      _emit(_state.copyWith(loadingToc: true, clearTocError: true));
+    }
     try {
       /// 完整目录。
       final List<BookChapter> chapters = await _detailService.loadToc(snapshot: snapshot, cancellationToken: token);
@@ -282,6 +359,12 @@ final class BookInfoViewModel {
         );
         return;
       }
+      /// 目录加载成功累加书源成功率。
+      unawaited(
+        _bookSourceGateway
+            .recordSourceOutcome(snapshot.source.bookSourceUrl, delta: 1)
+            .catchError((Object _) {}),
+      );
       /// 带目录统计的书籍。
       final Book updatedBook = _detailService.withChapterSummary(snapshot.book, chapters);
       _snapshot = BookDetailSnapshot(source: snapshot.source, book: updatedBook);
@@ -300,22 +383,51 @@ final class BookInfoViewModel {
           message: '详情页目录持久化完成 bookId=$bookId chapterCount=${chapters.length}',
         );
       }
-      _emit(_state.copyWith(loadingToc: false, book: updatedBook, chapters: chapters));
+      _emit(
+        _state.copyWith(
+          loadingToc: false,
+          switchingSource: false,
+          book: updatedBook,
+          chapters: chapters,
+        ),
+      );
       _logger.info(
         tag: bookTocLogTag,
         message: '详情页目录加载完成 generation=$generation bookId=$bookId '
             'chapterCount=${chapters.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
     } catch (error, stackTrace) {
+      /// 目录加载失败扣减书源成功率；持久化失败（书架已有书）也算在同一次网络请求上。
+      unawaited(
+        _bookSourceGateway
+            .recordSourceOutcome(snapshot.source.bookSourceUrl, delta: -1)
+            .catchError((Object _) {}),
+      );
       if (generation == _generation) {
-        _logger.error(
-          tag: bookTocLogTag,
-          message: '详情页目录加载失败 generation=$generation bookId=$bookId '
-              'elapsedMs=${stopwatch.elapsedMilliseconds}',
-          error: error,
-          stackTrace: stackTrace,
-        );
-        _emit(_state.copyWith(loadingToc: false, tocError: _message(error, '目录加载失败')));
+        if (silent) {
+          _logger.warning(
+            tag: bookTocLogTag,
+            message: '详情页静默刷新目录失败 generation=$generation bookId=$bookId '
+                'elapsedMs=${stopwatch.elapsedMilliseconds}',
+            error: error,
+          );
+          _emit(_state.copyWith(switchingSource: false));
+        } else {
+          _logger.error(
+            tag: bookTocLogTag,
+            message: '详情页目录加载失败 generation=$generation bookId=$bookId '
+                'elapsedMs=${stopwatch.elapsedMilliseconds}',
+            error: error,
+            stackTrace: stackTrace,
+          );
+          _emit(
+            _state.copyWith(
+              loadingToc: false,
+              switchingSource: false,
+              tocError: _message(error, '目录加载失败'),
+            ),
+          );
+        }
       }
     }
   }

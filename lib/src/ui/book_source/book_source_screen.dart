@@ -302,7 +302,26 @@ final class _BookSourceCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(source.bookSourceName, style: Theme.of(context).textTheme.titleSmall),
+                    Row(
+                      children: <Widget>[
+                        if (source.pinned) ...<Widget>[
+                          Icon(
+                            Icons.push_pin,
+                            size: 14,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: SpacingToken.xSmall),
+                        ],
+                        Flexible(
+                          child: Text(
+                            source.bookSourceName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: SpacingToken.xSmall),
                     Text(
                       source.bookSourceUrl,
@@ -310,14 +329,16 @@ final class _BookSourceCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    if (source.bookSourceGroup?.trim().isNotEmpty == true)
-                      Padding(
-                        padding: const EdgeInsets.only(top: SpacingToken.xSmall),
-                        child: Text(
-                          '分组：${source.bookSourceGroup}',
-                          style: Theme.of(context).textTheme.labelMedium,
+                    Padding(
+                      padding: const EdgeInsets.only(top: SpacingToken.xSmall),
+                      child: Text(
+                        '成功率 ${source.sourceScore}'
+                        '${source.bookSourceGroup?.trim().isNotEmpty == true ? ' · 分组：${source.bookSourceGroup}' : ''}',
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
+                    ),
                   ],
                 ),
               ),
@@ -348,6 +369,13 @@ final class _BookSourceCard extends StatelessWidget {
                       onIntent(DebugBookSourceIntent(source.bookSourceUrl));
                     case 'login':
                       onIntent(LoginBookSourceIntent(source.bookSourceUrl));
+                    case 'pin':
+                      onIntent(
+                        PinBookSourceIntent(
+                          sourceUrl: source.bookSourceUrl,
+                          pinned: !source.pinned,
+                        ),
+                      );
                     case 'delete':
                       onIntent(
                         RequestDeleteBookSourcesIntent(
@@ -361,6 +389,7 @@ final class _BookSourceCard extends StatelessWidget {
                   const PopupMenuItem<String>(value: 'debug', child: Text('基础调试')),
                   if (source.loginUrl != null || source.loginUi != null)
                     const PopupMenuItem<String>(value: 'login', child: Text('登录/Cookie')),
+                  PopupMenuItem<String>(value: 'pin', child: Text(source.pinned ? '取消置顶' : '置顶')),
                   const PopupMenuDivider(),
                   const PopupMenuItem<String>(value: 'delete', child: Text('删除')),
                 ],

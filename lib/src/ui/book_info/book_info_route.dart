@@ -47,6 +47,8 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       detailService: widget.dependencies.bookDetailService,
       bookGroupGateway: widget.dependencies.bookGroupGateway,
       bookshelfGateway: widget.dependencies.bookshelfGateway,
+      chapterGateway: widget.dependencies.chapterGateway,
+      bookSourceGateway: widget.dependencies.bookSourceGateway,
       addBookToBookshelf: widget.dependencies.addBookToBookshelf,
       changeBookSource: widget.dependencies.changeBookSource,
       createBookshelfGroup: widget.dependencies.createBookshelfGroup,

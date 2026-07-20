@@ -249,7 +249,14 @@ final class BookSourceManagementUiState {
       return source.bookSourceName.toLowerCase().contains(normalizedQuery) ||
           source.bookSourceUrl.toLowerCase().contains(normalizedQuery) ||
           (source.bookSourceGroup?.toLowerCase().contains(normalizedQuery) ?? false);
-    }).toList(growable: false);
+    }).toList(growable: false)
+      /// 置顶书源永远排最前，其余按成功率从高到低排序。
+      ..sort((BookSource left, BookSource right) {
+        if (left.pinned != right.pinned) {
+          return left.pinned ? -1 : 1;
+        }
+        return right.sourceScore.compareTo(left.sourceScore);
+      });
   }
 
   /// 判断书源核心字段是否包含 JavaScript 规则。
@@ -395,6 +402,18 @@ final class SetSingleBookSourceEnabledIntent extends BookSourceManagementIntent 
 
   /// 新启用状态。
   final bool enabled;
+}
+
+/// 置顶或取消置顶单个书源。
+final class PinBookSourceIntent extends BookSourceManagementIntent {
+  /// 创建置顶切换意图。
+  const PinBookSourceIntent({required this.sourceUrl, required this.pinned});
+
+  /// 目标书源 URL。
+  final String sourceUrl;
+
+  /// 新置顶状态。
+  final bool pinned;
 }
 
 /// 修改全部选中书源启用状态。

@@ -39,6 +39,8 @@ final class BookSource {
     this.customButton = false,
     this.homepageModules,
     this.extraFieldsJson,
+    this.sourceScore = 0,
+    this.pinned = false,
   });
 
   /// 含协议的书源地址，也是 `book_sources` 表主键；不进行 URL 规范化。
@@ -111,12 +113,19 @@ final class BookSource {
   /// 导入时未被当前模型识别的字段 JSON；重新保存时必须原样保留。
   final String? extraFieldsJson;
 
+  /// 搜索成功、目录加载成功/失败、正文拉取成功/失败累计的成功率分值，无界，可为负。
+  final int sourceScore;
+
+  /// 是否被用户置顶；置顶书源在搜索、换源候选和管理页排序中始终排在最前。
+  final bool pinned;
+
   /// 复制管理页面允许直接修改的字段，其余规则和未知字段保持不变。
   BookSource copyWithManagement({
     bool? enabled,
     bool? enabledExplore,
     String? bookSourceGroup,
     int? customOrder,
+    bool? pinned,
   }) {
     return BookSource(
       bookSourceUrl: bookSourceUrl,
@@ -153,6 +162,8 @@ final class BookSource {
       customButton: customButton,
       homepageModules: homepageModules,
       extraFieldsJson: extraFieldsJson,
+      sourceScore: sourceScore,
+      pinned: pinned ?? this.pinned,
     );
   }
 }

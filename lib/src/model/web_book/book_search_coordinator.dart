@@ -60,10 +60,16 @@ final class BookSearchCoordinator {
   }) async {
     /// 本次开始时固定的启用书源快照，运行中管理页变更不影响当前任务。
     final List<BookSource> enabled = await _sourceGateway.getEnabled();
-    /// 过滤后的执行书源；空选择表示全部启用书源。
+    /// 过滤后的执行书源；空选择表示全部启用书源；置顶优先，其余按成功率从高到低。
     final List<BookSource> sources = enabled.where((BookSource source) {
       return selectedSourceUrls.isEmpty || selectedSourceUrls.contains(source.bookSourceUrl);
-    }).toList(growable: false);
+    }).toList(growable: false)
+      ..sort((BookSource left, BookSource right) {
+        if (left.pinned != right.pinned) {
+          return left.pinned ? -1 : 1;
+        }
+        return right.sourceScore.compareTo(left.sourceScore);
+      });
     /// 【搜书诊断日志】记录过滤后的执行规模和并发配置，不记录搜索词原文。
     _logger.info(
       tag: bookSearchSourceLogTag,
@@ -151,6 +157,12 @@ final class BookSearchCoordinator {
                   'elapsedMs=${sourceStopwatch.elapsedMilliseconds}',
             );
             onEvent(BookSearchResultsEvent(source: source, books: books));
+            /// 搜索成功累加书源成功率；只在成功时加分，失败不扣分。
+            unawaited(
+              _sourceGateway
+                  .recordSourceOutcome(source.bookSourceUrl, delta: 1)
+                  .catchError((Object _) {}),
+            );
           }
         } catch (error, stackTrace) {
           if (!run.isCancelled) {

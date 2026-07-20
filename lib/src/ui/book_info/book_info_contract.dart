@@ -52,6 +52,7 @@ final class BookInfoUiState {
     required this.selectedBook,
     this.loadingInfo = true,
     this.loadingToc = false,
+    this.switchingSource = false,
     this.addingToShelf = false,
     this.inBookshelf = false,
     this.book,
@@ -72,6 +73,8 @@ final class BookInfoUiState {
   final bool loadingInfo;
   /// 是否加载目录。
   final bool loadingToc;
+  /// 是否正在切换到另一个候选来源；切换时保留旧数据可见，只在换源入口局部展示加载态。
+  final bool switchingSource;
   /// 是否执行加入书架事务。
   final bool addingToShelf;
   /// 当前书籍是否已在书架。
@@ -96,6 +99,7 @@ final class BookInfoUiState {
     SearchBook? selectedBook,
     bool? loadingInfo,
     bool? loadingToc,
+    bool? switchingSource,
     bool? addingToShelf,
     bool? inBookshelf,
     Book? book,
@@ -116,6 +120,7 @@ final class BookInfoUiState {
       selectedBook: selectedBook ?? this.selectedBook,
       loadingInfo: loadingInfo ?? this.loadingInfo,
       loadingToc: loadingToc ?? this.loadingToc,
+      switchingSource: switchingSource ?? this.switchingSource,
       addingToShelf: addingToShelf ?? this.addingToShelf,
       inBookshelf: inBookshelf ?? this.inBookshelf,
       book: clearBook ? null : book ?? this.book,

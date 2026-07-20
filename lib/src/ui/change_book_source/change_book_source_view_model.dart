@@ -283,9 +283,17 @@ final class ChangeBookSourceViewModel {
           final (String, String) key = (book.origin, book.bookUrl);
           _candidateMap[key] = book;
         }
-        /// 按书源排序值、来源名称和详情 URL 生成稳定展示顺序。
+        /// 置顶优先，其余按成功率排序，再退回书源排序值、来源名称和详情 URL 稳定展示顺序。
         final List<SearchBook> candidates = _candidateMap.values.toList(growable: false)
           ..sort((SearchBook left, SearchBook right) {
+            if (left.pinned != right.pinned) {
+              return left.pinned ? -1 : 1;
+            }
+            /// 成功率分值比较结果。
+            final int score = right.sourceScore.compareTo(left.sourceScore);
+            if (score != 0) {
+              return score;
+            }
             /// 书源排序值比较结果。
             final int originOrder = left.originOrder.compareTo(right.originOrder);
             if (originOrder != 0) {

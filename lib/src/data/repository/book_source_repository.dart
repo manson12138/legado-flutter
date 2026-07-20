@@ -250,4 +250,16 @@ final class BookSourceRepository implements BookSourceGateway {
       }
     });
   }
+
+  /// 累加书源成功率分值，原子递增，不受并发读改写影响。
+  @override
+  Future<void> recordSourceOutcome(String sourceUrl, {required int delta}) {
+    return guardDataOperation<void>(() => _bookSourceDao.adjustScore(sourceUrl, delta));
+  }
+
+  /// 设置或取消书源置顶。
+  @override
+  Future<void> setPinned(String sourceUrl, {required bool pinned}) {
+    return guardDataOperation<void>(() => _bookSourceDao.setPinned(sourceUrl, pinned));
+  }
 }

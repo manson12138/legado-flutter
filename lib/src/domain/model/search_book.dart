@@ -24,6 +24,8 @@ final class SearchBook {
     this.chapterWordCountText,
     this.chapterWordCount = -1,
     this.respondTime = -1,
+    this.sourceScore = 0,
+    this.pinned = false,
   });
 
   /// 详情页 URL，也是搜索缓存主键。
@@ -62,6 +64,10 @@ final class SearchBook {
   final int chapterWordCount;
   /// 搜索响应耗时，单位毫秒；-1 表示未记录。
   final int respondTime;
+  /// 产生结果的书源当时的成功率分值，用于候选排序。
+  final int sourceScore;
+  /// 产生结果的书源是否被置顶，用于候选排序。
+  final bool pinned;
 
   /// 将搜索结果转换为新的书架书，不携带搜索缓存专属统计字段。
   Book toBook({required int createdAt}) {
