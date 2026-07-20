@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../../api/http/http_contract.dart';
 import '../../api/http/response_decoder.dart';
@@ -67,12 +68,13 @@ final class AdultContentRepository implements AdultContentGateway {
   Set<String>? _domainCache;
 
   @override
-  Future<bool> isBlockingEnabled() async {
+  Future<bool> isBlockingEnabled({DatabaseExecutor? executor}) async {
     if (_enabledCache != null) {
       return _enabledCache!;
     }
     /// 缓存表中保存的开关文本；不存在时按默认开启处理。
-    final String? raw = (await _cacheDao.get(_enabledCacheKey))?.value;
+    final String? raw =
+        (await _cacheDao.get(_enabledCacheKey, executor: executor))?.value;
     final bool enabled = raw == null || raw == 'true';
     _enabledCache = enabled;
     return enabled;
@@ -113,15 +115,16 @@ final class AdultContentRepository implements AdultContentGateway {
     String? group,
     String? comment,
     String? url,
+    DatabaseExecutor? executor,
   }) async {
-    if (!await isBlockingEnabled()) {
+    if (!await isBlockingEnabled(executor: executor)) {
       return false;
     }
     if (_hasAdultGroupTag(group)) {
       return true;
     }
     /// 当前生效关键词库。
-    final Set<String> keywords = await _keywords();
+    final Set<String> keywords = await _keywords(executor: executor);
     if (_hit(name, keywords) || _hit(group, keywords) || _hit(comment, keywords)) {
       return true;
     }
@@ -174,13 +177,15 @@ final class AdultContentRepository implements AdultContentGateway {
   }
 
   /// 读取当前生效关键词库；优先使用远程更新覆盖（明文 JSON），否则回退内置 Base64 assets。
-  Future<Set<String>> _keywords() async {
+  /// [executor] 用于在调用方已开启的事务内查询，避免另开主连接查询导致自锁。
+  Future<Set<String>> _keywords({DatabaseExecutor? executor}) async {
     if (_keywordCache != null) {
       return _keywordCache!;
     }
     try {
       /// 缓存表中保存的远程更新覆盖 JSON 文本。
-      final String? override = (await _cacheDao.get(_keywordOverrideCacheKey))?.value;
+      final String? override =
+          (await _cacheDao.get(_keywordOverrideCacheKey, executor: executor))?.value;
       final Set<String> keywords = override != null
           ? _decodeKeywordList(override).toSet()
           : _decodeBase64Lines(await _assetBundle.loadString(_keywordAssetPath));

@@ -106,6 +106,7 @@ final class BookSourceRepository implements BookSourceGateway {
               group: source.bookSourceGroup,
               comment: source.bookSourceComment,
               url: source.bookSourceUrl,
+              executor: transaction,
             )) {
               blockedAdult += 1;
               continue;

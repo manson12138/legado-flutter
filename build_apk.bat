@@ -23,6 +23,7 @@ set "APK_FULL_PATH=%SCRIPT_DIR%%APK_PATH%"
 echo Building %BUILD_TYPE% APK...
 call flutter build apk --%BUILD_TYPE%
 if errorlevel 1 (
+
     echo.
     echo Build failed. See the errors above.
     pause

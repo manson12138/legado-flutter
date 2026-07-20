@@ -13,10 +13,11 @@ final class CacheDao {
   /// Flutter 独立数据库入口。
   final LegadoDatabase _database;
 
-  /// 按缓存键读取完整记录，不自动忽略过期值。
-  Future<Cache?> get(String key) async {
-    /// 已打开的数据库连接。
-    final Database database = await _database.database;
+  /// 按缓存键读取完整记录，不自动忽略过期值；[executor] 用于在调用方已开启的
+  /// 事务内查询，避免另开主连接查询导致自锁。
+  Future<Cache?> get(String key, {DatabaseExecutor? executor}) async {
+    /// 当前查询使用的数据库或事务执行器。
+    final DatabaseExecutor database = executor ?? await _database.database;
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.caches,
