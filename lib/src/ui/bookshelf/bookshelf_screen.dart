@@ -344,7 +344,12 @@ final class _BookshelfList extends StatelessWidget {
             leading: SizedBox(
               width: 28,
               height: 40,
-              child: BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面'),
+              child: BookCover(
+                coverUrl: item.displayCoverUrl,
+                semanticLabel: '${item.book.name}封面',
+                bookName: item.book.name,
+                bookAuthor: item.book.author,
+              ),
             ),
             title: Text(item.book.name),
             subtitle: Text('${item.book.author}\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
@@ -415,6 +420,12 @@ final class _BookshelfGrid extends StatelessWidget {
             final BookshelfBookItem item = state.books[index];
             /// 是否已选择。
             final bool selected = state.selectedBookUrls.contains(item.book.bookUrl);
+            /// 书名字号，作为作者名和未读章节字号的换算基准。
+            final double titleFontSize = Theme.of(context).textTheme.bodyMedium?.fontSize ?? 14;
+            /// 作者名字号：比书名小 1 号。
+            final double authorFontSize = titleFontSize - 1;
+            /// 未读章节字号：比作者名小 2 号。
+            final double unreadFontSize = authorFontSize - 2;
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: cardHorizontalInset),
               child: Card(
@@ -432,7 +443,13 @@ final class _BookshelfGrid extends StatelessWidget {
                         child: Stack(
                           fit: StackFit.expand,
                           children: <Widget>[
-                            BookCover(coverUrl: item.displayCoverUrl, semanticLabel: '${item.book.name}封面', borderRadius: BorderRadius.zero),
+                            BookCover(
+                              coverUrl: item.displayCoverUrl,
+                              semanticLabel: '${item.book.name}封面',
+                              borderRadius: BorderRadius.zero,
+                              bookName: item.book.name,
+                              bookAuthor: item.book.author,
+                            ),
                             if (selected)
                               const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
                             if (item.unreadChapterCount > 0)
@@ -445,16 +462,13 @@ final class _BookshelfGrid extends StatelessWidget {
                                     horizontal: SpacingToken.xSmall,
                                     vertical: 2,
                                   ),
-                                  color: Colors.black.withValues(alpha: 0.45),
-                                  alignment: Alignment.centerRight,
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  alignment: Alignment.centerLeft,
                                   child: Text(
                                     '${item.unreadChapterCount} 章未读',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                                    style: TextStyle(fontSize: unreadFontSize, color: Colors.grey.shade700),
                                   ),
                                 ),
                               ),
@@ -483,7 +497,14 @@ final class _BookshelfGrid extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
-                            Text(item.book.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                            Text(
+                              item.book.author,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(
+                                context,
+                              ).textTheme.bodySmall?.copyWith(fontSize: authorFontSize),
+                            ),
                           ],
                         ),
                       ),

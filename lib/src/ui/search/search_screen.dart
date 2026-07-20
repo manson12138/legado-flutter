@@ -370,23 +370,34 @@ final class _SearchResultCoverState extends State<_SearchResultCover> {
     return urls;
   }
 
-  /// 依次尝试候选地址，全部失败后交给 [BookCover] 展示统一占位。
+  /// 依次尝试候选地址；组内全部失败后交给 [BookCover] 自身的跨页面缓存兜底。
   @override
   Widget build(BuildContext context) {
     /// 当前候选组内可尝试的全部封面地址。
     final List<String> candidates = _candidateUrls();
-    /// 候选组书名，用于无障碍说明。
-    final String semanticLabel = '${widget.group.primary.name}封面';
+    /// 候选组书名，用于无障碍说明和缓存 key。
+    final String bookName = widget.group.primary.name;
+    /// 候选组作者，用于缓存 key。
+    final String bookAuthor = widget.group.primary.author;
+    /// 无障碍封面说明。
+    final String semanticLabel = '$bookName封面';
     if (_index >= candidates.length) {
-      return BookCover(coverUrl: null, semanticLabel: semanticLabel);
+      return BookCover(
+        coverUrl: null,
+        semanticLabel: semanticLabel,
+        bookName: bookName,
+        bookAuthor: bookAuthor,
+      );
     }
-    /// 本次尝试的候选下标，供失败回调核对是否仍然有效。
+    /// 本次尝试的候选下标，供 onExhausted 回调核对是否仍然有效。
     final int attemptIndex = _index;
     return BookCover(
       key: ValueKey<String>(candidates[attemptIndex]),
       coverUrl: candidates[attemptIndex],
       semanticLabel: semanticLabel,
-      onError: () {
+      bookName: bookName,
+      bookAuthor: bookAuthor,
+      onExhausted: () {
         if (!mounted || _index != attemptIndex) {
           return;
         }
