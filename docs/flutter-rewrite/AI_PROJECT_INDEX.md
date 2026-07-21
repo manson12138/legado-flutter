@@ -1,10 +1,10 @@
 # Legado Flutter AI 项目索引
 
-> 用途：帮助 AI 编码代理在修改 `flutter_app/` 前，快速找到规则、实现入口、Android 对照、阶段文档和已知阻塞。
+> 用途：帮助 AI 编码代理在修改本仓库业务代码前，快速找到规则、实现入口、Android 对照、阶段文档和已知阻塞。
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-07-16。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-07-21。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -32,15 +32,15 @@
 
 | 项目事实 | 当前值 |
 |---|---|
-| Flutter 子项目 | `flutter_app/` |
-| Dart 入口 | `flutter_app/lib/main.dart` |
+| 仓库定位 | 独立 Flutter 仓库；`lib/`、`android/`、`ios/` 直接在仓库根目录，不再有 `flutter_app/` 这层子目录 |
+| Dart 入口 | `lib/main.dart` |
 | Flutter/Dart 固定版本 | Flutter `3.41.5 stable`、Dart `3.11.3` |
 | Android applicationId | `io.legado.flutter` |
 | Android minSdk | `26` |
 | iOS Bundle Identifier | `io.legado.flutter` |
 | iOS Deployment Target | `16.0` |
 | 独立数据库 | `legado_flutter.db`，当前 Schema v4 |
-| 原 Android 参考实现 | `app/src/main/java/io/legado/app/` |
+| 原 Android 参考实现 | 位于**同级兄弟仓库** `legado-with-MD3`（不在本仓库内）的 `app/src/main/java/io/legado/app/`；本索引第 6 节“Android 对照”列的路径均相对该兄弟仓库 |
 | 重写文档主目录 | `docs/flutter-rewrite/` |
 
 必须保持的边界：
@@ -71,7 +71,7 @@ Widget 窗口、离线下载和其余页面视觉重构仍未完成。
 ## 3. 总体启动链
 
 ```text
-flutter_app/lib/main.dart
+lib/main.dart
   -> 初始化 Widgets、edge-to-edge、全局错误捕获和日志器
   -> AppDependencies.create(...)
   -> LegadoApp
@@ -86,14 +86,14 @@ flutter_app/lib/main.dart
 
 | 职责 | 文件 | 重点 |
 |---|---|---|
-| 进程入口与全局错误兜底 | `flutter_app/lib/main.dart` | 初始化顺序、日志后备实现、`runZonedGuarded` |
-| 应用组合根 | `flutter_app/lib/src/app/app_dependencies.dart` | DAO、Repository、HTTP、JS、协调器和 UseCase 的唯一集中装配处 |
-| 内置书源启动导入 | `flutter_app/lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
-| 路由常量 | `flutter_app/lib/src/app/app_route.dart` | 应用内稳定路由名 |
-| 路由与参数校验 | `flutter_app/lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
-| 根 Widget | `flutter_app/lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器和错误边界 |
-| 全局错误边界 | `flutter_app/lib/src/app/app_error_boundary.dart` | Flutter 框架与平台调度错误 |
-| 导航观察 | `flutter_app/lib/src/app/app_navigation_observer.dart` | 页面切换诊断日志 |
+| 进程入口与全局错误兜底 | `lib/main.dart` | 初始化顺序、日志后备实现、`runZonedGuarded` |
+| 应用组合根 | `lib/src/app/app_dependencies.dart` | DAO、Repository、HTTP、JS、协调器和 UseCase 的唯一集中装配处 |
+| 内置书源启动导入 | `lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
+| 路由常量 | `lib/src/app/app_route.dart` | 应用内稳定路由名 |
+| 路由与参数校验 | `lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
+| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器和错误边界 |
+| 全局错误边界 | `lib/src/app/app_error_boundary.dart` | Flutter 框架与平台调度错误 |
+| 导航观察 | `lib/src/app/app_navigation_observer.dart` | 页面切换诊断日志 |
 
 新增共享依赖时，先判断它属于 Gateway、Repository、UseCase、运行时协调器还是平台服务，再从 `AppDependencies` 接线；不要在页面中临时创建第二套网络、数据库或日志实现。
 
@@ -101,29 +101,29 @@ flutter_app/lib/main.dart
 
 | 目录 | 职责 | 不应放入 |
 |---|---|---|
-| `flutter_app/lib/src/app/` | 启动、组合根、路由、应用级错误边界 | 功能业务逻辑 |
-| `flutter_app/lib/src/ui/` | Contract、ViewModel、Route、Screen、共享 UI | DAO、HTTP、文件解析 |
-| `flutter_app/lib/src/domain/model/` | 平台无关、存储无关的领域模型 | sqflite Map、Widget 状态 |
-| `flutter_app/lib/src/domain/gateway/` | 领域所需能力的抽象边界 | 插件或 DAO 具体类型 |
-| `flutter_app/lib/src/domain/usecase/` | 跨 Gateway 的明确业务动作 | 页面导航、SnackBar |
-| `flutter_app/lib/src/data/dao/` | 单表或紧密相关表的 SQL 读写 | UI 状态和网络请求 |
-| `flutter_app/lib/src/data/repository/` | Gateway 实现、事务和数据错误转换 | Widget 或 `BuildContext` |
-| `flutter_app/lib/src/data/local/` | 数据库、表名、行读取、变更通知 | 功能页面状态 |
-| `flutter_app/lib/src/data/model/` | 外部数据进入领域前的解码边界 | 页面 DTO |
-| `flutter_app/lib/src/api/http/` | 统一 HTTP 契约、Dio 实现、URL 解析、响应解码 | 书源页面状态 |
-| `flutter_app/lib/src/api/cookie/` | HTTP Cookie 持久化、Android WebView/WKWebView 按域同步 | 独立第二套 Cookie 存储 |
-| `flutter_app/lib/src/api/js/` | JS 引擎、实例池、桥接、执行上下文 | 具体页面流程 |
-| `flutter_app/lib/src/model/analyze_rule/` | 普通规则和 JavaScript 规则服务 | 导航和数据库 SQL |
-| `flutter_app/lib/src/model/web_book/` | 搜索、详情、目录、正文编排 | Widget |
-| `flutter_app/lib/src/model/bookshelf/` | 书架刷新运行时协调 | 页面渲染 |
-| `flutter_app/lib/src/model/reader/` | 正文获取、处理、缓存和预加载协调 | 平台窗口直接调用 |
-| `flutter_app/lib/src/model/local_book/` | 文件副本、格式识别、解析和导入协调 | 文件选择器 UI |
-| `flutter_app/lib/src/platform/` | 文件选择、WebView 登录、阅读系统能力等窄接口 | 跨平台业务状态机 |
-| `flutter_app/lib/src/help/error/` | 稳定应用错误与结果类型 | 功能专属状态 |
-| `flutter_app/lib/src/help/logging/` | 日志抽象、文件日志、日志管理能力 | 敏感正文、Cookie、Token |
-| `flutter_app/lib/src/ui/components/` | 至少两个页面复用的无状态组件 | 单页面业务抽象 |
-| `flutter_app/lib/src/ui/theme/` | Material 3 主题和 Design Token | 功能状态 |
-| `flutter_app/packages/` | 将来确有必要的自研平台插件 | 没有调用方的预留空壳 |
+| `lib/src/app/` | 启动、组合根、路由、应用级错误边界 | 功能业务逻辑 |
+| `lib/src/ui/` | Contract、ViewModel、Route、Screen、共享 UI | DAO、HTTP、文件解析 |
+| `lib/src/domain/model/` | 平台无关、存储无关的领域模型 | sqflite Map、Widget 状态 |
+| `lib/src/domain/gateway/` | 领域所需能力的抽象边界 | 插件或 DAO 具体类型 |
+| `lib/src/domain/usecase/` | 跨 Gateway 的明确业务动作 | 页面导航、SnackBar |
+| `lib/src/data/dao/` | 单表或紧密相关表的 SQL 读写 | UI 状态和网络请求 |
+| `lib/src/data/repository/` | Gateway 实现、事务和数据错误转换 | Widget 或 `BuildContext` |
+| `lib/src/data/local/` | 数据库、表名、行读取、变更通知 | 功能页面状态 |
+| `lib/src/data/model/` | 外部数据进入领域前的解码边界 | 页面 DTO |
+| `lib/src/api/http/` | 统一 HTTP 契约、Dio 实现、URL 解析、响应解码 | 书源页面状态 |
+| `lib/src/api/cookie/` | HTTP Cookie 持久化、Android WebView/WKWebView 按域同步 | 独立第二套 Cookie 存储 |
+| `lib/src/api/js/` | JS 引擎、实例池、桥接、执行上下文 | 具体页面流程 |
+| `lib/src/model/analyze_rule/` | 普通规则和 JavaScript 规则服务 | 导航和数据库 SQL |
+| `lib/src/model/web_book/` | 搜索、详情、目录、正文编排 | Widget |
+| `lib/src/model/bookshelf/` | 书架刷新运行时协调 | 页面渲染 |
+| `lib/src/model/reader/` | 正文获取、处理、缓存和预加载协调 | 平台窗口直接调用 |
+| `lib/src/model/local_book/` | 文件副本、格式识别、解析和导入协调 | 文件选择器 UI |
+| `lib/src/platform/` | 文件选择、WebView 登录、阅读系统能力等窄接口 | 跨平台业务状态机 |
+| `lib/src/help/error/` | 稳定应用错误与结果类型 | 功能专属状态 |
+| `lib/src/help/logging/` | 日志抽象、文件日志、日志管理能力 | 敏感正文、Cookie、Token |
+| `lib/src/ui/components/` | 至少两个页面复用的无状态组件 | 单页面业务抽象 |
+| `lib/src/ui/theme/` | Material 3 主题和 Design Token | 功能状态 |
+| `packages/` | 将来确有必要的自研平台插件 | 没有调用方的预留空壳 |
 
 `.dart_tool/`、`build/`、`.gradle/`、`ios/Flutter/ephemeral/` 和生成的插件注册文件不是业务实现索引来源。
 
@@ -193,7 +193,7 @@ BookSourceManagementScreen
 
 外部 JSON、二维码、剪贴板和远程文本都属于不可信输入。不要绕过统一解码、大小限制、冲突策略和事务边界。
 新安装默认书源由 `DefaultBookSourceBootstrapper` 在 `main.dart` 启动期触发；它仅在书源表为空时读取
-`flutter_app/assets/default_data/book_sources.json`，并继续走 `ImportBookSourcesUseCase` 与
+`assets/default_data/book_sources.json`，并继续走 `ImportBookSourcesUseCase` 与
 `BookSourceRepository.importSourceJson`，不得另建资产专用解码或写库路径。
 
 ### 7.2 网络书搜索到阅读
@@ -397,30 +397,30 @@ JavaScript 入口：
 
 ```bash
 # 列出 Flutter 业务源码，排除生成物
-rg --files flutter_app/lib flutter_app/android/app/src/main flutter_app/ios/Runner
+rg --files lib android/app/src/main ios/Runner
 
 # 找路由声明和跳转调用
-rg -n "AppRoute\\.|pushNamed|onGenerateRoute" flutter_app/lib
+rg -n "AppRoute\\.|pushNamed|onGenerateRoute" lib
 
 # 找一个功能的 UiState、Intent、Effect、ViewModel、Route 和 Screen
-rg -n "BookSourceManagement|Search|BookInfo|Bookshelf|Reader" flutter_app/lib/src/ui
+rg -n "BookSourceManagement|Search|BookInfo|Bookshelf|Reader" lib/src/ui
 
 # 找 Gateway 到 Repository 的实现关系
 rg -n "abstract interface class .*Gateway|implements .*Gateway" \
-  flutter_app/lib/src/domain flutter_app/lib/src/data
+  lib/src/domain lib/src/data
 
 # 找组合根中的真实依赖创建和注入位置
 rg -n "required this\\.|final .* =|create.*Coordinator" \
-  flutter_app/lib/src/app/app_dependencies.dart
+  lib/src/app/app_dependencies.dart
 
 # 从 Android 类名反查 Flutter 映射文档
 rg -n "AndroidClassName|FlutterClassName" docs/flutter-rewrite/m00/03_file_mapping.md
 
 # 查找禁止的强制空值断言时，排除注释和非业务生成物后人工判断
-rg -n "!" flutter_app/lib -g "*.dart"
+rg -n "!" lib -g "*.dart"
 ```
 
-不要搜索或修改 `flutter_app/build/`、`.dart_tool/`、`android/.gradle/` 中的生成结果来修复源码问题。
+不要搜索或修改 `build/`、`.dart_tool/`、`android/.gradle/` 中的生成结果来修复源码问题。
 
 ## 13. 修改前最小上下文清单
 
@@ -439,7 +439,7 @@ rg -n "!" flutter_app/lib -g "*.dart"
 
 ## 14. 索引维护规则
 
-AI 在 `flutter_app/` 或 `docs/flutter-rewrite/` 下新增任何手写文件时，必须在同一任务交付前更新本索引的相关章节，使新文件能够按职责、功能、路由、调用链、平台边界或迁移阶段被后续 AI 定位。即使新增文件不改变功能状态，也不能让它成为索引无法解释的孤立文件。
+AI 在 `lib/`、`android/`、`ios/` 等仓库业务代码或 `docs/flutter-rewrite/` 下新增任何手写文件时，必须在同一任务交付前更新本索引的相关章节，使新文件能够按职责、功能、路由、调用链、平台边界或迁移阶段被后续 AI 定位。即使新增文件不改变功能状态，也不能让它成为索引无法解释的孤立文件。
 
 索引不要求机械维护“一文件一行”的完整清单。若现有功能入口已经能够准确覆盖新文件，应更新该功能入口、目录职责或调用链；若现有结构无法覆盖，则新增最小必要索引项。
 
@@ -451,7 +451,7 @@ AI 在 `flutter_app/` 或 `docs/flutter-rewrite/` 下新增任何手写文件时
 - 新增功能目录或改变 Route / ViewModel / Screen 分层；
 - Gateway、Repository、UseCase 或组合根职责发生变化；
 - 数据库 Schema 版本、表或主键语义变化——修改 `LegadoDatabase.schemaVersion` 时必须同时给
-  新字段补 `onUpgrade` 的 `ALTER TABLE` 迁移分支，并同步把 `flutter_app/pubspec.yaml` 的
+  新字段补 `onUpgrade` 的 `ALTER TABLE` 迁移分支，并同步把 `pubspec.yaml` 的
   `version` build number（`+` 后面的整数）加一，让带 Schema 变化的构建始终能从版本号区分；
 - 新增原生通道、Flutter 插件或平台差异；
 - JavaScript、WebView、Cookie 或本地书格式的支持边界变化；
