@@ -9,6 +9,7 @@ import 'src/app/legado_app.dart';
 import 'src/help/logging/file_app_logger.dart';
 import 'src/help/logging/app_logger.dart';
 import 'src/help/logging/console_app_logger.dart';
+import 'src/help/media/app_media_directories.dart';
 
 /// 初始化 Flutter 运行环境并启动应用组合根。
 ///
@@ -31,6 +32,9 @@ void main() {
       final FileAppLogger fileLogger = await FileAppLogger.create();
       activeLogger = fileLogger;
       configureGlobalErrorHandling(fileLogger);
+
+      /// 预建封面等本地媒体缓存目录，使封面渲染时可以同步判断本地是否已有缓存。
+      await AppMediaDirectories.instance.warmUp();
 
       /// 应用级依赖容器，仅在组合根创建并向下传递。
       final AppDependencies dependencies = AppDependencies.create(

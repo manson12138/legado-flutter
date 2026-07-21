@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../help/media/app_media_directories.dart';
+import '../../help/media/media_cache_downloader.dart';
 import 'cover_url_cache.dart';
 
 /// 统一处理书架和详情封面、缺失占位、加载失败和跨页面已知可用地址回退。
@@ -175,17 +177,38 @@ final class _BookCoverState extends State<BookCover> {
     /// 网络或本地图片组件。
     final Widget image;
     if (uri?.scheme == 'http' || uri?.scheme == 'https') {
-      image = Image.network(
+      /// 已经落盘的本地缓存；命中时直接读本地文件，完全不发起网络请求。
+      final File? cachedFile = MediaCacheDownloader.instance.lookupCachedFileSync(
         value,
-        key: ValueKey<String>(value),
-        fit: widget.fit,
-        semanticLabel: widget.semanticLabel,
-        errorBuilder: fallback,
-        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-          handleFrame(frame);
-          return child;
-        },
+        MediaCategory.cover,
       );
+      if (cachedFile != null) {
+        image = Image.file(
+          cachedFile,
+          key: ValueKey<String>(value),
+          fit: widget.fit,
+          semanticLabel: widget.semanticLabel,
+          errorBuilder: fallback,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            handleFrame(frame);
+            return child;
+          },
+        );
+      } else {
+        image = Image.network(
+          value,
+          key: ValueKey<String>(value),
+          fit: widget.fit,
+          semanticLabel: widget.semanticLabel,
+          errorBuilder: fallback,
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            handleFrame(frame);
+            return child;
+          },
+        );
+        /// 展示网络图的同时后台补齐本地缓存，下次同一地址直接命中本地。
+        unawaited(MediaCacheDownloader.instance.resolve(value, MediaCategory.cover));
+      }
     } else {
       /// file URI 使用系统路径，普通文本直接作为完整路径。
       final String path = uri?.scheme == 'file' ? uri?.toFilePath() ?? value : value;
