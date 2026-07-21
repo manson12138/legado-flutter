@@ -1,9 +1,142 @@
 import 'package:flutter/material.dart';
 
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/replace_rule.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
+
+/// 展示当前章节用户高亮与下划线，并提供启停和删除入口。
+final class ReaderContentProcessesSheetBody extends StatelessWidget {
+  /// 创建只消费阅读状态并发送 Intent 的标注管理面板。
+  const ReaderContentProcessesSheetBody({
+    required this.state,
+    required this.onIntent,
+    super.key,
+  });
+
+  /// 当前阅读器状态，标注列表由数据库流实时更新。
+  final ReaderUiState state;
+
+  /// 阅读 Intent 入口。
+  final ValueChanged<ReaderIntent> onIntent;
+
+  /// 构建当前章节标注列表、启停开关和删除按钮。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前章节全部未软删除标注，包含停用项。
+    final List<BookContentProcess> processes = state.contentProcesses;
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.72,
+      child: Column(
+        children: <Widget>[
+          ListTile(
+            title: const Text('标注管理'),
+            subtitle: Text(
+              '当前章 ${processes.length} 条高亮或下划线',
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: processes.isEmpty
+                ? const Center(child: Text('当前章节还没有标注'))
+                : ListView.separated(
+                    itemCount: processes.length,
+                    separatorBuilder: (BuildContext context, int index) =>
+                        const Divider(height: 1),
+                    itemBuilder: (BuildContext context, int index) {
+                      /// 当前需要展示的用户标注。
+                      final BookContentProcess process = processes[index];
+                      return ListTile(
+                        leading: Icon(
+                          process.kind ==
+                                  BookContentProcessKind.userHighlight
+                              ? Icons.highlight_alt_outlined
+                              : Icons.format_underlined,
+                        ),
+                        title: Text(
+                          process.anchor.selectedText,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${_kindLabel(process.kind)} · 位置 ${process.anchor.chapterPosition}',
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Switch(
+                              value: process.enabled,
+                              onChanged: (bool enabled) {
+                                onIntent(
+                                  ToggleReaderContentProcessIntent(
+                                    process.id,
+                                    enabled,
+                                  ),
+                                );
+                              },
+                            ),
+                            IconButton(
+                              onPressed: () =>
+                                  _confirmDelete(context, process),
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: '删除标注',
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 返回用户可见的标注类型名称。
+  String _kindLabel(BookContentProcessKind kind) {
+    return switch (kind) {
+      BookContentProcessKind.userHighlight => '高亮',
+      BookContentProcessKind.userUnderline => '下划线',
+    };
+  }
+
+  /// 二次确认后发送软删除标注 Intent，避免列表误触直接丢失内容。
+  Future<void> _confirmDelete(
+    BuildContext context,
+    BookContentProcess process,
+  ) async {
+    /// 用户对删除提示的确认结果。
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('删除标注'),
+              content: Text(
+                '确定删除“${process.anchor.selectedText}”的${_kindLabel(process.kind)}吗？',
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('删除'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (!confirmed) {
+      return;
+    }
+    onIntent(DeleteReaderContentProcessIntent(process.id));
+  }
+}
 
 /// 当前章节搜索、书签编辑和替换统计等阅读辅助面板。
 final class ReaderSearchSheetBody extends StatefulWidget {

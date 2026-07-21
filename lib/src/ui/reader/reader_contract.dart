@@ -1,5 +1,6 @@
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/replace_rule.dart';
@@ -83,6 +84,12 @@ final class ReaderBookmarkEditSheet extends ReaderSheet {
 final class ReaderReplaceInfoSheet extends ReaderSheet {
   /// 创建替换规则信息面板标识。
   const ReaderReplaceInfoSheet();
+}
+
+/// 当前章节用户高亮与下划线管理面板。
+final class ReaderContentProcessesSheet extends ReaderSheet {
+  /// 创建正文标注管理面板标识。
+  const ReaderContentProcessesSheet();
 }
 
 /// 阅读器依赖型后续能力边界面板。
@@ -206,10 +213,14 @@ final class ReaderUiState {
     this.chapterTransitionDirection = 0,
     this.batteryLevel,
     List<ReplaceRule> replaceRules = const <ReplaceRule>[],
+    List<BookContentProcess> contentProcesses = const <BookContentProcess>[],
     this.refreshingChapters = false,
   }) : chapters = List<BookChapter>.unmodifiable(chapters),
        bookmarks = List<Bookmark>.unmodifiable(bookmarks),
-       replaceRules = List<ReplaceRule>.unmodifiable(replaceRules);
+       replaceRules = List<ReplaceRule>.unmodifiable(replaceRules),
+       contentProcesses = List<BookContentProcess>.unmodifiable(
+         contentProcesses,
+       );
 
   /// 当前书架书籍。
   final Book? book;
@@ -259,6 +270,9 @@ final class ReaderUiState {
   /// 当前书名或书源可用的完整正文替换规则列表。
   final List<ReplaceRule> replaceRules;
 
+  /// 当前章节全部未删除高亮与下划线记录，包含暂时停用项。
+  final List<BookContentProcess> contentProcesses;
+
   /// 是否正在后台刷新后续或全部章节缓存。
   final bool refreshingChapters;
 
@@ -306,6 +320,7 @@ final class ReaderUiState {
     int? chapterTransitionDirection,
     int? batteryLevel,
     List<ReplaceRule>? replaceRules,
+    List<BookContentProcess>? contentProcesses,
     bool? refreshingChapters,
     bool clearContent = false,
     bool clearError = false,
@@ -330,6 +345,7 @@ final class ReaderUiState {
           chapterTransitionDirection ?? this.chapterTransitionDirection,
       batteryLevel: clearBattery ? null : batteryLevel ?? this.batteryLevel,
       replaceRules: replaceRules ?? this.replaceRules,
+      contentProcesses: contentProcesses ?? this.contentProcesses,
       refreshingChapters: refreshingChapters ?? this.refreshingChapters,
     );
   }
@@ -551,6 +567,48 @@ final class OpenReaderBookSourceChangeIntent extends ReaderIntent {
   const OpenReaderBookSourceChangeIntent();
 }
 
+/// 请求通过系统面板保存或分享当前正文图片。
+final class ShareReaderContentImageIntent extends ReaderIntent {
+  /// 创建正文图片分享 Intent。
+  const ShareReaderContentImageIntent(this.imageUrl);
+
+  /// 已由正文处理管线校验的 HTTP(S) 图片地址。
+  final String imageUrl;
+}
+
+/// 执行从 Flutter 原生选择区域产生的书签、高亮或下划线动作。
+final class ApplyReaderSelectionIntent extends ReaderIntent {
+  /// 创建稳定正文选区动作 Intent。
+  const ApplyReaderSelectionIntent(this.selection, this.action);
+
+  /// 已映射到当前处理后正文的稳定选区。
+  final ReaderTextSelection selection;
+
+  /// 用户在上下文菜单中选择的业务动作。
+  final ReaderSelectionAction action;
+}
+
+/// 启用或停用一条用户正文标注。
+final class ToggleReaderContentProcessIntent extends ReaderIntent {
+  /// 创建正文标注启停 Intent。
+  const ToggleReaderContentProcessIntent(this.id, this.enabled);
+
+  /// 待修改标注主键。
+  final String id;
+
+  /// 修改后的启用状态。
+  final bool enabled;
+}
+
+/// 软删除一条用户正文标注。
+final class DeleteReaderContentProcessIntent extends ReaderIntent {
+  /// 创建正文标注删除 Intent。
+  const DeleteReaderContentProcessIntent(this.id);
+
+  /// 待软删除标注主键。
+  final String id;
+}
+
 /// 用户返回书架，先保存进度再发出关闭 Effect。
 final class CloseReaderIntent extends ReaderIntent {
   /// 创建关闭阅读器 Intent。
@@ -615,6 +673,15 @@ final class CopyReaderTextEffect extends ReaderEffect {
 
   /// 复制完成后显示给用户的提示。
   final String message;
+}
+
+/// 请求路由层打开系统分享面板，让用户保存或转发正文图片地址。
+final class ShareReaderContentImageEffect extends ReaderEffect {
+  /// 创建正文图片分享 Effect。
+  const ShareReaderContentImageEffect(this.imageUrl);
+
+  /// 已由正文处理管线校验的 HTTP(S) 图片地址。
+  final String imageUrl;
 }
 
 /// 请求路由退出阅读系统模式并打开 M11 整书换源页面。

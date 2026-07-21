@@ -314,6 +314,37 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
         subtitle: const Text('关闭后从原始正文缓存重新生成显示内容'),
         onChanged: (bool value) => _update(_draft.copyWith(useReplaceRules: value)),
       ),
+      const SizedBox(height: SpacingToken.small),
+      const _ReaderSettingSectionTitle('简繁转换'),
+      Wrap(
+        spacing: SpacingToken.small,
+        runSpacing: SpacingToken.small,
+        children: ReaderChineseConversionMode.values.map(
+          (ReaderChineseConversionMode mode) {
+            return ChoiceChip(
+              selected: _draft.chineseConversionMode == mode,
+              label: Text(_chineseConversionModeLabel(mode)),
+              onSelected: (bool selected) {
+                if (selected) {
+                  _update(_draft.copyWith(chineseConversionMode: mode));
+                }
+              },
+            );
+          },
+        ).toList(growable: false),
+      ),
+      const Padding(
+        padding: EdgeInsets.only(top: SpacingToken.small),
+        child: Text('使用 OpenCC 转换章节标题和正文，修改后会重新处理当前章'),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        value: _draft.reSegmentContent,
+        title: const Text('正文重新分段'),
+        subtitle: const Text('连接异常断行，并按句末标点切分过长段落'),
+        onChanged: (bool value) =>
+            _update(_draft.copyWith(reSegmentContent: value)),
+      ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
         value: _draft.keepScreenOn,
@@ -378,11 +409,11 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
         onChanged: (ReaderTapAction action) =>
             _update(_draft.copyWith(rightTapAction: action)),
       ),
-      _tapActionTile(
-        label: '长按正文',
-        value: _draft.longPressAction,
-        onChanged: (ReaderTapAction action) =>
-            _update(_draft.copyWith(longPressAction: action)),
+      const ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.text_fields),
+        title: Text('长按正文'),
+        subtitle: Text('固定进入原生文字选区，可复制、分享、添加书签、高亮或下划线'),
       ),
       _slider(
         label: '左侧宽度 ${(_draft.leftTapWidthRatio * 100).round()}%',
@@ -454,6 +485,15 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
         },
       ),
     ];
+  }
+
+  /// 返回简繁转换模式的用户可见名称。
+  String _chineseConversionModeLabel(ReaderChineseConversionMode mode) {
+    return switch (mode) {
+      ReaderChineseConversionMode.none => '不转换',
+      ReaderChineseConversionMode.traditionalToSimplified => '繁转简',
+      ReaderChineseConversionMode.simplifiedToTraditional => '简转繁',
+    };
   }
 
   /// 构建正文触控动作下拉项。

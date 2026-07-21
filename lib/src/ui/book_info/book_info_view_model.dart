@@ -113,7 +113,7 @@ final class BookInfoViewModel {
         _loadDetails();
       case RetryBookTocIntent():
         _logger.info(tag: bookTocLogTag, message: '用户重试目录');
-        _loadToc();
+        _loadToc(runPreUpdateJavaScript: true);
       case AddBookToShelfIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户点击加入书架');
         _addToShelf();
@@ -157,7 +157,7 @@ final class BookInfoViewModel {
     switch (action) {
       case BookInfoMenuAction.refresh:
         _logger.info(tag: bookDetailLogTag, message: '用户从菜单刷新详情');
-        _loadDetails();
+        _loadDetails(runPreUpdateJavaScript: true);
       case BookInfoMenuAction.share:
         _shareCurrentBook();
       case BookInfoMenuAction.copyBookUrl:
@@ -204,11 +204,14 @@ final class BookInfoViewModel {
     );
   }
 
-  /// 加载当前来源详情，成功后继续加载完整目录。
+  /// 加载当前来源详情，成功后继续加载完整目录；用户主动刷新时允许执行 `preUpdateJs`。
   ///
   /// `silent` 为 true 时用于本地命中后的后台静默刷新：不设置任何加载态、不清空已展示
   /// 内容，成功了才悄悄更新界面，失败只记日志不打断阅读体验。
-  Future<void> _loadDetails({bool silent = false}) async {
+  Future<void> _loadDetails({
+    bool silent = false,
+    bool runPreUpdateJavaScript = false,
+  }) async {
     _cancelRequest();
     _generation += 1;
     /// 本次详情请求世代。
@@ -252,7 +255,12 @@ final class BookInfoViewModel {
           message: '详情页命中本地数据 generation=$generation bookId=$bookId '
               'chapterCount=${storedChapters.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
         );
-        unawaited(_loadDetails(silent: true));
+        unawaited(
+          _loadDetails(
+            silent: true,
+            runPreUpdateJavaScript: runPreUpdateJavaScript,
+          ),
+        );
         return;
       }
     }
@@ -298,7 +306,11 @@ final class BookInfoViewModel {
               'inBookshelf=${storedBook != null} elapsedMs=${stopwatch.elapsedMilliseconds}',
         );
       }
-      await _loadToc(expectedGeneration: generation, silent: silent);
+      await _loadToc(
+        expectedGeneration: generation,
+        silent: silent,
+        runPreUpdateJavaScript: runPreUpdateJavaScript,
+      );
     } catch (error, stackTrace) {
       if (generation == _generation) {
         if (silent) {
@@ -325,8 +337,13 @@ final class BookInfoViewModel {
   /// 加载分页完整目录，并在书已存在时原子替换持久化目录。
   ///
   /// `silent` 为 true 时不设置 `loadingToc`/`switchingSource`，失败只记日志不展示错误；
-  /// 两种模式成功后都会累加书源成功率，失败都会扣分（来源同一份网络请求）。
-  Future<void> _loadToc({int? expectedGeneration, bool silent = false}) async {
+  /// 两种模式成功后都会累加书源成功率，失败都会扣分（来源同一份网络请求）；
+  /// `runPreUpdateJavaScript` 只由用户主动刷新或重试打开，首次和后台静默加载保持关闭。
+  Future<void> _loadToc({
+    int? expectedGeneration,
+    bool silent = false,
+    bool runPreUpdateJavaScript = false,
+  }) async {
     /// 当前详情快照。
     final BookDetailSnapshot? snapshot = _snapshot;
     if (snapshot == null) {
@@ -351,7 +368,11 @@ final class BookInfoViewModel {
     }
     try {
       /// 完整目录。
-      final List<BookChapter> chapters = await _detailService.loadToc(snapshot: snapshot, cancellationToken: token);
+      final List<BookChapter> chapters = await _detailService.loadToc(
+        snapshot: snapshot,
+        runPreUpdateJavaScript: runPreUpdateJavaScript,
+        cancellationToken: token,
+      );
       if (generation != _generation) {
         _logger.debug(
           tag: bookTocLogTag,

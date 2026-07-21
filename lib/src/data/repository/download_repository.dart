@@ -17,6 +17,44 @@ final class DownloadRepository implements DownloadGateway {
     return guardDataStream<List<DownloadTask>>(_downloadTaskDao.watchByBook(bookUrl));
   }
 
+  /// 观察一本书的下载批次与自动换源状态。
+  @override
+  Stream<DownloadBookState?> watchBookState(String bookUrl) {
+    return guardDataStream<DownloadBookState?>(
+      _downloadTaskDao.watchBookState(bookUrl),
+    );
+  }
+
+  /// 读取一本书的下载批次与自动换源状态。
+  @override
+  Future<DownloadBookState?> getBookState(String bookUrl) {
+    return guardDataOperation<DownloadBookState?>(
+      () => _downloadTaskDao.getBookState(bookUrl),
+    );
+  }
+
+  /// 保存一本书的下载批次与自动换源状态。
+  @override
+  Future<void> upsertBookState(DownloadBookState state) {
+    return guardDataOperation<void>(
+      () => _downloadTaskDao.upsertBookState(state),
+    );
+  }
+
+  /// 观察全部书籍下载任务并统一转换数据库错误。
+  @override
+  Stream<List<DownloadTask>> watchAllTasks() {
+    return guardDataStream<List<DownloadTask>>(_downloadTaskDao.watchAll());
+  }
+
+  /// 读取全部书籍下载任务快照。
+  @override
+  Future<List<DownloadTask>> getAllTasks() {
+    return guardDataOperation<List<DownloadTask>>(
+      _downloadTaskDao.getAll,
+    );
+  }
+
   /// 读取一本书的全部下载任务。
   @override
   Future<List<DownloadTask>> getTasks(String bookUrl) {
@@ -27,6 +65,42 @@ final class DownloadRepository implements DownloadGateway {
   @override
   Future<List<DownloadTask>> getPendingTasks() {
     return guardDataOperation<List<DownloadTask>>(() => _downloadTaskDao.getPending());
+  }
+
+  /// 暂停全部等待或运行任务。
+  @override
+  Future<int> pauseAll(int now) {
+    return guardDataOperation<int>(() => _downloadTaskDao.pauseAll(now));
+  }
+
+  /// 暂停一本书的等待或运行任务。
+  @override
+  Future<int> pauseBook(String bookUrl, int now) {
+    return guardDataOperation<int>(
+      () => _downloadTaskDao.pauseBook(bookUrl, now),
+    );
+  }
+
+  /// 暂停指定章节的等待或运行任务。
+  @override
+  Future<int> pauseTask(String bookUrl, int chapterIndex, int now) {
+    return guardDataOperation<int>(
+      () => _downloadTaskDao.pauseTask(bookUrl, chapterIndex, now),
+    );
+  }
+
+  /// 恢复全部暂停任务。
+  @override
+  Future<int> resumeAll(int now) {
+    return guardDataOperation<int>(() => _downloadTaskDao.resumeAll(now));
+  }
+
+  /// 恢复一本书的全部暂停任务。
+  @override
+  Future<int> resumeBook(String bookUrl, int now) {
+    return guardDataOperation<int>(
+      () => _downloadTaskDao.resumeBook(bookUrl, now),
+    );
   }
 
   /// 批量写入任务。

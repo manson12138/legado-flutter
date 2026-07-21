@@ -6,7 +6,7 @@
 
 | 书源 | 证据位置 | 调用 | 原型判断 |
 |---|---|---|---|
-| 消消乐听书 | `app/src/main/assets/defaultData/bookSources.json` | `java.connect`、`java.md5Encode`、`java.put/get`、登录 Header、模型 getter | 工具和 DTO 可映射；同步 `connect(...).body()` 被异步 Promise 阻断 |
+| 消消乐听书 | `app/src/main/assets/defaultData/bookSources.json` | `java.connect`、`java.md5Encode`、`java.put/get`、登录 Header、模型 getter | 同步响应和共享模型变量已进入验证；登录 Header 仍需真实样本核对 |
 | 默认封面规则 | `app/src/main/assets/defaultData/coverRule.json` | `java.ajaxAll`、Base64、Hex | 编解码可补齐；并发网络与同步返回待设计 |
 | 默认词典规则 | `app/src/main/assets/defaultData/dictRules.json` | `org.jsoup.Jsoup.parse` | 不允许直接暴露 Java Jsoup；应改用 Dart 规则/HTML DTO 或白名单桥 |
 | 默认 HTTP TTS | `app/src/main/assets/defaultData/httpTTS.json` | `android.util.Base64`、`java.net.URLEncoder`、`java.lang.String`、网络 helper | Base64/URLEncoder 已有原型；String 构造和完整 TTS 不属于首批书源闭环 |
@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | S2 | `samples/s2_101kanshu_standard_js.json` | 搜索“斗破苍穹”，完全匹配结果，第一章免费正文 | 标准 JS、`key/page`、四段链路 | IMPLEMENTED_PENDING_DEVICE；已接入 JS URL 与混合规则执行链路 |
 | S3 | `samples/s3_fanqie_jslib.json` | 搜索“斗破苍穹”，完全匹配结果，第一章免费正文 | `jsLib`、`result/baseUrl/src/cache` | IMPLEMENTED_PENDING_DEVICE；已接入内嵌普通规则与书源隔离内存缓存 |
-| S4 | `samples/s4_deqixs_java_ajax.json` | 搜索“斗破苍穹”，完全匹配结果，第一章免费正文 | `java.ajax` 同步网络语义 | PENDING；Promise 差异预计阻塞 |
+| S4 | `samples/s4_deqixs_java_ajax.json` | 搜索“斗破苍穹”，完全匹配结果，第一章免费正文 | `java.ajax` 同步网络语义 | IMPLEMENTED_PENDING_DEVICE；等待同步结果重放真机验证 |
 | S5 | `samples/s5_remexs_rhino_java.json` | 搜索“斗破苍穹”，完全匹配结果，进入目录 | `Packages.org.jsoup.Jsoup`、WebView | PENDING；应明确报告不支持调用 |
 
 ## 每个样本结果字段
@@ -39,8 +39,11 @@
 ## 当前阻塞项
 
 1. S2～S5 尚未产生 Android Legado、Flutter Android 和 Flutter iOS 的实际结果；S2、S3 目前只是代码路径完成，不能替代真机证据。
-2. 如果样本使用同步 `java.ajax/connect`，需决定：实现安全的同步宿主通道、受控源码转换，或明确该书源不兼容。不能直接返回 Promise 后宣称通过。
+2. 同步 `java.ajax/connect` 已使用有限宿主调用重放原型处理；需要验证多次调用、链式响应、取消、错误信封和纯 JavaScript 全局副作用，不能只因不再返回 Promise 就宣称通过。
 3. 需要 Android 与 iOS 真机分别执行相同样本。
+4. `loginCheckJs` 非交互链路、默认关闭设置、开启后的可见验证页与 FIFO 单提示队列已经接入；等待 S6～S7 双端真实样本验证。
+5. `preUpdateJs` 执行时机及 `java.reGetBook/refreshTocUrl` 已接入，但尚无动态目录真实书源结果。
+6. WebView `sourceRegex` 当前使用页面开始时安装的 PerformanceObserver 和 Resource Timing 资源 URL 匹配；与 Android 原生 `onLoadResource` 的差异需用动态资源样本确认。
 
 ## 2026-07-16 诊断推进
 
@@ -54,3 +57,31 @@
 - 2026-07-16 实机日志证明结构化桥接已能把 `createSymmetricCrypto`、`toast`、`androidId`、`longToast` 分类为 `unsupportedApi` 并保留桥调用轨迹；同次日志也暴露 URL 残留诊断曾把 `{{key}}/{{page}}` 内建占位符误判为 JavaScript，现已改为复用真实 URL 脚本判定并等待用户重新运行验证。
 - `source.getVariable/putVariable` 已接入独立缓存和书源编辑入口；需要自定义 JSON 变量的书源可由用户显式配置，等待真机验证。
 - `org.jsoup.Jsoup` 已接入跨平台只读白名单；对称加密对象仍因缺少经过评估的 AES/DES 依赖保持阻塞。
+
+## 2026-07-21 同步宿主调用推进
+
+- JSF 仍原生把 Dart Future 转为 Promise，没有暂停普通同步 JavaScript 栈的接口。
+- 当前适配器不改写书源源码：首次发现 Future 后等待统一 Dart 能力完成，再从头重放规则。
+- 网络、Cookie、持久缓存和变量等已经完成的宿主调用保存成功/失败信封，后续尝试同步复用，避免重复外部副作用。
+- `java.connect/get/head/post` 的响应 Map 在同步返回时直接包装为响应代理，不再通过 `Promise.resolve` 二次异步化。
+- 单段规则最多保存 256 个宿主调用；调用表面或方法顺序变化会明确失败，避免把非确定性重放当作有效结果。
+- 该实现没有运行构建或脚本检查，状态保持 `IMPLEMENTED_PENDING_DEVICE`。
+
+## 2026-07-21 模型、正文上下文与登录检测推进
+
+- 增加规则链共享 `LegadoScriptModelState`，URL、响应脚本、登录检测与字段解析可观察同一 Book/Chapter 变量及白名单字段修改。
+- `book/chapter.getVariable`、`putVariable`、`getVariableMap`、Java 风格 `Map.put/containsKey` 和属性 getter/setter 已进入桥接；`java.get` 保持章节、书籍、规则、书源优先级。
+- 正文服务强制接收 Book，并由阅读、下载和单章换源传入 `nextChapterUrl`。
+- `loginCheckJs` 在 `bodyJs` 后执行并要求返回响应对象；默认交互策略拒绝浏览器、验证码和登录导航，不制造空返回值。
+- 设置页新增持久开关，默认关闭；开启后搜索页串行处理登录/网页验证和图片验证码，当前仍不计为已验收，需真实书源双端验证。
+- 按项目要求未运行构建、测试、分析、格式化或应用启动，以上状态均为 `IMPLEMENTED_PENDING_DEVICE`。
+
+## 2026-07-21 请求生命周期与普通规则状态推进
+
+- 搜索、详情、目录和正文分别创建单次操作共享的 `LegadoScriptExecutionState`，URL、`bodyJs`、`loginCheckJs` 和字段解析不再复制临时变量；状态创建时预载书源变量，纯 `@get` 无需先启动 QuickJS。
+- 普通规则混合执行器识别 `@put/@get`；写入值使用页面根内容解析，读取保持章节、书籍、规则临时状态、书源变量优先级。
+- 目录 `preUpdateJs` 仅在用户主动刷新或重试目录时于首个请求前执行一次，首次、换源和后台静默加载保持关闭，对齐 Android `runPerJs`；脚本直接修改的 `bookUrl/tocUrl` 会用于首个目录地址。
+- `java.refreshTocUrl` 使用共享模型状态重新加载详情；`java.reGetBook` 先在同一书源按书名和作者精确搜索、合并变量并替换详情地址，再重新加载详情。两者只在请求前脚本暴露，内部调用保持无交互策略。
+- URL `webView/webJs/webViewDelayTime` 与正文 `webJs/sourceRegex` 已进入后台 WebView 请求边界；POST 先请求响应 HTML，再载入页面环境。
+- `sourceRegex` 使用页面开始时安装的 PerformanceObserver 和扩容后的 Resource Timing 持续收集资源 URL，不再错误地对 DOM 文本做正则；由于不是原生资源拦截，状态保持 `IMPLEMENTED_PENDING_DEVICE`。
+- 按项目要求未运行构建、测试、分析、格式化或应用启动。

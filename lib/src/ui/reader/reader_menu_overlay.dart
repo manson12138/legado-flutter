@@ -219,6 +219,12 @@ final class _ReaderTopBar extends StatelessWidget {
                     onIntent(const ShowReaderSheetIntent(ReaderSearchSheet()));
                   case _ReaderTopMenuAction.replaceInfo:
                     onIntent(const ShowReaderSheetIntent(ReaderReplaceInfoSheet()));
+                  case _ReaderTopMenuAction.contentProcesses:
+                    onIntent(
+                      const ShowReaderSheetIntent(
+                        ReaderContentProcessesSheet(),
+                      ),
+                    );
                   case _ReaderTopMenuAction.refreshFollowing:
                     onIntent(
                       const RefreshReaderChaptersIntent(ReaderRefreshScope.followingChapters),
@@ -263,6 +269,11 @@ final class _ReaderTopBar extends StatelessWidget {
                     child: const Text('替换统计'),
                   ),
                   PopupMenuItem<_ReaderTopMenuAction>(
+                    value: _ReaderTopMenuAction.contentProcesses,
+                    enabled: state.loadState == ReaderLoadState.ready,
+                    child: const Text('标注管理'),
+                  ),
+                  PopupMenuItem<_ReaderTopMenuAction>(
                     value: _ReaderTopMenuAction.refreshFollowing,
                     enabled: state.loadState == ReaderLoadState.ready &&
                         !state.refreshingChapters &&
@@ -283,7 +294,7 @@ final class _ReaderTopBar extends StatelessWidget {
                   PopupMenuItem<_ReaderTopMenuAction>(
                     value: _ReaderTopMenuAction.download,
                     enabled: !isLocalBook && state.book != null,
-                    child: const Text('下载'),
+                    child: const Text('下载与自动换源'),
                   ),
                   const PopupMenuItem<_ReaderTopMenuAction>(
                     value: _ReaderTopMenuAction.futureFeatures,
@@ -319,6 +330,9 @@ enum _ReaderTopMenuAction {
 
   /// 打开当前章节替换统计。
   replaceInfo,
+
+  /// 打开当前章节高亮与下划线管理。
+  contentProcesses,
 
   /// 后台刷新后续章节正文缓存。
   refreshFollowing,

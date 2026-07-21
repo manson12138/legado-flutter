@@ -20,4 +20,8 @@ abstract final class DatabaseTables {
   static const String replaceRules = 'replace_rules';
   /// 离线下载队列表，Flutter 新增，Android 无对应持久表（队列状态只在内存）。
   static const String downloadTasks = 'download_tasks';
+  /// 每本书的下载批次与自动换源状态，Flutter 新增。
+  static const String downloadBookStates = 'download_book_states';
+  /// 用户正文处理与标注表，对应 Android `book_content_processes`。
+  static const String bookContentProcesses = 'book_content_processes';
 }

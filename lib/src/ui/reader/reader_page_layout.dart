@@ -4,9 +4,12 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
+import 'reader_content_image.dart';
+import 'reader_selection_region.dart';
 
 /// 标记分页行使用章节标题、正文或仅占据垂直空间。
 enum ReaderPageLineKind {
@@ -15,6 +18,9 @@ enum ReaderPageLineKind {
 
   /// 参与阅读进度计算的正文行。
   body,
+
+  /// 占据独立页面的正文图片资源。
+  image,
 
   /// 标题或段落之间不参与字符位置计算的垂直间距。
   spacer,
@@ -31,6 +37,8 @@ final class ReaderPageLine {
     required this.endOffset,
     this.extraLetterSpacing = 0,
     this.extraWordSpacing = 0,
+    this.altText = '',
+    this.referer = '',
   });
 
   /// 当前行的标题、正文或间距类型。
@@ -38,6 +46,12 @@ final class ReaderPageLine {
 
   /// 当前行实际绘制的文本；间距行固定为空字符串。
   final String text;
+
+  /// 图片行加载失败时展示的替代文本；其他行固定为空字符串。
+  final String altText;
+
+  /// 图片请求可携带的正文页面 Referer；其他行固定为空字符串。
+  final String referer;
 
   /// 当前行由 TextPainter 测量得到的精确高度。
   final double height;
@@ -218,6 +232,10 @@ abstract final class ReaderPageLayoutEngine {
       final String paragraph = paragraphs[index];
       /// 当前段落之后是否存在一个真实换行字符。
       final bool hasTrailingNewline = index < paragraphs.length - 1;
+      if (paragraph == '\uFFFC') {
+        paragraphStartOffset += paragraph.length + (hasTrailingNewline ? 1 : 0);
+        continue;
+      }
       /// 当前段落被拆成的测量片段，避免单个无换行长段落阻塞首屏。
       final List<String> chunks = _paragraphChunks(paragraph);
       /// 当前片段在本段落内的原始字符起点。
@@ -264,6 +282,57 @@ abstract final class ReaderPageLayoutEngine {
     }
     finishPage();
     return pages;
+  }
+
+  /// 在纯文本分页完成后按稳定字符位置插入独立图片页。
+  static List<ReaderTextPage> insertImagePages({
+    required List<ReaderTextPage> pages,
+    required List<ReaderContentImage> images,
+    required double pageHeight,
+  }) {
+    if (images.isEmpty || pageHeight <= 0) {
+      return pages;
+    }
+    /// 可插入图片页的分页结果副本。
+    final List<ReaderTextPage> output = List<ReaderTextPage>.of(pages);
+    /// 按稳定字符位置排序的图片副本，保证同页多图不会因逐项插入而反序。
+    final List<ReaderContentImage> orderedImages = List<ReaderContentImage>.of(images)
+      ..sort(
+        (ReaderContentImage left, ReaderContentImage right) =>
+            left.characterOffset.compareTo(right.characterOffset),
+      );
+    for (final ReaderContentImage image in orderedImages) {
+      /// 当前图片应插入到的页面索引。
+      int insertionIndex = output.length;
+      for (int pageIndex = 0; pageIndex < output.length; pageIndex += 1) {
+        /// 当前候选页面。
+        final ReaderTextPage page = output[pageIndex];
+        /// 第一张起始位置更靠后的页面之前就是当前图片的稳定插入点。
+        if (page.startOffset > image.characterOffset) {
+          insertionIndex = pageIndex;
+          break;
+        }
+      }
+      output.insert(
+        insertionIndex,
+        ReaderTextPage(
+          startOffset: image.characterOffset,
+          endOffset: image.characterOffset + 1,
+          lines: <ReaderPageLine>[
+            ReaderPageLine(
+              kind: ReaderPageLineKind.image,
+              text: image.url,
+              height: pageHeight,
+              startOffset: image.characterOffset,
+              endOffset: image.characterOffset + 1,
+              altText: image.altText,
+              referer: image.referer,
+            ),
+          ],
+        ),
+      );
+    }
+    return List<ReaderTextPage>.unmodifiable(output);
   }
 
   /// 使用一次 TextPainter 布局提取真实行边界，避免按整章子字符串反复二分测量。
@@ -569,6 +638,10 @@ final class _ReaderIncrementalPageLayoutJob {
     final String paragraph = paragraphs[index];
     /// 当前段落后是否存在换行字符。
     final bool hasTrailingNewline = index < paragraphs.length - 1;
+    if (paragraph == '\uFFFC') {
+      paragraphStartOffset += paragraph.length + (hasTrailingNewline ? 1 : 0);
+      return;
+    }
     /// 当前段落被拆成的测量片段，避免单个无换行长段落阻塞后台续算。
     final List<String> chunks = ReaderPageLayoutEngine._paragraphChunks(paragraph);
     /// 当前片段在本段落内的原始字符起点。
@@ -718,6 +791,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 当前分页组件内部显示的页面索引。
   int _currentPageIndex = 0;
 
+  /// 每次翻页或分页结果替换时递增，用于清除上一页原生选区。
+  int _selectionEpoch = 0;
+
   /// 当前分页结果是否已经包含完整章节。
   bool _isLayoutComplete = false;
 
@@ -825,6 +901,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           content.chapterUrl,
           content.title,
           content.text,
+          ...content.images.map(
+            (ReaderContentImage image) => '${image.characterOffset}:${image.url}',
+          ),
           widget.state.config.fontSize,
           widget.state.config.fontWeightValue,
           widget.state.config.textItalic,
@@ -857,25 +936,37 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             _isLayoutComplete = true;
           } else {
             _isLayoutComplete = false;
-            _pages = ReaderPageLayoutEngine.paginate(
-                title: widget.state.config.titleMode == ReaderTitleMode.hidden
-                    ? ''
-                    : content.title,
-                text: content.text,
-                bodyStyle: textStyle,
-                titleStyle: titleStyle,
-                maxWidth: contentWidth,
-                maxHeight: contentHeight,
-                titleTopSpacing: widget.state.config.titleTopSpacing,
-                titleBottomSpacing: widget.state.config.titleBottomSpacing,
-                paragraphSpacing: widget.state.config.paragraphSpacing,
-                paragraphIndent: widget.state.config.paragraphIndent,
-                textFullJustify: widget.state.config.textFullJustify,
-                textDirection: Directionality.of(context),
-                textScaler: textScaler,
-                maximumPageCount: _initialLayoutPageCount,
-                minimumEndOffset: widget.state.anchor?.characterOffset ?? 0,
-              );
+            /// 首批纯文本页面。
+            final List<ReaderTextPage> initialTextPages =
+                ReaderPageLayoutEngine.paginate(
+                  title: widget.state.config.titleMode == ReaderTitleMode.hidden
+                      ? ''
+                      : content.title,
+                  text: content.text,
+                  bodyStyle: textStyle,
+                  titleStyle: titleStyle,
+                  maxWidth: contentWidth,
+                  maxHeight: contentHeight,
+                  titleTopSpacing: widget.state.config.titleTopSpacing,
+                  titleBottomSpacing: widget.state.config.titleBottomSpacing,
+                  paragraphSpacing: widget.state.config.paragraphSpacing,
+                  paragraphIndent: widget.state.config.paragraphIndent,
+                  textFullJustify: widget.state.config.textFullJustify,
+                  textDirection: Directionality.of(context),
+                  textScaler: textScaler,
+                  maximumPageCount: _initialLayoutPageCount,
+                  minimumEndOffset: widget.state.anchor?.characterOffset ?? 0,
+                );
+            _pages = ReaderPageLayoutEngine.insertImagePages(
+              pages: initialTextPages,
+              images: content.images.where((ReaderContentImage image) {
+                if (initialTextPages.isEmpty) {
+                  return true;
+                }
+                return image.characterOffset <= initialTextPages.last.endOffset;
+              }).toList(growable: false),
+              pageHeight: contentHeight,
+            );
             _scheduleCompletePagination(
               signature: layoutSignature,
               generation: _layoutGeneration,
@@ -899,7 +990,6 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             onTapUp: (TapUpDetails details) {
               _handleTap(details.localPosition.dx, constraints.maxWidth);
             },
-            onLongPress: _handleLongPress,
             onHorizontalDragStart: (DragStartDetails details) {
               _handleHorizontalDragStart(constraints.maxWidth);
             },
@@ -922,7 +1012,6 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             onTapUp: (TapUpDetails details) {
               _handleTap(details.localPosition.dx, constraints.maxWidth);
             },
-            onLongPress: _handleLongPress,
             child: PageView.builder(
               controller: _pageController,
               scrollDirection:
@@ -1029,8 +1118,15 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           textDirection: textDirection,
           textScaler: textScaler,
         );
-        /// 后台续算得到的完整分页结果。
-        final List<ReaderTextPage> completePages = await layoutJob.run();
+        /// 完整纯文本分页结果。
+        final List<ReaderTextPage> completeTextPages = await layoutJob.run();
+        /// 插入独立图片页后的完整章节分页结果。
+        final List<ReaderTextPage> completePages =
+            ReaderPageLayoutEngine.insertImagePages(
+              pages: completeTextPages,
+              images: content.images,
+              pageHeight: contentHeight,
+            );
         ReaderPageLayoutCache.put(signature, completePages);
         if (!mounted ||
             _layoutSignature != signature ||
@@ -1046,6 +1142,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           _pages = completePages;
           _isLayoutComplete = true;
           _currentPageIndex = _pageIndexForOffset(visibleOffset);
+          _selectionEpoch += 1;
           _coverFromIndex = null;
           _coverToIndex = null;
         });
@@ -1201,7 +1298,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                 if (widget.state.config.showHeaderFooter)
                   const SizedBox(height: _headerSpacing),
                 Expanded(
-                  child: _buildPageLines(page, textStyle, titleStyle),
+                  child: _buildPageLines(
+                    content,
+                    page,
+                    textStyle,
+                    titleStyle,
+                    index,
+                  ),
                 ),
                 if (widget.state.config.showHeaderFooter)
                   SizedBox(
@@ -1242,40 +1345,127 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 按分页器测量结果逐行绘制标题、正文和段落间距，避免渲染阶段再次换行。
   Widget _buildPageLines(
+    ReaderChapterContent content,
     ReaderTextPage page,
     TextStyle bodyStyle,
     TextStyle titleStyle,
+    int pageIndex,
   ) {
-    return Column(
+    /// 当前页是否包含至少一行可选择正文。
+    final bool hasSelectableBody = page.lines.any(
+      (ReaderPageLine line) =>
+          line.kind == ReaderPageLineKind.body &&
+          line.endOffset > line.startOffset,
+    );
+    /// 按分页测量结果生成的行布局。
+    final Widget lines = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: page.lines.map((ReaderPageLine line) {
         if (line.kind == ReaderPageLineKind.spacer) {
           return SizedBox(height: line.height);
         }
-        /// 当前排版行对应的标题或正文样式。
-        final TextStyle style = line.kind == ReaderPageLineKind.title
-            ? titleStyle
-            : bodyStyle.copyWith(
+        if (line.kind == ReaderPageLineKind.image) {
+          /// 分页图片为工具按钮和页面边缘保留少量垂直空间。
+          final double imageHeight = (line.height - SpacingToken.medium * 2)
+              .clamp(1, line.height)
+              .toDouble();
+          return ReaderContentImageView(
+            imageUrl: line.text,
+            altText: line.altText,
+            referer: line.referer,
+            maximumHeight: imageHeight,
+            onSave: () => widget.onIntent(
+              ShareReaderContentImageIntent(line.text),
+            ),
+          );
+        }
+        if (line.kind == ReaderPageLineKind.title) {
+          return SizedBox(
+            height: line.height,
+            child: SelectionContainer.disabled(
+              child: Text(
+                line.text,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.clip,
+                style: titleStyle,
+                textAlign: widget.state.config.titleMode ==
+                        ReaderTitleMode.center
+                    ? TextAlign.center
+                    : TextAlign.start,
+              ),
+            ),
+          );
+        }
+        /// 当前正文行合并两端对齐补偿后的基础样式。
+        final TextStyle style = bodyStyle.copyWith(
                 letterSpacing: (bodyStyle.letterSpacing ?? 0) +
                     line.extraLetterSpacing,
                 wordSpacing: (bodyStyle.wordSpacing ?? 0) +
                     line.extraWordSpacing,
               );
+        /// 当前正文行在章节内的有效终点，排除只用于进度的段尾换行。
+        int sourceEnd = line.endOffset
+            .clamp(line.startOffset, content.text.length)
+            .toInt();
+        if (sourceEnd > line.startOffset &&
+            content.text[sourceEnd - 1] == '\n') {
+          sourceEnd -= 1;
+        }
+        /// 当前正文行与章节字符位置一一对应的原始文本。
+        final String sourceText = content.text.substring(
+          line.startOffset.clamp(0, sourceEnd).toInt(),
+          sourceEnd,
+        );
+        /// 首行全角缩进等只参与显示、不进入章节锚点的前缀。
+        final String displayPrefix = line.text.endsWith(sourceText)
+            ? line.text.substring(0, line.text.length - sourceText.length)
+            : '';
         return SizedBox(
           height: line.height,
-          child: Text(
-            line.text,
+          child: Text.rich(
+            TextSpan(
+              children: <InlineSpan>[
+                if (displayPrefix.isNotEmpty)
+                  TextSpan(text: displayPrefix, style: style),
+                ...buildReaderAnnotationSpans(
+                  chapterText: content.text,
+                  text: sourceText,
+                  startOffset: line.startOffset,
+                  baseStyle: style,
+                  processes: widget.state.contentProcesses,
+                ),
+              ],
+            ),
             maxLines: 1,
             softWrap: false,
             overflow: TextOverflow.clip,
-            style: style,
-            textAlign: line.kind == ReaderPageLineKind.title &&
-                    widget.state.config.titleMode == ReaderTitleMode.center
-                ? TextAlign.center
-                : TextAlign.start,
+            textAlign: TextAlign.start,
           ),
         );
       }).toList(growable: false),
+    );
+    if (!hasSelectableBody) {
+      return lines;
+    }
+    return ReaderSelectionRegion(
+      chapterText: content.text,
+      scopeStart: page.startOffset,
+      scopeEnd: page.endOffset,
+      preferredOffset:
+          widget.state.anchor?.characterOffset ?? page.startOffset,
+      selectionEpoch: Object.hash(
+        widget.state.restoreRequestId,
+        _selectionEpoch,
+        pageIndex,
+      ),
+      onAction: (
+        ReaderTextSelection selection,
+        ReaderSelectionAction action,
+      ) {
+        widget.onIntent(ApplyReaderSelectionIntent(selection, action));
+      },
+      child: lines,
     );
   }
 
@@ -1323,7 +1513,10 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       }
       return;
     }
-    _currentPageIndex = index;
+    setState(() {
+      _currentPageIndex = index;
+      _selectionEpoch += 1;
+    });
     widget.onIntent(UpdateReaderScrollIntent(_pages[index].startOffset));
   }
 
@@ -1344,12 +1537,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     _performTapAction(widget.state.config.centerTapAction);
   }
 
-  /// 执行用户配置的正文长按动作。
-  void _handleLongPress() {
-    _performTapAction(widget.state.config.longPressAction);
-  }
-
-  /// 执行正文点击、长按和按键共享的阅读动作。
+  /// 执行正文点击和按键共享的阅读动作；正文长按固定交给原生选区。
   void _performTapAction(ReaderTapAction action) {
     switch (action) {
       case ReaderTapAction.none:
@@ -1543,6 +1731,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       }
       setState(() {
         _currentPageIndex = targetIndex;
+        _selectionEpoch += 1;
         _coverFromIndex = null;
         _coverToIndex = null;
       });

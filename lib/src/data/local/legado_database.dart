@@ -4,7 +4,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../help/logging/app_logger.dart';
 import 'database_change_notifier.dart';
 
-/// 管理 Flutter 独立 SQLite 数据库 v2 的打开、迁移、事务和释放。
+/// 管理 Flutter 独立 SQLite 数据库的打开、迁移、事务和释放。
 ///
 /// 这是全新数据库，不读取或迁移原 Android App 的 Room 数据库。
 final class LegadoDatabase {
@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 4;
+  static const int schemaVersion = 7;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -102,6 +102,8 @@ final class LegadoDatabase {
       onCreate: (Database createdDatabase, int version) async {
         await _createSchemaV2(createdDatabase);
         await _createSchemaV3(createdDatabase);
+        await _createSchemaV5(createdDatabase);
+        await _createSchemaV7(createdDatabase);
       },
       onUpgrade: (Database upgradedDatabase, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -121,6 +123,35 @@ final class LegadoDatabase {
           await upgradedDatabase.execute(
             'ALTER TABLE book_sources ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0',
           );
+        }
+        if (oldVersion < 5) {
+          await _createSchemaV5(upgradedDatabase);
+        }
+        // v1/v2 升级会在上方直接创建已包含 v6 字段的下载表，不能再次追加同名列。
+        if (oldVersion >= 3 && oldVersion < 6) {
+          logOperation(operation: 'ALTER_TABLE', table: 'download_tasks');
+          await upgradedDatabase.execute(
+            'ALTER TABLE download_tasks ADD COLUMN errorMessage TEXT',
+          );
+          await upgradedDatabase.execute(
+            'ALTER TABLE download_tasks ADD COLUMN contentLength INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        // v1/v2 会直接创建当前下载任务字段；仅已有 v3～v6 表需要追加批次和书源归因列。
+        if (oldVersion >= 3 && oldVersion < 7) {
+          logOperation(operation: 'ALTER_TABLE', table: 'download_tasks');
+          await upgradedDatabase.execute(
+            'ALTER TABLE download_tasks ADD COLUMN generation INTEGER NOT NULL DEFAULT 0',
+          );
+          await upgradedDatabase.execute(
+            "ALTER TABLE download_tasks ADD COLUMN attemptedSourceUrlsJson TEXT NOT NULL DEFAULT '[]'",
+          );
+          await upgradedDatabase.execute(
+            'ALTER TABLE download_tasks ADD COLUMN successfulSourceUrl TEXT',
+          );
+        }
+        if (oldVersion < 7) {
+          await _createSchemaV7(upgradedDatabase);
         }
       },
     );
@@ -372,6 +403,11 @@ final class LegadoDatabase {
         chapterIndex INTEGER NOT NULL,
         status TEXT NOT NULL,
         retryCount INTEGER NOT NULL DEFAULT 0,
+        errorMessage TEXT,
+        contentLength INTEGER NOT NULL DEFAULT 0,
+        generation INTEGER NOT NULL DEFAULT 0,
+        attemptedSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
+        successfulSourceUrl TEXT,
         updatedAt INTEGER NOT NULL,
         PRIMARY KEY (bookUrl, chapterIndex),
         FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
@@ -379,6 +415,71 @@ final class LegadoDatabase {
     ''');
     await database.execute(
       'CREATE INDEX IF NOT EXISTS index_download_tasks_bookUrl ON download_tasks (bookUrl)',
+    );
+  }
+
+  /// 新增每本书下载批次、自动换源锁定和一次性书源评分状态表。
+  Future<void> _createSchemaV7(Database database) async {
+    logOperation(operation: 'CREATE_SCHEMA', table: 'download_book_states');
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS download_book_states (
+        bookUrl TEXT NOT NULL,
+        autoChangeSource INTEGER NOT NULL DEFAULT 0,
+        generation INTEGER NOT NULL DEFAULT 0,
+        lockedSourceUrl TEXT,
+        lockedSourceName TEXT,
+        lockedBookUrl TEXT,
+        lockedBookName TEXT,
+        lockedBookAuthor TEXT,
+        lockedBookTocUrl TEXT NOT NULL DEFAULT '',
+        lockedBookVariable TEXT,
+        lockedBookType INTEGER NOT NULL DEFAULT 0,
+        triedSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
+        scoredSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (bookUrl),
+        FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  /// 新增 Android 对齐的用户正文处理与标注表。
+  Future<void> _createSchemaV5(Database database) async {
+    logOperation(operation: 'CREATE_SCHEMA', table: 'book_content_processes');
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS book_content_processes (
+        id TEXT NOT NULL,
+        bookUrl TEXT NOT NULL,
+        chapterIndex INTEGER,
+        kind TEXT NOT NULL,
+        stage TEXT NOT NULL DEFAULT 'content',
+        target TEXT NOT NULL DEFAULT 'selection',
+        anchorJson TEXT NOT NULL,
+        actionJson TEXT NOT NULL,
+        styleJson TEXT,
+        source TEXT NOT NULL DEFAULT 'user',
+        aiArtifactId TEXT,
+        sourceContentHash TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        sortOrder INTEGER NOT NULL DEFAULT 0,
+        status INTEGER NOT NULL DEFAULT 1,
+        schemaVersion INTEGER NOT NULL DEFAULT 1,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        PRIMARY KEY (id)
+      )
+    ''');
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_content_process_book_chapter_enabled_order '
+      'ON book_content_processes (bookUrl, chapterIndex, enabled, sortOrder)',
+    );
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_content_process_book_kind '
+      'ON book_content_processes (bookUrl, kind)',
+    );
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_content_process_ai_artifact '
+      'ON book_content_processes (aiArtifactId)',
     );
   }
 

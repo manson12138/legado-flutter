@@ -14,6 +14,7 @@ import '../ui/local_book_import/local_book_import_route.dart';
 import '../ui/log_management/log_management_route.dart';
 import '../ui/about/about_route.dart';
 import '../ui/settings/settings_route.dart';
+import '../ui/download_management/download_management_route.dart';
 import '../help/logging/app_logger.dart';
 import 'app_dependencies.dart';
 import 'app_route.dart';
@@ -66,6 +67,13 @@ final class AppRouter {
           settings: settings,
           builder: (BuildContext context) {
             return LogManagementRoute(dependencies: dependencies);
+          },
+        );
+      case AppRoute.downloadManagement:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return DownloadManagementRoute(dependencies: dependencies);
           },
         );
       case AppRoute.about:

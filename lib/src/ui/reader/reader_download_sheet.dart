@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/download_task.dart';
@@ -9,7 +10,7 @@ import '../theme/app_tokens.dart';
 /// 离线下载面板：选择章节范围加入队列，并展示当前书队列的实时状态。
 ///
 /// 下载队列由 App 级单例 [DownloadCoordinator] 驱动，关闭本面板不会取消已入队的
-/// 下载；下载只在应用运行期间进行，没有 Android 前台服务或 iOS 后台任务等价物。
+/// 下载；Android 使用前台服务继续后台下载，iOS 使用系统授予的有限后台时间并在下次启动续传。
 final class ReaderDownloadSheetBody extends StatefulWidget {
   /// 创建离线下载面板。
   const ReaderDownloadSheetBody({
@@ -100,6 +101,34 @@ final class _ReaderDownloadSheetBodyState extends State<ReaderDownloadSheetBody>
               ],
             ),
           ),
+          StreamBuilder<DownloadBookState?>(
+            stream: widget.coordinator.watchBookState(widget.book.bookUrl),
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<DownloadBookState?> snapshot,
+            ) {
+              /// 当前书自动换源和锁定候选状态；未配置时默认关闭。
+              final DownloadBookState? state = snapshot.data;
+              /// 当前锁定候选的用户可见书源名称。
+              final String? lockedSourceName = state?.lockedSourceName;
+              return SwitchListTile(
+                secondary: const Icon(Icons.swap_horiz),
+                title: const Text('自动换源下载'),
+                subtitle: Text(
+                  lockedSourceName == null
+                      ? '失败 5 次后按 98%→70% 梯度换源，最多检查 78 个书源'
+                      : '已锁定：$lockedSourceName',
+                ),
+                value: state?.autoChangeSource ?? false,
+                onChanged: (bool enabled) {
+                  widget.coordinator.setAutoChangeSource(
+                    widget.book.bookUrl,
+                    enabled,
+                  );
+                },
+              );
+            },
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
               SpacingToken.medium,
@@ -116,10 +145,17 @@ final class _ReaderDownloadSheetBodyState extends State<ReaderDownloadSheetBody>
               ),
             ),
           ),
+          TextButton.icon(
+            onPressed: () {
+              Navigator.of(context).pushNamed(AppRoute.downloadManagement);
+            },
+            icon: const Icon(Icons.manage_search),
+            label: const Text('打开完整下载管理'),
+          ),
           Padding(
             padding: const EdgeInsets.all(SpacingToken.medium),
             child: Text(
-              '下载仅在应用运行期间进行，退出或被系统回收后需要重新开始。',
+              '全局固定串行下载，章节请求间隔至少 1.5 秒；单次请求 45 秒超时，失败 5 次后跳过并继续后续章节。Android 使用前台服务；iOS 后台时间由系统决定。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -141,8 +177,14 @@ final class _ReaderDownloadSheetBodyState extends State<ReaderDownloadSheetBody>
                     return _DownloadTaskRow(
                       task: tasks[index],
                       chapterTitle: _chapterTitle(tasks[index].chapterIndex),
-                      onRetry: () => widget.coordinator.retryTask(widget.book.bookUrl, tasks[index].chapterIndex),
-                      onRemove: () => widget.coordinator.removeTask(widget.book.bookUrl, tasks[index].chapterIndex),
+                      onRetry: () => widget.coordinator.resumeTask(
+                        widget.book.bookUrl,
+                        tasks[index].chapterIndex,
+                      ),
+                      onRemove: () => widget.coordinator.deleteTaskDownload(
+                        widget.book.bookUrl,
+                        tasks[index].chapterIndex,
+                      ),
                     );
                   },
                 );
@@ -217,7 +259,8 @@ final class _DownloadTaskRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (task.status == DownloadTaskStatus.failed)
+          if (task.status == DownloadTaskStatus.failed ||
+              task.status == DownloadTaskStatus.paused)
             IconButton(onPressed: onRetry, icon: const Icon(Icons.replay), tooltip: '重试'),
           IconButton(onPressed: onRemove, icon: const Icon(Icons.close), tooltip: '移除'),
         ],
@@ -234,6 +277,7 @@ final class _DownloadTaskRow extends StatelessWidget {
         height: 24,
         child: CircularProgressIndicator(strokeWidth: 2.4),
       ),
+      DownloadTaskStatus.paused => const Icon(Icons.pause_circle_outline),
       DownloadTaskStatus.success => Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
       DownloadTaskStatus.failed => Icon(Icons.error_outline, color: Theme.of(context).colorScheme.error),
     };
@@ -244,8 +288,10 @@ final class _DownloadTaskRow extends StatelessWidget {
     return switch (task.status) {
       DownloadTaskStatus.waiting => '等待中',
       DownloadTaskStatus.running => '下载中',
+      DownloadTaskStatus.paused => '已暂停',
       DownloadTaskStatus.success => '已下载',
-      DownloadTaskStatus.failed => '失败（已重试 ${task.retryCount} 次）',
+      DownloadTaskStatus.failed =>
+        '${task.errorMessage ?? '失败'}（已重试 ${task.retryCount} 次）',
     };
   }
 }

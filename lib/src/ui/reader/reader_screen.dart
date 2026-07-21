@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
+import 'reader_content_image.dart';
 import 'reader_menu_overlay.dart';
 import 'reader_page_layout.dart';
+import 'reader_selection_region.dart';
 
 /// 只消费 ReaderUiState、布局控制器并发送 Intent 的无状态小说阅读页面。
 final class ReaderScreen extends StatelessWidget {
@@ -365,7 +368,6 @@ final class _ReaderContentList extends StatelessWidget {
         onTapUp: (TapUpDetails details) {
           _handleTap(details.localPosition.dx, MediaQuery.sizeOf(context).width);
         },
-        onLongPress: _handleLongPress,
         child: ListView.builder(
         controller: scrollController,
         /// 显示页眉时页眉只需贴近安全区留出固定小间距，不再叠加用户配置的阅读边距。
@@ -425,32 +427,24 @@ final class _ReaderContentList extends StatelessWidget {
           }
           /// 当前稳定正文块。
           final block = content.blocks[index - 1];
-          /// 仅用于显示的全角首行缩进，不改变正文块字符锚点。
-          final String indent =
-              List<String>.filled(state.config.paragraphIndent, '　').join();
-          /// 为当前块内每个段落补入显示缩进后的正文。
-          final String displayText = '$indent${block.text.replaceAll('\n', '\n$indent')}';
+          if (block.kind == ReaderContentBlockKind.image) {
+            return Padding(
+              key: ValueKey<String>(block.id),
+              padding: EdgeInsets.only(bottom: state.config.paragraphSpacing),
+              child: ReaderContentImageView(
+                imageUrl: block.resourceUrl,
+                altText: block.altText,
+                referer: block.resourceReferer,
+                onSave: () => onIntent(
+                  ShareReaderContentImageIntent(block.resourceUrl),
+                ),
+              ),
+            );
+          }
           return Padding(
             key: ValueKey<String>(block.id),
             padding: EdgeInsets.only(bottom: state.config.paragraphSpacing),
-            child: Text(
-              displayText,
-              textAlign: state.config.textFullJustify
-                  ? TextAlign.justify
-                  : TextAlign.start,
-              style: TextStyle(
-                color: Color(state.config.textColorValue),
-                fontSize: state.config.fontSize,
-                fontWeight: _fontWeight(state.config.fontWeightValue),
-                fontStyle: state.config.textItalic ? FontStyle.italic : FontStyle.normal,
-                letterSpacing: state.config.letterSpacing,
-                decoration: state.config.textUnderline
-                    ? TextDecoration.underline
-                    : TextDecoration.none,
-                shadows: _textShadows(state),
-                height: state.config.lineHeight,
-              ),
-            ),
+            child: _buildSelectableTextBlock(content, block),
           );
         },
       ),
@@ -475,12 +469,7 @@ final class _ReaderContentList extends StatelessWidget {
     _performTapAction(state.config.centerTapAction);
   }
 
-  /// 执行用户配置的正文长按动作。
-  void _handleLongPress() {
-    _performTapAction(state.config.longPressAction);
-  }
-
-  /// 执行连续阅读点击、长按和按键共享的阅读动作。
+  /// 执行连续阅读点击和按键共享的阅读动作；正文长按固定交给原生选区。
   void _performTapAction(ReaderTapAction action) {
     switch (action) {
       case ReaderTapAction.none:
@@ -498,6 +487,75 @@ final class _ReaderContentList extends StatelessWidget {
         onIntent(const AddReaderBookmarkIntent());
         return;
     }
+  }
+
+  /// 构建与章节字符位置一一对应的可选正文块，并叠加用户高亮和下划线。
+  Widget _buildSelectableTextBlock(
+    ReaderChapterContent content,
+    ReaderContentBlock block,
+  ) {
+    /// 当前正文块的基础排版样式。
+    final TextStyle baseStyle = TextStyle(
+      color: Color(state.config.textColorValue),
+      fontSize: state.config.fontSize,
+      fontWeight: _fontWeight(state.config.fontWeightValue),
+      fontStyle:
+          state.config.textItalic ? FontStyle.italic : FontStyle.normal,
+      letterSpacing: state.config.letterSpacing,
+      decoration: state.config.textUnderline
+          ? TextDecoration.underline
+          : TextDecoration.none,
+      shadows: _textShadows(state),
+      height: state.config.lineHeight,
+    );
+    /// 只用于显示、不进入章节字符锚点的全角首行缩进。
+    final String indent =
+        List<String>.filled(state.config.paragraphIndent, '　').join();
+    /// 当前正文块按真实换行拆分的段落。
+    final List<String> paragraphs = block.text.split('\n');
+    /// 最终交给 RichText 的显示片段。
+    final List<InlineSpan> spans = <InlineSpan>[];
+    /// 当前段落在正文块中的字符起点。
+    int localOffset = 0;
+    for (int index = 0; index < paragraphs.length; index += 1) {
+      /// 当前保持原文字符位置的段落。
+      final String paragraph = paragraphs[index];
+      if (index > 0) {
+        spans.add(TextSpan(text: '\n', style: baseStyle));
+      }
+      if (indent.isNotEmpty) {
+        spans.add(TextSpan(text: indent, style: baseStyle));
+      }
+      spans.addAll(
+        buildReaderAnnotationSpans(
+          chapterText: content.text,
+          text: paragraph,
+          startOffset: block.startOffset + localOffset,
+          baseStyle: baseStyle,
+          processes: state.contentProcesses,
+        ),
+      );
+      localOffset += paragraph.length + 1;
+    }
+    return ReaderSelectionRegion(
+      chapterText: content.text,
+      scopeStart: block.startOffset,
+      scopeEnd: block.endOffset,
+      preferredOffset:
+          state.anchor?.characterOffset ?? block.startOffset,
+      selectionEpoch: state.restoreRequestId,
+      onAction: (
+        ReaderTextSelection selection,
+        ReaderSelectionAction action,
+      ) {
+        onIntent(ApplyReaderSelectionIntent(selection, action));
+      },
+      child: Text.rich(
+        TextSpan(children: spans),
+        textAlign:
+            state.config.textFullJustify ? TextAlign.justify : TextAlign.start,
+      ),
+    );
   }
 
   /// 连续模式优先向上滚动一个视口，到达顶部后进入上一章。

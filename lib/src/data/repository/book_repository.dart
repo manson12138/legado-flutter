@@ -95,20 +95,47 @@ final class BookRepository
         await _bookDao.deleteByUrl(oldBookUrl, executor: transaction);
         await _bookDao.upsert(newBook, executor: transaction);
         await _chapterDao.upsertAll(chapters, executor: transaction);
+        /// 用户正文标注属于书籍事实，整书换源时随新主键迁移且保留章节锚点。
+        await transaction.update(
+          DatabaseTables.bookContentProcesses,
+          <String, Object?>{'bookUrl': newBook.bookUrl},
+          where: 'bookUrl = ?',
+          whereArgs: <Object?>[oldBookUrl],
+        );
       });
       _database.changeNotifier.notifyTables(
-        <String>{DatabaseTables.books, DatabaseTables.chapters},
+        <String>{
+          DatabaseTables.books,
+          DatabaseTables.chapters,
+          DatabaseTables.bookContentProcesses,
+        },
       );
     });
   }
 
-  /// 删除书籍，并依赖已启用的 SQLite 外键级联删除目录。
+  /// 删除书籍，同时清理没有外键约束的用户正文标注，目录继续由外键级联删除。
   @override
   Future<void> deleteBook(String bookUrl) {
-    return guardDataOperation<void>(() => _bookDao.deleteByUrl(bookUrl));
+    return guardDataOperation<void>(() async {
+      await _database.transaction<void>((transaction) async {
+        await transaction.delete(
+          DatabaseTables.bookContentProcesses,
+          where: 'bookUrl = ?',
+          whereArgs: <Object?>[bookUrl],
+        );
+        await _bookDao.deleteByUrl(bookUrl, executor: transaction);
+      });
+      _database.changeNotifier.notifyTables(
+        <String>{
+          DatabaseTables.books,
+          DatabaseTables.chapters,
+          DatabaseTables.bookContentProcesses,
+        },
+      );
+    });
   }
 
-  /// 在一个事务中批量删除书籍，章节由数据库外键级联删除。
+  /// 在一个事务中批量删除书籍和用户正文标注，章节由数据库外键级联删除。
   @override
   Future<void> deleteBooks(Set<String> bookUrls) {
     return guardDataOperation<void>(() async {
@@ -116,10 +143,22 @@ final class BookRepository
         return;
       }
       await _database.transaction<void>((transaction) async {
+        /// 批量删除使用的稳定参数占位符。
+        final String placeholders =
+            List<String>.filled(bookUrls.length, '?').join(',');
+        await transaction.delete(
+          DatabaseTables.bookContentProcesses,
+          where: 'bookUrl IN ($placeholders)',
+          whereArgs: bookUrls.toList(growable: false),
+        );
         await _bookDao.deleteByUrls(bookUrls, executor: transaction);
       });
       _database.changeNotifier.notifyTables(
-        <String>{DatabaseTables.books, DatabaseTables.chapters},
+        <String>{
+          DatabaseTables.books,
+          DatabaseTables.chapters,
+          DatabaseTables.bookContentProcesses,
+        },
       );
     });
   }

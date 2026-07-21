@@ -1,6 +1,6 @@
 # M02 Core Data Layer Output
 
-Last updated: 2026-07-13
+Last updated: 2026-07-21
 
 ## Gate state
 
@@ -13,7 +13,7 @@ M1 和 M2 都不能标记为已验收；M2 当前状态为 `IN_PROGRESS / 实现
 |---|---|---|
 | 字段映射和可空性 | [01_field_mapping.md](./01_field_mapping.md) | IN_PROGRESS（待用户检查） |
 | 不可变 Dart 领域实体 | `flutter_app/lib/src/domain/model/` | IN_PROGRESS（待用户检查） |
-| SQLite Schema v1 | `flutter_app/lib/src/data/local/legado_database.dart` | IN_PROGRESS（待用户检查） |
+| SQLite Schema v7 | `lib/src/data/local/legado_database.dart` | IN_PROGRESS（待用户检查） |
 | 第一批 DAO | `flutter_app/lib/src/data/dao/` | IN_PROGRESS（待用户检查） |
 | Gateway/Repository | `flutter_app/lib/src/domain/gateway/`, `flutter_app/lib/src/data/repository/` | IN_PROGRESS（待用户检查） |
 | 核心 UseCase | `flutter_app/lib/src/domain/usecase/` | IN_PROGRESS（待用户检查） |
@@ -31,11 +31,12 @@ M1 和 M2 都不能标记为已验收；M2 当前状态为 `IN_PROGRESS / 实现
 
 ## Schema and transaction boundaries
 
-- 数据库文件：`legado_flutter.db`，版本 1；不读取、不迁移原 Android `legado.db`。
+- 数据库文件：`legado_flutter.db`，当前版本 7；不读取、不迁移原 Android `legado.db`。
 - URL 主键原样保存，不做 trim、大小写转换、重定向归一化或尾斜杠归一化。
 - 所有 `*Time`、`deadline`、`syncTime` 均为 Unix Epoch 毫秒；0 表示对应 Android 字段定义的未知、未发生或永不过期。
 - `chapters` 主键为 `(url, bookUrl)`，同书 `(bookUrl, index)` 唯一，删除书籍级联删除章节。
 - `searchBooks.origin` 外键指向 `book_sources.bookSourceUrl`，删除书源级联删除其搜索缓存。
+- `book_content_processes` 对齐 Android 正文处理记录字段；用户高亮与下划线通过显式事务随换源迁移、随删书清理，不依赖会干扰换源的外键级联。
 - 书源批量导入、书籍加目录、目录整体替换均使用事务；只有事务提交成功后才发送观察流变更通知。
 - UI 不获取 DAO。组合根只公开 Gateway 和 UseCase；Repository 捕获并转换数据库异常。
 
@@ -61,4 +62,3 @@ flutter run
 5. `null`、空字符串、0 和字段缺失在书源导入后仍保持文档定义的差异。
 6. 保存并恢复章节索引、字符位置、章节标题、阅读时间和同步时间。
 7. 观察流首次订阅立即返回当前值，事务提交后返回新值，事务失败不发送成功通知。
-

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../../data/dao/cache_dao.dart';
@@ -9,12 +10,13 @@ import '../http/source_url_resolver.dart';
 import 'java_compatibility_bridge.dart';
 import 'js_engine.dart';
 import 'script_context.dart';
+import 'script_interaction_broker.dart';
 import 'webview_script_bridge.dart';
 
 /// JavaScript 调用 Dart 时的统一 Legado API 桥。
 ///
-/// 同步编码工具直接返回值；网络、Cookie、持久缓存和 WebView 返回 Future，在 JSF 中会转为
-/// Promise。旧 Rhino 脚本若假设同步网络返回，必须由真实样本报告识别，不能静默转换。
+/// 同步编码工具直接返回值；网络、Cookie、持久缓存和 WebView 继续使用统一 Dart Future。
+/// JSF 适配器负责等待并重放这些 Future，使旧 Rhino 脚本观察到同步返回值，同时避免阻塞 UI isolate。
 final class LegadoScriptBridge {
   /// 创建脚本 API 桥。
   LegadoScriptBridge(
@@ -25,6 +27,7 @@ final class LegadoScriptBridge {
     this._cacheDao,
     this._javaBridge,
     this._webViewBridge,
+    this._interactionBroker,
   );
 
   /// M3 统一 HTTP 客户端。
@@ -47,6 +50,9 @@ final class LegadoScriptBridge {
 
   /// 页面 WebView 独立边界。
   final WebViewScriptBridge _webViewBridge;
+
+  /// 开关开启后串行转交搜索路由的可见登录和验证队列。
+  final LegadoScriptInteractionBroker _interactionBroker;
 
   /// 按书源隔离的运行时内存缓存，对应 Android `CacheManager` 的 memory API。
   final Map<String, Map<String, String>> _memoryCacheBySource =
@@ -94,6 +100,14 @@ final class LegadoScriptBridge {
     }
     if (surface == 'source') {
       return _invokeSource(context, method, arguments);
+    }
+    if (surface == 'book' || surface == 'chapter') {
+      return _invokeScriptModel(
+        context,
+        bookModel: surface == 'book',
+        method: method,
+        arguments: arguments,
+      );
     }
     if (surface.startsWith('class:')) {
       return _javaBridge.invokeClass(surface.substring(6), method, arguments);
@@ -153,6 +167,15 @@ final class LegadoScriptBridge {
       'post' => _rawRequest(context, HttpRequestMethod.post, arguments),
       'getCookie' => _getCookie(arguments),
       'put' => _putVariable(context, arguments),
+      'reGetBook' => _runPreUpdateAction(context, LegadoPreUpdateAction.reGetBook),
+      'refreshTocUrl' => _runPreUpdateAction(context, LegadoPreUpdateAction.refreshTocUrl),
+      'startBrowser' || 'startBrowserAwait' || 'getVerificationCode' =>
+        _requestUserInteraction(
+          context,
+          method,
+          arguments,
+          cancellationToken: cancellationToken,
+        ),
       'webView' => _webView(context, arguments, cancellationToken: cancellationToken),
       'webViewGetSource' => _webView(
         context,
@@ -161,6 +184,113 @@ final class LegadoScriptBridge {
         cancellationToken: cancellationToken,
       ),
       _ => _javaBridge.invokeHelper(method, arguments),
+    };
+  }
+
+  /// 执行只允许从目录 `preUpdateJs` 进入的重新搜索或详情刷新动作。
+  Future<void> _runPreUpdateAction(
+    LegadoScriptContext context,
+    LegadoPreUpdateAction action,
+  ) async {
+    /// 当前请求前脚本绑定的业务处理器；普通 URL、字段和响应脚本均为空。
+    final LegadoPreUpdateActionHandler? handler = context.preUpdateActionHandler;
+    if (handler == null) {
+      throw JsEngineException(
+        kind: JsFailureKind.unsupportedApi,
+        message: 'java.${action.name} 只能在目录 preUpdateJs 中调用',
+      );
+    }
+    await handler(action);
+  }
+
+  /// 默认拒绝交互；显式允许后通过应用级单提示队列等待浏览器或验证码结果。
+  Future<Object?> _requestUserInteraction(
+    LegadoScriptContext context,
+    String method,
+    List<Object?> arguments, {
+    JsCancellationToken? cancellationToken,
+  }) async {
+    /// 当前调用是否获得上层显式交互授权。
+    final bool allowed = context.interactionPolicy == LegadoScriptInteractionPolicy.allow;
+    if (!allowed) {
+      throw JsEngineException(
+        kind: JsFailureKind.interactionRequired,
+        message: '${context.operation.name} 书源请求需要用户交互，当前策略已阻止弹窗',
+      );
+    }
+    /// 脚本传入的页面或验证码地址。
+    final String targetText = _requiredString(arguments, 0, method);
+    if (targetText.length >= 64 * 1024) {
+      throw JsEngineException(
+        kind: JsFailureKind.bridge,
+        message: 'java.$method 的地址超过安全长度限制',
+      );
+    }
+    /// 基于当前规则地址解析的绝对交互地址。
+    final Uri targetUri = context.baseUri.resolve(targetText);
+    if (!<String>{'http', 'https'}.contains(targetUri.scheme.toLowerCase()) ||
+        targetUri.host.isEmpty) {
+      throw JsEngineException(
+        kind: JsFailureKind.bridge,
+        message: 'java.$method 只允许 HTTP 或 HTTPS 地址',
+      );
+    }
+    /// 图片验证码不使用页面标题；浏览器标题来自第二个参数。
+    final String title = method == 'getVerificationCode'
+        ? ''
+        : _optionalString(arguments, 1)?.trim() ?? '';
+    /// `startBrowserAwait` 的 HTML 位于第四个参数，普通浏览器位于第三个参数。
+    final String? html = method == 'startBrowserAwait'
+        ? _optionalString(arguments, 3)
+        : method == 'startBrowser'
+        ? _optionalString(arguments, 2)
+        : null;
+    /// 串行 UI 请求；普通 `startBrowser` 对齐 Android，只负责发起页面而不等待用户关闭。
+    final Future<LegadoScriptInteractionResult> interactionFuture =
+        _interactionBroker.request(
+      kind: method == 'getVerificationCode'
+          ? LegadoScriptInteractionKind.verificationCode
+          : LegadoScriptInteractionKind.browser,
+      sourceUrl: context.source.bookSourceUrl,
+      sourceName: context.source.bookSourceName,
+      targetUri: targetUri,
+      title: title,
+      html: html,
+      requiresPageResult: method != 'startBrowser',
+      cancellationToken: method == 'startBrowser' ? null : cancellationToken,
+    );
+    if (method == 'startBrowser') {
+      unawaited(
+        interactionFuture.then<void>(
+          (LegadoScriptInteractionResult _) {},
+          onError: (Object _, StackTrace __) {},
+        ),
+      );
+      return null;
+    }
+    /// 需要同步返回值的浏览器验证或图片验证码结果。
+    final LegadoScriptInteractionResult interactionResult = await interactionFuture;
+    if (method == 'getVerificationCode') {
+      return interactionResult.value;
+    }
+    /// Android 默认在用户完成验证后重新请求最终地址；第三个参数可显式关闭。
+    final Object? refetchArgument = arguments.length > 2 ? arguments[2] : null;
+    /// 是否在完成页面验证后通过统一 HTTP/Cookie 管线重新获取正文。
+    final bool refetchAfterSuccess = refetchArgument == null ||
+        refetchArgument == true ||
+        refetchArgument.toString().toLowerCase() == 'true';
+    if (refetchAfterSuccess) {
+      return _request(
+        context,
+        <Object?>[interactionResult.finalUri.toString()],
+        responseObject: true,
+      );
+    }
+    return <String, Object?>{
+      'url': interactionResult.finalUri.toString(),
+      'body': interactionResult.value,
+      'statusCode': 200,
+      'headers': const <String, List<String>>{},
     };
   }
 
@@ -477,7 +607,7 @@ final class LegadoScriptBridge {
     final String key = _requiredString(arguments, 0, 'put');
     /// 变量值。
     final String value = _requiredString(arguments, 1, 'put');
-    context.variables[key] = value;
+    context.putRuleVariable(key, value);
     return value;
   }
 
@@ -485,13 +615,56 @@ final class LegadoScriptBridge {
   String _getVariable(LegadoScriptContext context, List<Object?> arguments) {
     /// 变量键。
     final String key = _requiredString(arguments, 0, 'get');
-    if (key == 'bookName') {
-      return context.book?.name ?? '';
-    }
-    if (key == 'title') {
-      return context.chapter?.title ?? '';
-    }
-    return context.variables[key] ?? '';
+    return context.getRuleVariable(key);
+  }
+
+  /// 分派 Android `Book` 与 `BookChapter` 的变量方法和受控字段回写。
+  Object? _invokeScriptModel(
+    LegadoScriptContext context, {
+    required bool bookModel,
+    required String method,
+    required List<Object?> arguments,
+  }) {
+    return switch (method) {
+      'getVariable' => context.modelState.getVariable(
+        bookModel: bookModel,
+        key: _requiredString(arguments, 0, '${bookModel ? 'book' : 'chapter'}.getVariable'),
+      ),
+      'getVariableMap' => context.modelState.variableSnapshot(bookModel: bookModel),
+      'putVariable' => _putScriptModelVariable(
+        context,
+        bookModel: bookModel,
+        arguments: arguments,
+      ),
+      'setField' => context.modelState.setField(
+        bookModel: bookModel,
+        field: _requiredString(arguments, 0, '${bookModel ? 'book' : 'chapter'}.setField'),
+        value: arguments.length > 1 ? arguments[1] : null,
+      ),
+      _ => throw JsEngineException(
+        kind: JsFailureKind.unsupportedApi,
+        message: '未支持 ${bookModel ? 'book' : 'chapter'}.$method',
+      ),
+    };
+  }
+
+  /// 写入模型变量并返回值及最新 JSON，使 JS 代理的直接字段读取保持同步。
+  Map<String, Object?> _putScriptModelVariable(
+    LegadoScriptContext context, {
+    required bool bookModel,
+    required List<Object?> arguments,
+  }) {
+    /// 模型 API 名称，用于生成明确的参数错误。
+    final String apiName = '${bookModel ? 'book' : 'chapter'}.putVariable';
+    /// 脚本变量键。
+    final String key = _requiredString(arguments, 0, apiName);
+    /// 脚本变量值。
+    final String value = _requiredString(arguments, 1, apiName);
+    context.modelState.putVariable(bookModel: bookModel, key: key, value: value);
+    return <String, Object?>{
+      'value': value,
+      'variable': jsonEncode(context.modelState.variableSnapshot(bookModel: bookModel)),
+    };
   }
 
   /// 调用受控 WebView 边界。

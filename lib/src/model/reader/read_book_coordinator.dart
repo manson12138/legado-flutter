@@ -97,6 +97,7 @@ final class ReadBookCoordinator {
     required Book book,
     required BookChapter chapter,
     required ReaderDisplayConfig config,
+    String? nextChapterUrl,
     bool forceRefresh = false,
   }) async {
     _generation += 1;
@@ -121,6 +122,7 @@ final class ReadBookCoordinator {
         chapter: chapter,
         config: config,
         token: token,
+        nextChapterUrl: nextChapterUrl,
         forceRefresh: forceRefresh,
       );
       if (generation != _generation || token.isCancelled) {
@@ -215,6 +217,9 @@ final class ReadBookCoordinator {
             chapter: chapters[index],
             config: config,
             token: token,
+            nextChapterUrl: index + 1 < chapters.length
+                ? chapters[index + 1].url
+                : chapters.firstOrNull?.url,
           );
           _preloadFailureCounts.remove(chapters[index].url);
         } on Object catch (error) {
@@ -285,6 +290,7 @@ final class ReadBookCoordinator {
     required BookChapter chapter,
     required ReaderDisplayConfig config,
     required HttpCancellationToken token,
+    String? nextChapterUrl,
     bool forceRefresh = false,
   }) async {
     /// 【搜书诊断日志】当前正文管线章节不可逆标识。
@@ -292,7 +298,9 @@ final class ReadBookCoordinator {
     /// 【搜书诊断日志】单章缓存、网络与处理总耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
     /// 配置参与缓存键，替换规则开关变化时不复用旧处理结果。
-    final String memoryKey = '${chapter.url}#replace=${config.useReplaceRules}';
+    final String memoryKey = '${chapter.url}#replace=${config.useReplaceRules}'
+        '#chinese=${config.chineseConversionMode.name}'
+        '#reSegment=${config.reSegmentContent}';
     if (!forceRefresh) {
       /// 命中的内存处理结果。
       final ReaderChapterContent? memory = _memoryCache.remove(memoryKey);
@@ -351,7 +359,9 @@ final class ReadBookCoordinator {
       try {
         parsed = await _standardService.loadContent(
           source: source,
+          book: book,
           chapter: chapter,
+          nextChapterUrl: nextChapterUrl,
           cancellationToken: token,
         );
       } catch (error) {
@@ -416,6 +426,8 @@ final class ReadBookCoordinator {
         rawContent: rawContent,
         replaceRules: rules,
         useReplaceRules: config.useReplaceRules,
+        chineseConversionMode: config.chineseConversionMode,
+        reSegmentContent: config.reSegmentContent,
         fromCache: fromCache,
       );
     } on ReaderTextProcessException catch (error) {

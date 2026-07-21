@@ -79,7 +79,40 @@ int? _extractChapterNumber(String title) {
   if (match == null) {
     return null;
   }
-  return int.tryParse(match.group(0)!);
+  /// 已确认匹配存在的章节号文本；捕获组缺失时仍安全返回空。
+  final String? numberText = match.group(0);
+  return numberText == null ? null : int.tryParse(numberText);
+}
+
+/// 比较两个来源的相邻章节正文相似度，用于自动下载换源的 80% 安全门槛。
+///
+/// 只比较去除空白和常见标点后的前后各 2000 字，避免超长章节建立无界集合；结果为
+/// 0～1 的 Jaccard 双字符集合相似度，越接近 1 表示正文越可能属于同一章节。
+double calculateChapterContentSimilarity(String left, String right) {
+  /// 左侧正文规范化后的有界样本。
+  final String normalizedLeft = _boundedContentSample(left);
+  /// 右侧正文规范化后的有界样本。
+  final String normalizedRight = _boundedContentSample(right);
+  return _jaccardSimilarity(normalizedLeft, normalizedRight);
+}
+
+/// 清除排版差异并截取章节首尾有界样本，避免来源广告或尾注主导相似度。
+String _boundedContentSample(String content) {
+  /// 去除空白和常见中英文标点后的正文。
+  final String normalized = content
+      .replaceAll(
+        RegExp(r'''[\s，。！？、；：“”‘’（）【】《》…—,.!?;:'"()\[\]{}<>_\-]+'''),
+        '',
+      )
+      .trim();
+  if (normalized.length <= 4000) {
+    return normalized;
+  }
+  /// 章节开头样本。
+  final String prefix = normalized.substring(0, 2000);
+  /// 章节结尾样本。
+  final String suffix = normalized.substring(normalized.length - 2000);
+  return '$prefix$suffix';
 }
 
 /// 基于双字符 n-gram 集合计算 Jaccard 相似度，短文本退化为整串比较。

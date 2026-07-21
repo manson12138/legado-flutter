@@ -39,7 +39,7 @@
 | Android minSdk | `26` |
 | iOS Bundle Identifier | `io.legado.flutter` |
 | iOS Deployment Target | `16.0` |
-| 独立数据库 | `legado_flutter.db`，当前 Schema v4 |
+| 独立数据库 | `legado_flutter.db`，当前 Schema v7 |
 | 原 Android 参考实现 | 位于**同级兄弟仓库** `legado-with-MD3`（不在本仓库内）的 `app/src/main/java/io/legado/app/`；本索引第 6 节“Android 对照”列的路径均相对该兄弟仓库 |
 | 重写文档主目录 | `docs/flutter-rewrite/` |
 
@@ -58,11 +58,14 @@
 跨阶段 UI、阅读器和书架冲突重构方案见
 [`FLUTTER_UI_AND_READER_REDESIGN_PLAN.md`](./FLUTTER_UI_AND_READER_REDESIGN_PLAN.md)。该文档当前为
 `IN_PROGRESS`；R1～R5 已写入第一批实现但尚无用户运行证据，且仿真翻页、高级设置、有限多章
-Widget 窗口、离线下载和其余页面视觉重构仍未完成。
+Widget 窗口和其余页面视觉重构仍未完成；离线下载管理已实现待真机验证。
+书源、搜索、详情/目录、阅读和换源核心主流程与原生 Android 的差距及建议实施顺序见
+[`CORE_READING_FLOW_GAP_PRIORITY.md`](./CORE_READING_FLOW_GAP_PRIORITY.md)。该文档以真实书源成功率、
+阅读稳定性、进度安全和换源数据安全为 P0，状态为 `PROPOSED`，需用户确认后再作为后续领取顺序。
 小说正文阅读界面完整 UI 对齐的实施优先级见
 [`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md)。该文档当前为
-`IN_PROGRESS`；P0～P4 可落地阅读 UI 已写入 Flutter，依赖型能力已用边界面板登记，TTS、
-离线下载、AI、同步和单章换源等仍等待对应子系统迁移。
+`IN_PROGRESS`；P0～P4 可落地阅读 UI 已写入 Flutter，单章换源和离线下载管理已实现待真机
+验证；TTS、AI、同步等仍等待对应子系统迁移。
 小说阅读详情页完整 UI 对齐的实施优先级见
 [`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md)。该文档当前为
 `IN_PROGRESS`；P0～P3 基础入口已写入 Flutter 详情页但尚无用户运行证据，阅读记录、
@@ -135,12 +138,13 @@ lib/main.dart
 | `/settings` | `ui/settings/settings_route.dart` / `settings_screen.dart` | 当前为轻量无状态接线 | 设置入口 |
 | `/settings/logs` | `ui/log_management/log_management_route.dart` / `log_management_screen.dart` | `LogManagementViewModel` | 查看、分享、ADB 回显和删除沙盒日志 |
 | `/settings/about` | `ui/about/about_route.dart` / `about_screen.dart` | `AboutViewModel` | 连点应用图标 2 秒内 5 次解锁“内容过滤管理”（成人内容屏蔽开关 + 远程更新词库） |
+| `/downloads` | `ui/download_management/download_management_route.dart` | `DownloadCoordinator` + `DownloadGateway` 全局任务流 | 设置或阅读器进入；跨书范围入队、暂停恢复、失败重试和离线正文删除 |
 | `/book-sources` | `ui/book_source/book_source_route.dart` / `book_source_screen.dart` | `BookSourceManagementViewModel` | 书源管理、导入、扫码和编辑 |
 | `/search` | `ui/search/search_route.dart` / `search_screen.dart` | `SearchViewModel` | 多书源搜索和搜索历史 |
 | `/book-info` | `ui/book_info/book_info_route.dart` / `book_info_screen.dart` | `BookInfoViewModel` | 必须传 `BookInfoRouteArguments` |
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` | `BookshelfViewModel` | 实时书架、分组、排序、批量操作 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
-| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；P0/P2 文本阅读菜单浮层和刷新范围入口在 `reader_menu_overlay.dart`，P1/P3 设置面板在 `reader_settings_sheet.dart`，P2/P4 当前章/整书搜索、书签编辑、替换规则列表和后续能力面板在 `reader_action_sheets.dart` |
+| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart` |
 | `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
@@ -165,10 +169,10 @@ Route 管理生命周期、插件、导航、对话框和 Effect；Screen 保持
 | 搜索 | `ui/search/` | `BookSearchCoordinator`、`SearchHistoryRepository`、`StandardBookSourceService` | `ui/book/search/` | [`m06/README.md`](./m06/README.md) |
 | 详情和目录 | `ui/book_info/` | `BookDetailService`、`SaveBookChaptersUseCase`、`AddBookToBookshelfUseCase` | `ui/book/info/`、`model/webBook/` | [`m06/README.md`](./m06/README.md)、[`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md) |
 | 书架 | `ui/bookshelf/` | `BookRepository`、`BookGroupRepository`、`BookshelfRefreshCoordinator` | `ui/main/bookshelf/` | [`m07/README.md`](./m07/README.md) |
-| 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository`、`ReaderSearchState`、`ReaderDisplayConfig` | `ui/book/read/`、`model/ReadBook.kt` | [`m08/README.md`](./m08/README.md)、[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md) |
+| 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository`、`ReaderSearchState`、`ReaderDisplayConfig`；安全资源协议在 `domain/model/reader_content_markup.dart`，图片视图在 `ui/reader/reader_content_image.dart`；原生选区与标注 Span 在 `ui/reader/reader_selection_region.dart`，标注模型/持久化在 `domain/model/book_content_process.dart`、`data/dao/book_content_process_dao.dart` | `ui/book/read/`、`model/ReadBook.kt`、`help/book/ContentProcessor.kt`、`data/entities/BookContentProcess.kt` | [`m08/README.md`](./m08/README.md)、[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md)、[`CORE_READING_FLOW_GAP_PRIORITY.md`](./CORE_READING_FLOW_GAP_PRIORITY.md) |
 | 整书换源 | `ui/change_book_source/` | `ChangeSourceCoordinator`、`ChangeBookSourceUseCase`、`BookRepository.changeBookSource` | `ui/book/changesource/`、`ChangeSourceSearchUseCase.kt`、`ChangeBookSourceUseCase.kt` | [`m11/README.md`](./m11/README.md) |
 | 单章换源 | `ui/change_chapter_source/`（阅读器内 `ReaderChangeChapterSourceSheet`） | `ChangeChapterSourceCoordinator`、`chapter_title_matcher.dart`、`ReadBookCoordinator.invalidateChapter` | `ui/book/read/sheet/ChangeChapterSourceSheet.kt`、`BookHelp.getDurChapter`、`BookHelp.saveText` | [`m11/chapter_change_source/README.md`](./m11/chapter_change_source/README.md) |
-| 离线下载 | `ui/reader/reader_download_sheet.dart`（阅读器内 `ReaderDownloadSheet`） | `DownloadCoordinator`（App 级单例）、`DownloadTaskDao`/`DownloadRepository`、`download_tasks` 表 | `ui/book/read/sheet/DownloadSheet.kt`、`CacheBook`/`CacheBookModel`、`CacheBookService`（前台服务未迁移） | [`m11/offline_download/README.md`](./m11/offline_download/README.md) |
+| 离线下载 | `ui/reader/reader_download_sheet.dart`（当前书入口）、`ui/download_management/download_management_route.dart`（`/downloads` 跨书管理） | `DownloadCoordinator`（App 级固定串行）、`DownloadTaskDao`/`DownloadRepository`、`download_tasks` 表、`platform/download_background_service.dart`；Android `DownloadForegroundService.kt`，iOS `AppDelegate.swift` 有限后台窗口 | `ui/book/read/sheet/DownloadSheet.kt`、`CacheBook`/`CacheBookModel`、`CacheBookService`、`BookCacheManageScreen` | [`m11/offline_download/README.md`](./m11/offline_download/README.md) |
 | 本地书导入 | `ui/local_book_import/` | `LocalBookImportCoordinator`、`LocalBookStorage`、各格式 Parser | `model/localBook/` 和原文件导入入口 | [`m08_1/README.md`](./m08_1/README.md) |
 | PDF 阅读 | `ui/reader/pdf_reader_route.dart` | `PdfLocalBookParser`、`pdfx` | `model/localBook/PdfFile.kt` | [`m08_1/README.md`](./m08_1/README.md) |
 | 阅读系统栏和常亮 | `platform/reader_platform_service.dart` | Android `MainActivity.kt`、iOS `AppDelegate.swift` | 原阅读 Activity/窗口逻辑 | [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md) |
@@ -267,9 +271,25 @@ BookInfo / Bookshelf / Reader Intent
   -> 调用页使用新 bookUrl 替换详情或阅读路由
 ```
 
-当前只覆盖单本网络书的整书换源。单章、自动、批量换源、候选书源管理和缓存下载仍是独立 M11 Feature，不能因本路由存在而宣称完成。
+当前只覆盖单本网络书的整书换源。自动、批量换源和候选书源管理仍是独立 Feature；单章换源与
+离线下载已有独立实现和验收门禁，不能因整书换源路由存在而宣称它们已通过验收。
 
-### 7.6 同书冲突、分页与阅读预下载
+### 7.6 离线下载与后台续传
+
+```text
+ReaderDownloadSheet / /downloads
+  -> DownloadCoordinator（App 级单例、固定单 worker、1.5 秒最小请求间隔、45 秒硬超时、失败 5 次跳章）
+  -> DownloadGateway / DownloadRepository / DownloadTaskDao
+  -> download_tasks + download_book_states（任务、批次、来源归因、自动换源锁定和一次性评分）
+  -> ChangeSourceCoordinator（自动换源专用单搜索 worker；3@98% → 5@95% → 8@90% → 12@85% → 20@80% → 30@70%，累计最多 78 个来源、全局最多 3 分钟；失败提示手动换源）
+  -> StandardBookSourceService 获取目录和正文
+  -> ReaderCacheGateway 永久正文缓存
+  -> DownloadBackgroundService 平台通道
+     -> Android DownloadForegroundService（dataSync 通知）
+     -> iOS beginBackgroundTask（系统有限窗口，结束后持久化续传）
+```
+
+### 7.7 同书冲突、分页与阅读预下载
 
 ```text
 BookInfoViewModel
@@ -283,10 +303,12 @@ BookInfoViewModel
 ReaderScreen
   -> 连续模式：章节边界 Intent
   -> 分页模式：ReaderPageLayoutEngine 标题/段落/真实排版行装页 + 中文字符/英文词距两端对齐
+  -> ReaderSelectionRegion 原生选择手柄/平台复制分享 + 选区书签/高亮/下划线
+  -> BookContentProcessGateway -> ReaderRepository -> BookContentProcessDao
   -> 缓存未命中：先测首批页面/恢复锚点页，_ReaderIncrementalPageLayoutJob 后台分批续算完整页集
   -> 超长无换行段落按有限字符块测量，完整页集写入 ReaderPageLayoutCache 最近三套 LRU
   -> ReaderPagedContent 左右跟手覆盖翻页
-  -> ReaderDisplayConfig 左/中/右点击动作、长按动作、点击区宽度和音量键翻页配置
+  -> ReaderDisplayConfig 左/中/右点击动作、点击区宽度和音量键翻页配置；旧长按字段只兼容读取
   -> ReaderSystemInfoText 时间/电量页眉页脚 + ReaderPlatformService 亮度/方向/电量窄桥
   -> 章节边界：保留旧页加载相邻章 + _ReaderChapterCoverSwitch 跨章覆盖衔接
   -> ReaderViewModel 稳定字符锚点与切章防抖
@@ -301,7 +323,7 @@ ReaderScreen
 
 ## 8. 数据层索引
 
-当前 Schema v2 的核心表定义位于 `data/local/legado_database.dart`：
+当前 Schema v7 的核心表定义位于 `data/local/legado_database.dart`：
 
 | 表 | DAO | 领域入口 / Repository |
 |---|---|---|
@@ -311,9 +333,11 @@ ReaderScreen
 | `chapters` | `BookChapterDao` | `ChapterGateway` / `BookRepository` |
 | `searchBooks` | `SearchBookDao` | 当前为数据层缓存能力，修改前确认真实调用方 |
 | `bookmarks` | `BookmarkDao` | `BookmarkGateway` / `ReaderRepository` |
+| `book_content_processes` | `BookContentProcessDao` | `BookContentProcessGateway` / `ReaderRepository` / `SaveBookContentProcessUseCase` |
 | `cookies` | `CookieDao` | `LegadoCookieManager` |
 | `caches` | `CacheDao` | `ReaderCacheGateway`、`SearchHistoryGateway`、JS cache API |
 | `replace_rules` | `ReplaceRuleDao` | `ReplaceRuleGateway` / `ReaderRepository` |
+| `download_tasks`、`download_book_states` | `DownloadTaskDao` | `DownloadGateway` / `DownloadRepository` / App 级 `DownloadCoordinator`；任务归因、批次评分和自动换源锁定均持久化 |
 
 数据库字段和 Android 映射先查 [`m02/01_field_mapping.md`](./m02/01_field_mapping.md)，全局文件映射查 [`m00/03_file_mapping.md`](./m00/03_file_mapping.md)。不要从 UI 文案反推字段可空性或主键语义。
 
@@ -337,16 +361,18 @@ ReaderScreen
 JavaScript 入口：
 
 - 抽象与错误：`api/js/js_engine.dart`；
-- JSF/QuickJS 实现：`api/js/jsf_engine.dart`；
+- JSF/QuickJS 实现：`api/js/jsf_engine.dart`，包含异步宿主调用等待、有限同步结果重放、响应代理、超时、取消和资源释放；
 - 按书源隔离：`api/js/js_engine_pool.dart`；
-- Legado API：`api/js/legado_script_bridge.dart`；
+- Legado API：`api/js/legado_script_bridge.dart`；`api/js/script_context.dart` 提供业务操作、默认拒绝交互策略，以及 URL、响应和解析阶段共享的 `LegadoScriptExecutionState` 与 Book/Chapter 可变快照；`api/js/script_interaction_broker.dart` 提供开启交互后的应用级 FIFO 单消费者队列、取消隔离和页面结果回传；
 - Java 白名单：`api/js/java_compatibility_bridge.dart`；
 - 规则层门面：`model/analyze_rule/legado_javascript_service.dart`。
-- 普通规则与脚本顺序串联：`model/analyze_rule/legado_rule_evaluator.dart`；纯普通规则保持 isolate 快路径，含脚本规则进入 QuickJS。
+- 普通规则与脚本顺序串联：`model/analyze_rule/legado_rule_evaluator.dart`；纯普通规则保持 isolate 快路径，含脚本、`@put` 或 `@get` 的规则进入共享状态执行链。
 
 书源运行变量通过 `BookSourceGateway`/`BookSourceRepository` 读写 `sourceVariable_书源URL` 独立缓存键，书源编辑器提供输入入口；`LegadoScriptBridge.prepareContext` 在执行前预载，使 `source.getVariable()` 保持同步返回。JSF 宿主桥使用结构化信封传播失败，避免 Dart 异常对象被当作脚本业务值。`org.jsoup.Jsoup` 只有基于现有 `html` 依赖的固定只读白名单，不代表任意 JVM 类兼容。
 
-搜索、详情、目录和正文已经通过 `StandardBookSourceService` 接入同一混合执行入口，不再把所有脚本书源预先标成 `javascriptPending`。M10 已新增 `FlutterWebViewScriptBridge` 和 `FlutterWebViewCookieBridge`，Android/iOS 使用官方系统 WebView 按域同步统一 Cookie；书源登录入口位于 `ui/book_source/book_source_login_route.dart`。当前仍不能宣称的能力：Rhino/JVM 全兼容、历史同步 `java.ajax/connect/get/post` 透明兼容、WebView/Cookie 真机样本通过、Android/iOS 真机 JSF 已通过。具体样本和阻塞见 [`m04/README.md`](./m04/README.md)、[`m04/05_collection_validation_samples.md`](./m04/05_collection_validation_samples.md) 与 [`m10/README.md`](./m10/README.md)。
+搜索、详情、目录和正文已经通过 `StandardBookSourceService` 接入同一混合执行入口；响应按 `bodyJs`、`loginCheckJs` 顺序处理，正文入口提供 `book/chapter/nextChapterUrl`。目录 `preUpdateJs` 只在用户主动刷新或重试时于首请求前执行，对齐 Android `runPerJs`；`java.reGetBook/refreshTocUrl` 通过仅限该上下文的受控回调完成同书源精确搜索或详情刷新。URL `webView/webJs/webViewDelayTime` 和正文 `webJs/sourceRegex` 进入 `FlutterWebViewScriptBridge`，`sourceRegex` 通过页面开始时安装的 PerformanceObserver 和 Resource Timing 匹配资源 URL。设置页持久保存“搜索时允许书源登录与验证提示”，默认关闭；关闭时交互 API 以 `interactionRequired` 结束当前书源，不弹窗。开启后由 `script_interaction_broker.dart` 串行派发，`ui/search/search_route.dart` 承载确认与验证码输入，`ui/book_source/book_source_login_route.dart` 承载可见 WebView 并回传最终页面与 Cookie。当前仍不能宣称：请求前递归刷新和资源观察的真机等价性、可见交互的真实书源双端通过、Rhino/JVM 全兼容、真实书源和双端真机通过。具体样本和阻塞见 [`m04/README.md`](./m04/README.md)、[`m04/05_collection_validation_samples.md`](./m04/05_collection_validation_samples.md) 与 [`m10/README.md`](./m10/README.md)。
+
+P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VERIFICATION_CHECKLIST.md)。该文档统一记录 S1～S8 书源四段链路、登录与单提示队列、阅读稳定性与进度恢复、整书/单章换源数据安全的 Android/iOS 最终结果；仅用于验收记录，不替代实现事实和阶段门禁。
 
 ## 10. 平台宿主索引
 
@@ -365,13 +391,13 @@ JavaScript 入口：
 截至本次静态核对：
 
 - M1～M8.1 已有实现代码，但仍缺用户完整运行证据，不能将“文件存在”写成阶段通过。
-- M4 JavaScript 兼容仍为 `BLOCKED`，核心问题包含真实书源双平台结果和历史同步网络语义。
+- M4 JavaScript 兼容仍为 `BLOCKED`；同步网络重放、共享模型/规则状态、登录检测、可见交互队列、请求前脚本（含 `reGetBook/refreshTocUrl`）和后台 WebView 基础链路已进入验证，核心剩余问题包含 S1～S8 双平台结果、实时资源嗅探差异和 Java Helper 长尾。
 - 用户本回合要求执行 M10 后，iOS 平台代码和验收文档已接入；这不等同于 Android A2 或 iOS 真机通过。
 - M10 仍受 M9 和 M4 门禁约束，状态保持 `IN_PROGRESS`；安装、签名、JSF、WebView/Cookie、文件安全作用域和核心路径都等待用户结果。
 - M11 全功能迁移尚不能替代核心闭环验收。
 - 用户在获知 M10 尚待真机验收后要求继续执行 M11；当前只领取整书换源，代码状态为 `IN_PROGRESS`，该决定不等同于 M9/M10 通过。
 - UI 与阅读器重构已写入 R1～R5 第一批实现；未运行编译、分析、测试、格式化或应用启动，阶段保持 `IN_PROGRESS`，具体未完成项见重构方案的“实施快照”。
-- 小说正文阅读界面完整 UI 对齐已有 P0～P4 优先级文档，状态为 `IN_PROGRESS`；默认左右覆盖翻页、章节标题分页、首行缩进、两端对齐、长章节首屏增量分页、后台分批续算、完整分页 LRU、点击区域、音量键翻页、页眉页脚时间/电量、亮度和方向配置已写入 Flutter，但尚无用户运行证据。
+- 小说正文阅读界面完整 UI 对齐已有 P0～P4 优先级文档，状态为 `IN_PROGRESS`；默认左右覆盖翻页、章节标题分页、首行缩进、两端对齐、长章节首屏增量分页、后台分批续算、完整分页 LRU、点击区域、音量键翻页、页眉页脚时间/电量、亮度、方向、原生文字选择和用户高亮/下划线已写入 Flutter，但尚无用户运行证据。
 - 小说阅读详情页完整 UI 对齐已有 P0～P3 优先级文档，状态为 `IN_PROGRESS`；P0～P3 基础入口和可用子集已写入 Flutter 详情页但尚无用户运行证据，依赖型能力仍按文档继续拆分。
 
 状态入口：

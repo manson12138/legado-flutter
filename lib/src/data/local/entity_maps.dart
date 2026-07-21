@@ -19,6 +19,31 @@ int boolToSqlite(bool value) => value ? 1 : 0;
 /// 将可空布尔值转换为 SQLite 使用的可空 0/1 整数。
 int? nullableBoolToSqlite(bool? value) => value == null ? null : boolToSqlite(value);
 
+/// 将字符串集合编码为稳定排序的 JSON 数组，避免数据库内容因 Set 遍历顺序变化。
+String stringSetToSqlite(Set<String> values) {
+  /// 排序后的字符串值副本。
+  final List<String> sortedValues = values.toList()..sort();
+  return jsonEncode(sortedValues);
+}
+
+/// 从数据库 JSON 数组恢复字符串集合；非法元素会被拒绝而不是静默转成字符串。
+Set<String> stringSetFromSqlite(String source) {
+  /// 数据库中保存的已解码 JSON 根值。
+  final Object? decoded = jsonDecode(source);
+  if (decoded is! List<Object?>) {
+    throw const FormatException('字符串集合不是 JSON 数组');
+  }
+  /// 类型收窄后的字符串集合。
+  final Set<String> values = <String>{};
+  for (final Object? item in decoded) {
+    if (item is! String) {
+      throw const FormatException('字符串集合包含非字符串元素');
+    }
+    values.add(item);
+  }
+  return values;
+}
+
 /// 将单书阅读配置编码为数据库 JSON 文本。
 String? readConfigToSqlite(ReadConfig? config) {
   if (config == null) {
@@ -399,6 +424,13 @@ Map<String, Object?> downloadTaskToMap(DownloadTask task) => <String, Object?>{
       'chapterIndex': task.chapterIndex,
       'status': task.status.name,
       'retryCount': task.retryCount,
+      'errorMessage': task.errorMessage,
+      'contentLength': task.contentLength,
+      'generation': task.generation,
+      'attemptedSourceUrlsJson': stringSetToSqlite(
+        task.attemptedSourceUrls,
+      ),
+      'successfulSourceUrl': task.successfulSourceUrl,
       'updatedAt': task.updatedAt,
     };
 
@@ -411,6 +443,58 @@ DownloadTask downloadTaskFromMap(Map<String, Object?> row) {
     chapterIndex: reader.requiredInt('chapterIndex'),
     status: DownloadTaskStatus.values.byName(reader.requiredString('status')),
     retryCount: reader.requiredInt('retryCount'),
+    errorMessage: reader.nullableString('errorMessage'),
+    contentLength: reader.requiredInt('contentLength'),
+    generation: reader.requiredInt('generation'),
+    attemptedSourceUrls: stringSetFromSqlite(
+      reader.requiredString('attemptedSourceUrlsJson'),
+    ),
+    successfulSourceUrl: reader.nullableString('successfulSourceUrl'),
+    updatedAt: reader.requiredInt('updatedAt'),
+  );
+}
+
+/// 将 [DownloadBookState] 转换为 `download_book_states` 表写入参数。
+Map<String, Object?> downloadBookStateToMap(DownloadBookState state) =>
+    <String, Object?>{
+      'bookUrl': state.bookUrl,
+      'autoChangeSource': boolToSqlite(state.autoChangeSource),
+      'generation': state.generation,
+      'lockedSourceUrl': state.lockedSourceUrl,
+      'lockedSourceName': state.lockedSourceName,
+      'lockedBookUrl': state.lockedBookUrl,
+      'lockedBookName': state.lockedBookName,
+      'lockedBookAuthor': state.lockedBookAuthor,
+      'lockedBookTocUrl': state.lockedBookTocUrl,
+      'lockedBookVariable': state.lockedBookVariable,
+      'lockedBookType': state.lockedBookType,
+      'triedSourceUrlsJson': stringSetToSqlite(state.triedSourceUrls),
+      'scoredSourceUrlsJson': stringSetToSqlite(state.scoredSourceUrls),
+      'updatedAt': state.updatedAt,
+    };
+
+/// 从 `download_book_states` 表行恢复 [DownloadBookState]。
+DownloadBookState downloadBookStateFromMap(Map<String, Object?> row) {
+  /// 对当前下载书籍状态行执行安全类型读取的解析器。
+  final SqliteRowReader reader = SqliteRowReader(row);
+  return DownloadBookState(
+    bookUrl: reader.requiredString('bookUrl'),
+    autoChangeSource: reader.requiredBool('autoChangeSource'),
+    generation: reader.requiredInt('generation'),
+    lockedSourceUrl: reader.nullableString('lockedSourceUrl'),
+    lockedSourceName: reader.nullableString('lockedSourceName'),
+    lockedBookUrl: reader.nullableString('lockedBookUrl'),
+    lockedBookName: reader.nullableString('lockedBookName'),
+    lockedBookAuthor: reader.nullableString('lockedBookAuthor'),
+    lockedBookTocUrl: reader.requiredString('lockedBookTocUrl'),
+    lockedBookVariable: reader.nullableString('lockedBookVariable'),
+    lockedBookType: reader.requiredInt('lockedBookType'),
+    triedSourceUrls: stringSetFromSqlite(
+      reader.requiredString('triedSourceUrlsJson'),
+    ),
+    scoredSourceUrls: stringSetFromSqlite(
+      reader.requiredString('scoredSourceUrlsJson'),
+    ),
     updatedAt: reader.requiredInt('updatedAt'),
   );
 }

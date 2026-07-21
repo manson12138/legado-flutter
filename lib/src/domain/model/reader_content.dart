@@ -21,7 +21,43 @@ final class ReaderPositionAnchor {
   final String context;
 }
 
-/// 表示一块可由惰性列表独立排版的正文，避免把超长章节交给单个 Text。
+/// 阅读正文块的跨平台内容类型。
+enum ReaderContentBlockKind {
+  /// 可参与字符锚点、搜索和分页的普通文本。
+  text,
+
+  /// 从受控正文 HTML 中提取的 HTTP(S) 图片。
+  image,
+}
+
+/// 表示正文中的一张图片及其稳定字符锚点。
+final class ReaderContentImage {
+  /// 创建已经过协议与地址校验的正文图片。
+  const ReaderContentImage({
+    required this.id,
+    required this.url,
+    required this.altText,
+    required this.characterOffset,
+    required this.referer,
+  });
+
+  /// 由章节地址和图片顺序组成的稳定资源标识。
+  final String id;
+
+  /// 只允许 HTTP(S) 的绝对图片地址。
+  final String url;
+
+  /// 加载失败时展示的替代文本。
+  final String altText;
+
+  /// 图片在处理后正文中占用对象替代字符的位置。
+  final int characterOffset;
+
+  /// 图片防盗链请求可携带的正文页面 Referer。
+  final String referer;
+}
+
+/// 表示一块可由惰性列表独立排版的文本或图片，避免把超长章节交给单个 Widget。
 final class ReaderContentBlock {
   /// 创建带稳定字符区间的正文块。
   const ReaderContentBlock({
@@ -29,6 +65,10 @@ final class ReaderContentBlock {
     required this.text,
     required this.startOffset,
     required this.endOffset,
+    this.kind = ReaderContentBlockKind.text,
+    this.resourceUrl = '',
+    this.altText = '',
+    this.resourceReferer = '',
   });
 
   /// 由章节地址和块序号生成的稳定列表键。
@@ -36,6 +76,18 @@ final class ReaderContentBlock {
 
   /// 当前块需要显示的正文。
   final String text;
+
+  /// 当前块是普通文本还是独立图片资源。
+  final ReaderContentBlockKind kind;
+
+  /// 图片块的绝对资源地址；文本块固定为空字符串。
+  final String resourceUrl;
+
+  /// 图片加载失败时的替代文本；文本块固定为空字符串。
+  final String altText;
+
+  /// 图片块请求可携带的正文页面 Referer；文本块固定为空字符串。
+  final String resourceReferer;
 
   /// 当前块在完整处理后正文中的起始字符位置。
   final int startOffset;
@@ -52,9 +104,11 @@ final class ReaderChapterContent {
     required this.title,
     required this.text,
     required List<ReaderContentBlock> blocks,
+    List<ReaderContentImage> images = const <ReaderContentImage>[],
     required this.effectiveReplaceRuleCount,
     required this.fromCache,
-  }) : blocks = List<ReaderContentBlock>.unmodifiable(blocks);
+  }) : blocks = List<ReaderContentBlock>.unmodifiable(blocks),
+       images = List<ReaderContentImage>.unmodifiable(images);
 
   /// 当前章节稳定地址。
   final String chapterUrl;
@@ -68,11 +122,26 @@ final class ReaderChapterContent {
   /// 供惰性列表显示的有限大小正文块。
   final List<ReaderContentBlock> blocks;
 
+  /// 供分页模式插入独立图片页的正文图片列表。
+  final List<ReaderContentImage> images;
+
   /// 本章实际改变正文的替换规则数量。
   final int effectiveReplaceRuleCount;
 
   /// 是否直接命中持久正文缓存。
   final bool fromCache;
+}
+
+/// 阅读正文简繁转换模式，对齐 Android `ReadConfig.chineseConverterType`。
+enum ReaderChineseConversionMode {
+  /// 保持书源返回文本，不执行转换。
+  none,
+
+  /// 繁体中文转换为简体中文。
+  traditionalToSimplified,
+
+  /// 简体中文转换为繁体中文。
+  simplifiedToTraditional,
 }
 
 /// 定义阅读正文的连续滚动或逐页呈现方式。
@@ -111,7 +180,7 @@ enum ReaderTitleMode {
   hidden,
 }
 
-/// 定义阅读正文区域点击、长按或按键触发后的动作。
+/// 定义阅读正文点击区域或按键触发后的动作；旧长按字段仅保留配置兼容。
 enum ReaderTapAction {
   /// 不执行任何动作，用于关闭某个触控区域。
   none,
@@ -156,6 +225,8 @@ final class ReaderDisplayConfig {
     this.backgroundColorValue = 0xFFFFFBF2,
     this.textColorValue = 0xFF2B2925,
     this.useReplaceRules = true,
+    this.chineseConversionMode = ReaderChineseConversionMode.none,
+    this.reSegmentContent = false,
     this.keepScreenOn = true,
     this.preDownloadCount = 10,
     this.readingMode = ReaderReadingMode.horizontalPaging,
@@ -219,6 +290,12 @@ final class ReaderDisplayConfig {
   /// 是否应用当前书籍和书源范围内的已启用替换规则。
   final bool useReplaceRules;
 
+  /// 正文与章节显示标题使用的 OpenCC 简繁转换模式。
+  final ReaderChineseConversionMode chineseConversionMode;
+
+  /// 是否连接异常断行并按句末标点重新切分过长段落。
+  final bool reSegmentContent;
+
   /// 阅读期间是否请求平台保持屏幕常亮。
   final bool keepScreenOn;
 
@@ -273,7 +350,7 @@ final class ReaderDisplayConfig {
   /// 正文右侧点击区域执行的动作。
   final ReaderTapAction rightTapAction;
 
-  /// 正文长按时执行的动作；当前先提供菜单、翻页和书签等无选择态动作。
+  /// 旧版正文长按动作，仅保留持久配置兼容；当前长按固定进入原生文字选区。
   final ReaderTapAction longPressAction;
 
   /// 左侧点击区域占阅读宽度的比例。
@@ -316,6 +393,8 @@ final class ReaderDisplayConfig {
     int? backgroundColorValue,
     int? textColorValue,
     bool? useReplaceRules,
+    ReaderChineseConversionMode? chineseConversionMode,
+    bool? reSegmentContent,
     bool? keepScreenOn,
     int? preDownloadCount,
     ReaderReadingMode? readingMode,
@@ -357,6 +436,8 @@ final class ReaderDisplayConfig {
       backgroundColorValue: backgroundColorValue ?? this.backgroundColorValue,
       textColorValue: textColorValue ?? this.textColorValue,
       useReplaceRules: useReplaceRules ?? this.useReplaceRules,
+      chineseConversionMode: chineseConversionMode ?? this.chineseConversionMode,
+      reSegmentContent: reSegmentContent ?? this.reSegmentContent,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       preDownloadCount: preDownloadCount ?? this.preDownloadCount,
       readingMode: readingMode ?? this.readingMode,

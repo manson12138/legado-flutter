@@ -1,72 +1,88 @@
-# M11 专项记录：离线下载
+# M11 专项记录：离线下载与下载管理
 
-状态：`IN_PROGRESS / 代码已实现前台运行范围，等待用户真机验收`
+状态：`IMPLEMENTED_PENDING_VERIFICATION / Android、iOS 与真实书源待用户真机验收`
 
-## 本轮范围
+## 当前实现
 
-做：
-- 阅读器内“下载”面板：选择章节范围（对齐 Android `DownloadSheet` 的起止章节号默认值），
-  加入当前书的下载队列。
-- 数据库持久化的下载队列（`download_tasks` 表），应用重启后残留任务会被恢复继续调度，
-  不是纯内存队列。
-- 有界并发调度（默认 3 个章节同时下载）、失败自动重试（封顶 3 次，短延迟后重新排队）、
-  每章状态展示（等待/下载中/成功/失败）、失败手动重试、单章移除、整本书清空队列。
-- 已下载正文与单章换源共用同一条“正文缓存”存储路径（`caches` 表 + `deadline: 0` 永久语义），
-  不新增第二套正文存储。
+- 阅读器下载面板支持选择起止章节并加入队列，也可直接进入完整下载管理页。
+- 设置 → 应用管理 → 下载管理进入独立 `/downloads` 页面；页面展示全部网络书架书，即使尚无任务也可加载目录并添加章节范围。
+- 下载管理页提供全局、单书、单章状态；支持暂停、恢复、失败重试，以及删除单章或整书的真实离线正文和任务。
+- `download_tasks` 表持久化任务状态、重试次数、安全失败摘要和正文字符数；进程重启后把残留运行任务恢复为等待任务，暂停任务保持暂停。
+- 下载成功正文写入既有 `caches` 表，使用 `deadline: 0` 永久语义；删除下载会同时删除对应正文缓存，避免只删任务记录。
 
-明确不做（记录差距，不假装完成）：
-- **没有 Android `CacheBookService` 那样的前台服务 + 通知**：下载只在 Flutter 引擎存活期间
-  （应用前台，Android 上短时间退到后台可能也行，但没有保证）进行；应用被系统回收或用户完全
-  退出后下载停止，下次打开应用只会把队列里的任务从头继续，不会补上停机期间的下载。
-- 没有暂停/恢复，只有移除和重新入队。
-- 没有 Android `BookCacheManageScreen` 那种跨书全局缓存管理仪表盘；本轮下载面板只能看当前书。
-- 没有存储配额/用量限制（Android 本身也没有）。
-- 没有漫画/图片章节下载（Flutter 暂无漫画阅读器）。
+## 风控优先的调度策略
 
-## Android 行为摘要（供对照）
+- 全应用只有一个 `DownloadCoordinator`，固定 `maxConcurrency = 1`；构造方不能覆盖并发数。
+- 同一时间只允许一个章节发起真实书源请求，不按书籍分别创建并发 worker。
+- 两次真实请求至少间隔 1.5 秒；单次正文请求 45 秒硬超时；失败后按 2～10 秒指数退避，单章最多尝试 5 次，达到上限后抛弃本章并继续后续任务。
+- 已有有效正文缓存时不重复请求，只把缓存升级为永久；卷标题和本地章节不访问网络。
+- 暂停或删除运行任务时取消对应请求，并用内存暂停/删除标记防止取消异常把任务误写成失败。
 
-- `DownloadSheet.kt`：起止章节号输入框，默认 `当前章节+1` 到 `总章节数`，确认后调用
-  `CacheBook.start(context, book, start, end)`。
-- `CacheBook`/`CacheBookModel`/`CacheDownloadQueue`/`CacheDownloadStateStore`：跨书调度器 +
-  每本书独立队列 + 全局状态汇总；全局最多 8 个章节并发；单章失败自动重试 3 次，1 秒退避。
-- `CacheBookService`：前台 `Service` + 常驻通知，展示汇总进度，应用被杀后由系统保活到下载完成
-  或用户取消。
-- `BookHelp.saveText`：下载成功的正文写入普通文件缓存（永久，无 TTL）。
-- `BookCacheManageScreen`：跨书仪表盘，展示每本书的缓存状态、支持暂停/继续/删除。
+这套策略刻意不同于 Android 原版可配置多并发：用户明确要求避免同时轰击书源，因此 Flutter 端把全局串行作为不可突破的安全上限，而不是默认值。
 
-## Flutter 映射
+## 自动换源下载
+
+- 入口位于阅读器“更多 → 下载”面板，默认关闭，按书籍独立持久化。
+- 当前下载来源连续失败 5 次后才触发；自动搜索固定单 worker，并按高分、置顶优先顺序执行 `3 个书源 / 98% → 新增 5 个 / 95% → 新增 8 个 / 90% → 新增 12 个 / 85% → 新增 20 个 / 80% → 新增 30 个 / 70%` 六级漏斗，累计最多检查 78 个书源。
+- 每一级最多让 3 个同名同作者候选进入详情、目录和相邻正文验证；候选必须至少比较到一个失败章节前后的已下载章节，且**每个**已比较章节都达到当前门槛。达到本级门槛立即停止，前一级已验证的最佳候选会保留，并可在下一档门槛降低后直接达标。
+- 单个搜索阶段最多占用 45 秒，自动换源全流程最多占用 3 分钟；超时、暂停或删除任务都会取消当前请求。阶段超时时只持久化已明确执行过的来源，尚未领取的来源以后仍可继续尝试。
+- 70% 是不可突破的最终安全底线；低于该值不自动锁定。多个达标候选优先选择平均相似度最高者，平均值相同时选择最低相似度更高者。六级漏斗或 3 分钟全局时限结束后仍无合格来源，当前章节标记为“自动换源失败，请手动换源”，下载队列继续后续章节。
+- 合格候选只锁定为本轮离线下载来源，不修改书架书籍的 `origin/bookUrl`，阅读主流程不会被静默换源。
+- 锁定候选、已尝试来源和批次状态写入 `download_book_states`，应用重启后可以恢复锁定来源。
+- 每个任务记录实际尝试来源和最终成功来源；整批任务全部成功或失败后，按来源计算 `成功章节/实际尝试章节`。高于 80% 给 `sourceScore +1`，低于 80% 给 `sourceScore -1`，恰好 80% 不变；同一来源每本书每批只结算一次。
+
+## 平台后台行为
+
+### Android
+
+- `DownloadForegroundService` 使用 `dataSync` 前台服务承接下载存活提示，通知只展示等待、运行和完成数量，不暴露书名、网址或错误内容。
+- 调度器有等待或运行任务时启动/更新服务，队列没有活动任务时停止服务。
+- Android 13 及以上会请求通知权限；用户拒绝通知权限、强制停止应用或厂商系统冻结进程时，平台仍可能终止下载。任务事实保存在数据库，下次启动继续。
+
+### iOS 降级含义
+
+iOS 不允许普通阅读应用像 Android 前台 Service 一样无限期在后台运行任意 Dart/HTTP 任务。本实现使用系统提供的有限后台执行窗口：
+
+- 应用进入后台后，系统仍允许的一小段时间内继续串行下载；
+- 系统结束窗口时停止本轮后台执行，但不丢任务；
+- 用户重新打开应用，或系统再次给予进程运行机会时，从持久化队列继续；
+- 不宣称锁屏或长期退后台后一定持续到整书完成。
+
+“降级”只表示后台持续时间受 iOS 控制，不是降低正文质量、减少章节，也不会改为并发下载。
+
+## Android 与 Flutter 映射
 
 | Android | Flutter |
 |---|---|
-| `CacheDownloadRequest`/`ChapterSelection` | `domain/model/download_task.dart`：`DownloadTask`，只存 `bookUrl/chapterIndex/status/retryCount/updatedAt`，不冗余章节标题/URL |
-| `CacheDownloadStateStore`（内存状态） | `download_tasks` 表（`data/local/legado_database.dart` schemaVersion 2→3）+ `DownloadTaskDao`——数据库持久化，天然支持崩溃恢复 |
-| `CacheBook`/`CacheBookModel` 调度器 | `model/reader/download_coordinator.dart`：`DownloadCoordinator`，事件驱动（入队/重试后 `_kick()`）而不是轮询，固定并发数领取等待任务 |
-| `CacheBookService` 前台服务 | **未实现**，见上方“明确不做” |
-| `BookHelp.saveText` 永久文件缓存 | 复用 `ReaderCacheGateway.saveChapterContent(..., deadline: 0)`，与单章换源共用同一套“永久缓存”语义 |
-| `DownloadSheet.kt` | `ui/reader/reader_download_sheet.dart`：`ReaderDownloadSheetBody`，新增 `ReaderSheet` 变体 `ReaderDownloadSheet` |
-| `BookCacheManageScreen`（跨书仪表盘） | **未实现**，见上方“明确不做” |
+| `CacheDownloadRequest` / `ChapterSelection` | `domain/model/download_task.dart`：任务状态、重试、错误摘要和正文字符数 |
+| `CacheDownloadStateStore` | `download_tasks` 表 + `DownloadTaskDao` / `DownloadRepository`：可观察的持久化全局任务 |
+| `CacheBook` / `CacheBookModel` / `CacheDownloadQueue` | `model/reader/download_coordinator.dart`：固定单 worker、请求间隔、退避、暂停恢复和恢复调度 |
+| `CacheBookService` | Android `DownloadForegroundService.kt` + `platform/download_background_service.dart`；iOS 使用有限后台任务窗口 |
+| `BookHelp.saveText` | `ReaderCacheGateway.saveChapterContent(..., deadline: 0)`，正文与阅读器共用缓存事实 |
+| `DownloadSheet.kt` | `ui/reader/reader_download_sheet.dart`：当前书范围下载入口 |
+| `BookCacheManageScreen` | `ui/download_management/download_management_route.dart`：跨书独立下载管理页 |
 
-## 调度设计要点
+## 数据库变化
 
-- `DownloadCoordinator` 是 App 级单例（`AppDependencies.create()` 构造一次），不是页面级
-  `create*Coordinator()` 工厂——必须在用户关闭下载面板后继续跑。
-- 领取任务前不产生额外 `await`（`_claimNextTask` 内部读取待办列表后立即同步标记为运行中再
-  返回），同一调度器实例内部不会出现两个 worker 抢到同一任务的竞争。
-- 已有有效正文缓存（无论是普通 7 天缓存还是已有永久缓存）时不重新发请求，只把 `deadline`
-  升级为 0——用户点击“下载”这个动作本身保证“从现在起这章不再受 7 天有效期约束”。
-- 卷标题、本地书章节直接标记成功，不发网络请求，对齐 Android 对卷标题“视为已缓存”的处理。
+- `LegadoDatabase.schemaVersion` 当前为 7。
+- `download_tasks` 新增 `errorMessage TEXT` 与 `contentLength INTEGER NOT NULL DEFAULT 0`。
+- 新安装和 v1/v2 跨版本升级直接创建完整字段；已存在下载表的 v3～v5 数据库通过 v6 `ALTER TABLE` 分支升级。
+- Schema v7 为 `download_tasks` 增加批次与来源归因字段，并新增 `download_book_states` 自动换源状态表。
+- `pubspec.yaml` build number 同步提升为 `1.0.0+5`。
 
-## 用户验收步骤
+## 用户验收清单
 
-1. 打开一本已验证的网络书源书籍，从更多菜单点击“下载”，确认起止章节号默认值符合预期
-   （下一章 ~ 最后一章）。
-2. 修改范围并点击“开始下载”，观察任务列表状态从等待→下载中→成功变化。
-3. 断网后新加入几个章节，观察至少一个任务在重试 3 次后进入失败态；恢复网络后点击重试，
-   确认能转回成功。
-4. 下载完成后断网直接打开这些章节，确认无需网络也能正常阅读。
-5. 完全关闭应用（不仅是切后台）后重新打开，进入同一本书的下载面板，确认队列状态还在，
-   未完成的任务能继续被调度（不需要重新点击“开始下载”）。
-6. 对本地书确认更多菜单里“下载”入口禁用。
-7. 确认“后续能力”面板里不再出现“离线下载”这一项假占位。
+1. 设置 → 应用管理 → 下载管理，确认能看到没有下载任务的网络书架书，并能选择起止章节加入队列。
+2. 同时给多本书加入较大范围，确认任何时刻只显示一个“下载中”，请求之间没有并发爆发。
+3. 分别验证暂停/恢复全部、单书、单章；完全退出再打开后，暂停任务仍暂停，其余未完成任务继续。
+4. 使用会超时或正文异常的章节，确认单次 45 秒内退出、累计 5 次后该章失败且后续章节继续；恢复网络后可手动重试。
+5. 下载完成后断网阅读；删除单章或整书离线内容后，再断网打开对应章节应不再命中已删除正文。
+6. Android 退到后台后检查低打扰下载通知与进度更新；任务结束后通知消失。
+7. Android 强制停止再打开，确认未完成队列恢复；不要把“强制停止后仍下载”作为验收条件。
+8. iOS 退后台短时间观察任务继续；等待系统结束后台窗口后重新打开，确认任务从数据库续传。
+9. 用真实书源观察串行和 1.5 秒最小请求间隔是否降低风控；登录、验证码或付费失败不得形成无限重试。
+10. 本地书不提供网络离线下载入口；漫画或图片章节仍属于未实现边界。
+11. 开启自动换源下载，分别准备可达到 98%、95%、90%、85%、80% 和 70% 的候选，确认达到当前档位即停止；任一相邻正文低于当前门槛或最终低于 70% 时不锁定，显示“自动换源失败，请手动换源”，且全流程不会超过 3 分钟。
+12. 一批下载全部终止后检查书源成功率：高于 80% 只加一次，低于 80% 只减一次，恰好 80% 不变。
 
-用户提供上述运行结果前，本 Feature 保持 `IN_PROGRESS`。
+用户提供 Android、iOS 与真实书源结果前，本 Feature 不标记为 `DONE`。

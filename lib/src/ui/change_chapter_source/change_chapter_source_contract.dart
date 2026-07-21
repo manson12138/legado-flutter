@@ -29,6 +29,7 @@ final class ChangeChapterSourceUiState {
     this.loadingToc = false,
     List<BookChapter> tocChapters = const <BookChapter>[],
     this.tocSource,
+    this.tocBook,
     this.preselectedTocIndex = -1,
     this.tocError,
     this.fetchingContent = false,
@@ -87,6 +88,9 @@ final class ChangeChapterSourceUiState {
   /// 候选目录对应书源，供拉取章节正文使用。
   final BookSource? tocSource;
 
+  /// 候选目录对应的完整书籍事实，供正文脚本读取 `book` 上下文。
+  final Book? tocBook;
+
   /// 模糊匹配预选的目录索引；-1 表示没有合适的预选位置。
   final int preselectedTocIndex;
 
@@ -121,6 +125,7 @@ final class ChangeChapterSourceUiState {
     bool? loadingToc,
     List<BookChapter>? tocChapters,
     BookSource? tocSource,
+    Book? tocBook,
     int? preselectedTocIndex,
     String? tocError,
     bool? fetchingContent,
@@ -146,6 +151,7 @@ final class ChangeChapterSourceUiState {
       loadingToc: clearToc ? false : loadingToc ?? this.loadingToc,
       tocChapters: clearToc ? const <BookChapter>[] : tocChapters ?? this.tocChapters,
       tocSource: clearToc ? null : tocSource ?? this.tocSource,
+      tocBook: clearToc ? null : tocBook ?? this.tocBook,
       preselectedTocIndex: clearToc ? -1 : preselectedTocIndex ?? this.preselectedTocIndex,
       tocError: clearToc || clearTocError ? null : tocError ?? this.tocError,
       fetchingContent: fetchingContent ?? this.fetchingContent,

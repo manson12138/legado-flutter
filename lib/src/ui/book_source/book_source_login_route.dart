@@ -1,9 +1,22 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../app/app_dependencies.dart';
+
+/// 交互式书源页面完成后返回给脚本宿主桥的页面快照。
+final class BookSourceLoginResult {
+  /// 创建登录或网页验证结果。
+  const BookSourceLoginResult({required this.finalUri, required this.html});
+
+  /// 用户点击完成时 WebView 所在的最终地址。
+  final Uri finalUri;
+
+  /// 用户点击完成时页面根节点的完整 HTML。
+  final String html;
+}
 
 /// 使用受控 WebView 完成书源登录，并在进入和退出时同步统一 Cookie Store。
 ///
@@ -14,6 +27,9 @@ final class BookSourceLoginRoute extends StatefulWidget {
   const BookSourceLoginRoute({
     required this.dependencies,
     required this.sourceUrl,
+    this.title = '',
+    this.initialHtml,
+    this.capturePageResult = false,
     super.key,
   });
 
@@ -22,6 +38,15 @@ final class BookSourceLoginRoute extends StatefulWidget {
 
   /// 书源配置提供的登录起始地址，只允许 HTTP 或 HTTPS。
   final String sourceUrl;
+
+  /// 书源脚本提供的页面标题；为空时展示默认登录标题。
+  final String title;
+
+  /// 脚本可选的初始网页内容；存在时以 [sourceUrl] 作为相对地址基准加载。
+  final String? initialHtml;
+
+  /// 点击完成时是否读取最终地址和页面 HTML 并返回给脚本宿主桥。
+  final bool capturePageResult;
 
   /// 创建登录页面状态。
   @override
@@ -134,7 +159,16 @@ final class _BookSourceLoginRouteState extends State<BookSourceLoginRoute>
         initialUri,
         cookieHeader,
       );
-      await _controller.loadRequest(initialUri);
+      /// 脚本提供的初始 HTML；空值仍按普通登录页 URL 加载。
+      final String? initialHtml = widget.initialHtml;
+      if (initialHtml == null) {
+        await _controller.loadRequest(initialUri);
+      } else {
+        await _controller.loadHtmlString(
+          initialHtml,
+          baseUrl: initialUri.toString(),
+        );
+      }
     } catch (error) {
       if (mounted) {
         setState(() {
@@ -198,13 +232,27 @@ final class _BookSourceLoginRouteState extends State<BookSourceLoginRoute>
     }
   }
 
-  /// 优先返回网页历史；没有网页历史时保存 Cookie 并关闭 Flutter 路由。
+  /// 优先返回网页历史；没有网页历史时按用户取消处理并关闭 Flutter 路由。
   Future<void> _handleBack() async {
     if (await _controller.canGoBack()) {
       await _controller.goBack();
       return;
     }
-    await _finishLogin();
+    await _closeWithoutResult();
+  }
+
+  /// 保存登录 Cookie 后取消本次交互，不向脚本返回页面完成结果。
+  Future<void> _closeWithoutResult() async {
+    if (_closing) {
+      return;
+    }
+    setState(() {
+      _closing = true;
+    });
+    await _syncCookies(showError: false);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   /// 保存登录 Cookie 并退出页面，重复触发只执行一次。
@@ -216,9 +264,60 @@ final class _BookSourceLoginRouteState extends State<BookSourceLoginRoute>
       _closing = true;
     });
     await _syncCookies(showError: true);
-    if (mounted) {
-      Navigator.of(context).pop();
+    if (!mounted) {
+      return;
     }
+    if (!widget.capturePageResult) {
+      Navigator.of(context).pop();
+      return;
+    }
+    /// 用户完成验证时 WebView 的最终有效 HTTP/HTTPS 地址。
+    final Uri? finalUri = _currentUri ?? _initialUri;
+    if (finalUri == null) {
+      setState(() {
+        _closing = false;
+      });
+      _showMessage('无法读取验证页面地址，请返回后重试');
+      return;
+    }
+    try {
+      /// 平台 WebView 返回的页面根节点 HTML；不同平台可能返回原始或 JSON 字符串。
+      final Object rawHtml = await _controller.runJavaScriptReturningResult(
+        'document.documentElement.outerHTML',
+      );
+      if (!mounted) {
+        return;
+      }
+      /// 统一 Android WebView 与 WKWebView 的字符串返回形态。
+      final String html = _normalizeJavaScriptString(rawHtml);
+      Navigator.of(context).pop(
+        BookSourceLoginResult(finalUri: finalUri, html: html),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _closing = false;
+        });
+        _showMessage('读取验证页面失败，请重试');
+      }
+    }
+  }
+
+  /// 把 WebView JavaScript 的原始字符串或 JSON 编码字符串统一成页面文本。
+  String _normalizeJavaScriptString(Object rawValue) {
+    if (rawValue is! String) {
+      return rawValue.toString();
+    }
+    try {
+      /// 部分平台把 JavaScript 字符串结果再次包装为 JSON 字符串。
+      final Object? decodedValue = jsonDecode(rawValue);
+      if (decodedValue is String) {
+        return decodedValue;
+      }
+    } on FormatException {
+      // 原始 HTML 不是 JSON 字符串时直接使用，不能因页面正文格式中断登录流程。
+    }
+    return rawValue;
   }
 
   /// 重新加载当前页面，供网络失败或 WKWebView 网页进程被系统回收后恢复。
@@ -276,7 +375,7 @@ final class _BookSourceLoginRouteState extends State<BookSourceLoginRoute>
             icon: const Icon(Icons.arrow_back),
             tooltip: '返回',
           ),
-          title: const Text('书源登录'),
+          title: Text(widget.title.trim().isEmpty ? '书源登录' : widget.title.trim()),
           actions: <Widget>[
             IconButton(
               onPressed: _closing ? null : _reload,

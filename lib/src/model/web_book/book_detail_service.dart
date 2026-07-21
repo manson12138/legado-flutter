@@ -92,9 +92,10 @@ final class BookDetailService {
     return snapshot;
   }
 
-  /// 加载完整分页目录；服务层负责 URL 去重和连续索引。
+  /// 加载完整分页目录；显式刷新可开启 Android `runPerJs` 对应的请求前脚本。
   Future<List<BookChapter>> loadToc({
     required BookDetailSnapshot snapshot,
+    bool runPreUpdateJavaScript = false,
     HttpCancellationToken? cancellationToken,
   }) async {
     /// 【搜书诊断日志】详情页目录业务阶段对应的书籍不可逆标识。
@@ -104,6 +105,7 @@ final class BookDetailService {
     final List<BookChapter> chapters = await _standardService.loadToc(
       source: snapshot.source,
       book: snapshot.book,
+      runPreUpdateJavaScript: runPreUpdateJavaScript,
       cancellationToken: cancellationToken,
     );
     _logger.info(

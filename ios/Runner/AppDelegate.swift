@@ -7,6 +7,12 @@ import UIKit
   /// M08 阅读器平台通道；强引用保证 Flutter 引擎存活期间处理器持续有效。
   private var readerPlatformChannel: FlutterMethodChannel?
 
+  /// P1-05 下载后台通道；iOS 只提供有限后台执行窗口，不承诺无限持续下载。
+  private var downloadBackgroundChannel: FlutterMethodChannel?
+
+  /// 当前有限后台下载任务标识；`.invalid` 表示没有活动窗口。
+  private var downloadBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
   /// 首次进入阅读器前系统的自动锁屏状态，退出时用于恢复。
   private var originalIdleTimerDisabled: Bool?
 
@@ -68,6 +74,7 @@ import UIKit
   /// - Parameter application: 当前 UIApplication 实例，仅用于最终清理窗口能力。
   override func applicationWillTerminate(_ application: UIApplication) {
     restoreOriginalIdleTimerState(application)
+    endDownloadBackgroundTask(application)
     super.applicationWillTerminate(application)
   }
 
@@ -76,8 +83,12 @@ import UIKit
   /// - Parameter engineBridge: Flutter 提供的引擎桥接对象，用于取得插件注册表。
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    /// 取得只服务 M08 窗口常亮能力的插件注册器。
-    let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ReaderPlatformBridge")
+    /// 取得只服务 M08 窗口常亮能力的插件注册器；Xcode 26 下该 API 返回可空值。
+    guard let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "ReaderPlatformBridge"
+    ) else {
+      return
+    }
     /// 与 Dart ReaderPlatformService 共用的 MethodChannel。
     let channel = FlutterMethodChannel(
       name: "io.legado.flutter/reader_platform",
@@ -109,6 +120,63 @@ import UIKit
       }
     }
     readerPlatformChannel = channel
+    registerDownloadBackgroundChannel(engineBridge)
+  }
+
+  /// 注册离线下载后台通道；系统只授予有限执行时间，过期后队列由下次前台启动续传。
+  ///
+  /// - Parameter engineBridge: Flutter 隐式引擎桥，用于取得独立插件注册器。
+  private func registerDownloadBackgroundChannel(_ engineBridge: FlutterImplicitEngineBridge) {
+    guard let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "DownloadBackgroundBridge"
+    ) else {
+      return
+    }
+    /// 与 Dart DownloadBackgroundService 共用的平台通道。
+    let channel = FlutterMethodChannel(
+      name: "io.legado.flutter/download_background",
+      binaryMessenger: registrar.messenger()
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "startOrUpdate":
+        self?.beginDownloadBackgroundTaskIfNeeded(UIApplication.shared)
+        result(nil)
+      case "stop":
+        self?.endDownloadBackgroundTask(UIApplication.shared)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    downloadBackgroundChannel = channel
+  }
+
+  /// 在首次存在等待或运行任务时申请一次系统有限后台执行窗口。
+  ///
+  /// - Parameter application: 当前 UIApplication，用于申请后台任务标识。
+  private func beginDownloadBackgroundTaskIfNeeded(_ application: UIApplication) {
+    if downloadBackgroundTask != .invalid {
+      return
+    }
+    downloadBackgroundTask = application.beginBackgroundTask(
+      withName: "LegadoOfflineDownload"
+    ) { [weak self] in
+      self?.endDownloadBackgroundTask(application)
+    }
+  }
+
+  /// 队列结束或系统后台时间到期时释放有限后台任务。
+  ///
+  /// - Parameter application: 当前 UIApplication，用于结束后台任务。
+  private func endDownloadBackgroundTask(_ application: UIApplication) {
+    if downloadBackgroundTask == .invalid {
+      return
+    }
+    /// 需要交还给系统的后台任务标识。
+    let task = downloadBackgroundTask
+    downloadBackgroundTask = .invalid
+    application.endBackgroundTask(task)
   }
 
   /// 进入阅读器时记录原始自动锁屏状态，再应用本书配置。
@@ -196,6 +264,6 @@ import UIKit
 private extension Int {
   /// 将整数限制在给定闭区间内。
   func clamped(to range: ClosedRange<Int>) -> Int {
-    return min(max(self, range.lowerBound), range.upperBound)
+    return Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
   }
 }

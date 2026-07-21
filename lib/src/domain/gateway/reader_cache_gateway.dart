@@ -13,6 +13,15 @@ abstract interface class ReaderCacheGateway {
     int deadline,
   );
 
+  /// 删除指定章节的正文缓存，用于下载管理页明确删除离线内容。
+  Future<void> removeChapterContent(String bookUrl, String chapterUrl);
+
+  /// 批量删除一本书指定章节的正文缓存，整书离线删除时避免逐章通知。
+  Future<void> removeChapterContents(
+    String bookUrl,
+    List<String> chapterUrls,
+  );
+
   /// 读取一本书最后保存的稳定正文锚点。
   Future<ReaderPositionAnchor?> getPositionAnchor(String bookUrl);
 

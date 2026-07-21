@@ -308,6 +308,7 @@ final class ChangeChapterSourceViewModel {
           loadingToc: false,
           tocChapters: toc.chapters,
           tocSource: toc.source,
+          tocBook: toc.book,
           preselectedTocIndex: toc.preselectedIndex,
           clearTocError: true,
         ),
@@ -330,7 +331,9 @@ final class ChangeChapterSourceViewModel {
   Future<void> _fetchChapterContent(BookChapter chapter) async {
     /// 当前候选目录对应书源。
     final source = _state.tocSource;
-    if (!_state.canSelectChapter || source == null) {
+    /// 当前候选目录对应书籍。
+    final Book? book = _state.tocBook;
+    if (!_state.canSelectChapter || source == null || book == null) {
       return;
     }
     _cancelToc();
@@ -345,7 +348,13 @@ final class ChangeChapterSourceViewModel {
       /// 候选来源已拉取到的章节正文。
       final String content = await _coordinator.fetchChapterContent(
         source: source,
+        book: book,
         chapter: chapter,
+        nextChapterUrl: _state.tocChapters
+            .where((BookChapter candidate) => candidate.index == chapter.index + 1)
+            .firstOrNull
+            ?.url ??
+            _state.tocChapters.firstOrNull?.url,
         cancellationToken: token,
       );
       if (_disposed || generation != _tocGeneration) {

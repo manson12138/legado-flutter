@@ -28,7 +28,9 @@ final class LegadoRuleEvaluator {
     final String normalized = rule.toLowerCase();
     return normalized.contains('@js:') ||
         normalized.contains('<js>') ||
-        normalized.contains('{{');
+        normalized.contains('{{') ||
+        normalized.contains('@put:') ||
+        normalized.contains('@get:');
   }
 
   /// 按列表语义执行规则并返回内部节点。
@@ -114,16 +116,33 @@ final class LegadoRuleEvaluator {
     required bool elementMode,
     JsCancellationToken? cancellationToken,
   }) async {
-    /// 已执行 `{{...}}` 表达式替换的规则文本。
-    final String embeddedResolved = await _resolveEmbeddedExpressions(
+    /// 移除并执行 `@put` 后的规则文本。
+    final String putResolved = await _resolvePutRules(
       rule,
       input: input,
       context: context,
       cancellationToken: cancellationToken,
     );
-    if (rule.contains('{{') &&
-        !rule.toLowerCase().contains('@js:') &&
-        !rule.toLowerCase().contains('<js>')) {
+    /// 当前规则是否使用 `@get` 组装字符串；Android 会把此类 SourceRule 切换为 Regex 文本模式。
+    final bool hasGetTemplate = RegExp(
+      r'@get:\{[^}]+?\}',
+      caseSensitive: false,
+    ).hasMatch(putResolved);
+    /// 使用当前共享状态替换全部 `@get:{key}`。
+    final String storedResolved = putResolved.replaceAllMapped(
+      RegExp(r'@get:\{([^}]+?)\}', caseSensitive: false),
+      (Match match) => context.getRuleVariable((match.group(1) ?? '').trim()),
+    );
+    /// 已执行 `{{...}}` 表达式替换的规则文本。
+    final String embeddedResolved = await _resolveEmbeddedExpressions(
+      storedResolved,
+      input: input,
+      context: context,
+      cancellationToken: cancellationToken,
+    );
+    if ((storedResolved.contains('{{') || hasGetTemplate) &&
+        !storedResolved.toLowerCase().contains('@js:') &&
+        !storedResolved.toLowerCase().contains('<js>')) {
       return embeddedResolved;
     }
     /// 按原始先后顺序拆分的普通规则段和脚本段。
@@ -154,6 +173,132 @@ final class LegadoRuleEvaluator {
       }
     }
     return current;
+  }
+
+  /// 执行 Android `@put:{key: rule}`，右侧规则始终读取当前页面根内容。
+  Future<String> _resolvePutRules(
+    String rule, {
+    required Object? input,
+    required LegadoScriptContext context,
+    JsCancellationToken? cancellationToken,
+  }) async {
+    /// Android 同款的非嵌套 `@put` 对象匹配器。
+    final RegExp putPattern = RegExp(r'@put:(\{[^}]+?\})', caseSensitive: false);
+    /// 当前规则中全部待保存的变量规则。
+    final List<MapEntry<String, String>> entries = <MapEntry<String, String>>[];
+    for (final RegExpMatch match in putPattern.allMatches(rule)) {
+      entries.addAll(_parsePutEntries(match.group(1) ?? '{}'));
+    }
+    /// Android `putRule` 使用 AnalyzeRule 根 content，而不是上一段的局部结果。
+    final Object? rootInput = context.result ?? input;
+    for (final MapEntry<String, String> entry in entries) {
+      /// 右侧普通或混合规则解析得到的变量值。
+      final String value = await string(
+        rule: entry.value,
+        input: rootInput,
+        context: context,
+        cancellationToken: cancellationToken,
+      );
+      context.putRuleVariable(entry.key, value);
+    }
+    return rule.replaceAll(putPattern, '');
+  }
+
+  /// 宽容解析严格 JSON及原生兼容的未加引号 `@put` 对象。
+  List<MapEntry<String, String>> _parsePutEntries(String objectText) {
+    /// 去除最外层花括号后的对象正文。
+    final String body = objectText.length >= 2
+        ? objectText.substring(1, objectText.length - 1)
+        : '';
+    /// 顶层逗号分隔后的键值片段。
+    final List<String> fields = _splitTopLevel(body, ',');
+    /// 保持书源声明顺序的变量规则。
+    final List<MapEntry<String, String>> result = <MapEntry<String, String>>[];
+    for (final String field in fields) {
+      /// 当前字段顶层冒号位置。
+      final int separator = _topLevelSeparator(field, ':');
+      if (separator <= 0) {
+        continue;
+      }
+      /// 去引号后的变量键。
+      final String key = _decodeRuleToken(field.substring(0, separator)).trim();
+      /// 保留选择器语法的变量值规则。
+      final String value = _decodeRuleToken(field.substring(separator + 1)).trim();
+      if (key.isNotEmpty && value.isNotEmpty) {
+        result.add(MapEntry<String, String>(key, value));
+      }
+    }
+    return result;
+  }
+
+  /// 在引号和括号外按指定字符切分文本。
+  List<String> _splitTopLevel(String value, String separator) {
+    /// 已切分片段。
+    final List<String> result = <String>[];
+    /// 当前片段起点。
+    int start = 0;
+    /// 当前字符串引号。
+    String? quote;
+    /// 上一字符是否为转义符。
+    bool escaped = false;
+    /// 圆括号和方括号总层级。
+    int depth = 0;
+    for (int index = 0; index < value.length; index += 1) {
+      /// 当前字符。
+      final String character = value[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote != null) {
+        if (character == quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character == '"' || character == "'") {
+        quote = character;
+        continue;
+      }
+      if (character == '(' || character == '[') {
+        depth += 1;
+      } else if ((character == ')' || character == ']') && depth > 0) {
+        depth -= 1;
+      } else if (depth == 0 && character == separator) {
+        result.add(value.substring(start, index));
+        start = index + 1;
+      }
+    }
+    result.add(value.substring(start));
+    return result;
+  }
+
+  /// 查找引号和括号外的首个字段分隔符。
+  int _topLevelSeparator(String value, String separator) {
+    /// 复用顶层切分后第一段长度，避免为冒号复制扫描状态机。
+    final List<String> parts = _splitTopLevel(value, separator);
+    return parts.length <= 1 ? -1 : parts.first.length;
+  }
+
+  /// 解码带引号的 JSON 字符串；未加引号的选择器原样返回。
+  String _decodeRuleToken(String value) {
+    /// 去除首尾空白后的 token。
+    final String trimmed = value.trim();
+    if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        return jsonDecode(trimmed).toString();
+      } on FormatException {
+        return trimmed.substring(1, trimmed.length - 1);
+      }
+    }
+    if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.substring(1, trimmed.length - 1);
+    }
+    return trimmed;
   }
 
   /// 顺序执行规则中的全部 `{{...}}` 表达式并替换原位置。
@@ -218,7 +363,10 @@ final class LegadoRuleEvaluator {
       key: context.key,
       page: context.page,
       nextChapterUrl: context.nextChapterUrl,
-      variables: context.variables,
+      operation: context.operation,
+      interactionPolicy: context.interactionPolicy,
+      executionState: context.executionState,
+      preUpdateActionHandler: context.preUpdateActionHandler,
       bridgeCalls: context.bridgeCalls,
       httpCancellationToken: context.httpCancellationToken,
     );
@@ -229,9 +377,6 @@ final class LegadoRuleEvaluator {
       context: runtimeContext,
       cancellationToken: cancellationToken,
     );
-    context.variables
-      ..clear()
-      ..addAll(runtimeContext.variables);
     return value;
   }
 

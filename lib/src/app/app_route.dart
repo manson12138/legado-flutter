@@ -9,6 +9,9 @@ abstract final class AppRoute {
   /// 设置中的沙盒日志管理页面。
   static const String logManagement = '/settings/logs';
 
+  /// 跨书离线下载任务和缓存管理页面。
+  static const String downloadManagement = '/downloads';
+
   /// “我的”页面中的“关于”页面。
   static const String about = '/settings/about';
 

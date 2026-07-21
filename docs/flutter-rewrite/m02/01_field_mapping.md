@@ -1,6 +1,6 @@
 # M02 Field Mapping
 
-Last updated: 2026-07-13
+Last updated: 2026-07-21
 
 事实来源：Android `app/src/main/java/io/legado/app/data/entities/`、对应 `data/dao/`、
 `app/schemas/io.legado.app.data.AppDatabase/94.json`，以及书源导入、加入书架、目录读取和阅读进度真实调用点。
@@ -117,6 +117,26 @@ supports historical boolean 0/1 and integer strings, retains explicit null, and 
 | `chapterIndex`, `chapterPos` | `int` | required | location |
 | `chapterName`, `bookText`, `content` | `String` | required | title/context/user content |
 
+## BookContentProcess / book_content_processes
+
+| Field | Dart type | Null/default | Meaning |
+|---|---|---|---|
+| `id` | `String` | required | SHA-256 stable primary key generated for each user annotation |
+| `bookUrl` | `String` | required | book identity; migrated on whole-book source change and explicitly cleaned on shelf deletion |
+| `chapterIndex` | `int` | user records required; DB nullable for Android alignment | zero-based chapter index |
+| `kind` | `BookContentProcessKind` | required | first batch supports `user_highlight` and `user_underline` |
+| `stage`, `target` | stored `String` | `style`, `selection` for user records | Android-compatible processing metadata |
+| `anchorJson` | `TextProcessAnchor` JSON | required | chapter position, selected text, before/after context and normalized text hash |
+| `actionJson` | stored JSON | `{type: style}` | prevents user style records from altering source text |
+| `styleJson` | `TextProcessStyle` JSON | nullable in DB | ARGB background/underline color and underline width |
+| `source` | stored `String` | `user` | record origin; AI records remain deferred |
+| `aiArtifactId`, `sourceContentHash` | stored `String?` | null | reserved Android-aligned fields |
+| `enabled` | `bool` | true | user-visible enable switch |
+| `sortOrder` | `int` | 0 | stable per-book creation order |
+| `status` | `int` | 1 | 1 active, 3 soft-deleted |
+| `schemaVersion` | stored `int` | 1 | record payload version |
+| `createdAt`, `updatedAt` | `int` | required | Unix Epoch milliseconds |
+
 ## Cookie / cookies
 
 | Field | Dart type | Null/default | Meaning |
@@ -131,6 +151,41 @@ supports historical boolean 0/1 and integer strings, retains explicit null, and 
 | `key` | `String` | required | PK/unique index |
 | `value` | `String?` | null | explicit null differs from empty value |
 | `deadline` | `int` | 0 | Epoch milliseconds; 0 never expires |
+
+## DownloadTask / download_tasks
+
+| Field | Dart type | Null/default | Meaning |
+|---|---|---|---|
+| `bookUrl` | `String` | required | book identity and first part of the composite primary key |
+| `chapterIndex` | `int` | required | zero-based chapter index and second part of the composite primary key |
+| `status` | `DownloadTaskStatus` stored as `String` | `waiting` | waiting/running/paused/success/failed persisted scheduler state |
+| `retryCount` | `int` | 0 | number of failed real-source attempts |
+| `errorMessage` | `String?` | null | user-safe failure summary; must not contain request secrets |
+| `contentLength` | `int` | 0 | downloaded text character count used by the management summary |
+| `generation` | `int` | 0 | per-book download batch used for exactly-once source scoring |
+| `attemptedSourceUrlsJson` | stored JSON string array | `[]` | sources that actually attempted this chapter; repeated retries are deduplicated |
+| `successfulSourceUrl` | `String?` | null | source that finally supplied the downloaded text; cache hits remain null |
+| `updatedAt` | `int` | required | last task state change in Unix Epoch milliseconds |
+
+Schema v6 adds `errorMessage` and `contentLength`; fresh installs and v1/v2 upgrades create both in the base table, while existing v3–v5 download tables use the v6 migration branch.
+
+Schema v7 adds batch/source attribution fields to `download_tasks` and creates `download_book_states` for the per-book automatic-source toggle, locked candidate, tried sources and exactly-once scored sources. Existing v3–v6 task tables use explicit `ALTER TABLE` branches; v1/v2 upgrades create the current task table directly.
+
+## DownloadBookState / download_book_states
+
+| Field | Dart type | Null/default | Meaning |
+|---|---|---|---|
+| `bookUrl` | `String` | required | primary key and cascading foreign key to `books` |
+| `autoChangeSource` | `bool` | false | whether five failed attempts may start bounded automatic source resolution |
+| `generation` | `int` | 0 | current download batch |
+| `lockedSourceUrl`, `lockedSourceName` | `String?` | null | source accepted by adjacent-content similarity validation |
+| `lockedBookUrl`, `lockedBookName`, `lockedBookAuthor` | `String?` | null | minimum candidate identity needed to restore details after restart |
+| `lockedBookTocUrl` | `String` | `''` | candidate toc URL known at lock time |
+| `lockedBookVariable` | `String?` | null | search/detail rule variable required by some sources |
+| `lockedBookType` | `int` | 0 | candidate book type flags |
+| `triedSourceUrlsJson` | stored JSON string array | `[]` | candidates already attempted in the current batch |
+| `scoredSourceUrlsJson` | stored JSON string array | `[]` | sources already scored once in the current batch |
+| `updatedAt` | `int` | required | last policy or lock state change |
 
 ## ReplaceRule / replace_rules
 
@@ -152,4 +207,3 @@ nullable `imageStyle`, nullable `useReplaceRule`, `delTag`, nullable `ttsEngine`
 `readSimulating`, nullable ISO date `startDate`, nullable `startChapter`, `dailyChapters`, nullable
 `mangaColorFilter`, nullable `mangaScrollMode`, nullable `webtoonSidePaddingDp`, nullable
 `mangaBackground`, `fixedType`, and `translationMode`. Explicit null is retained for settings that inherit a global value.
-

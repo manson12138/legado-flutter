@@ -6,6 +6,9 @@ import io.flutter.plugin.common.MethodChannel
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.BatteryManager
 import android.util.Log
 
@@ -23,6 +26,12 @@ class MainActivity : FlutterActivity() {
     /** Dart 日志写入 Android Logcat 使用的平台通道名称。 */
     private val loggingPlatformChannel = "io.legado.flutter/logging"
 
+    /** 离线下载后台保活平台通道名称。 */
+    private val downloadBackgroundChannel = "io.legado.flutter/download_background"
+
+    /** 当前 Activity 生命周期内是否已经申请过通知权限，避免状态刷新重复弹窗。 */
+    private var notificationPermissionRequested = false
+
     /** 首次进入阅读器前窗口是否已经由其他功能设置常亮；退出时据此恢复。 */
     private var originalKeepScreenOn: Boolean? = null
 
@@ -33,6 +42,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         registerLoggingChannel(flutterEngine)
+        registerDownloadBackgroundChannel(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             readerPlatformChannel,
@@ -78,6 +88,65 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    /** 注册下载后台通道，启动或停止只承载公开计数的 Android 前台服务。 */
+    private fun registerDownloadBackgroundChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            downloadBackgroundChannel,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startOrUpdate" -> {
+                    requestNotificationPermissionIfNeeded()
+                    /** Dart 提供的等待任务数量。 */
+                    val waitingCount = call.argument<Int>("waitingCount") ?: 0
+                    /** Dart 提供的运行任务数量。 */
+                    val runningCount = call.argument<Int>("runningCount") ?: 0
+                    /** Dart 提供的暂停任务数量。 */
+                    val pausedCount = call.argument<Int>("pausedCount") ?: 0
+                    /** Dart 提供的成功任务数量。 */
+                    val successCount = call.argument<Int>("successCount") ?: 0
+                    /** Dart 提供的失败任务数量。 */
+                    val failedCount = call.argument<Int>("failedCount") ?: 0
+                    /** 启动或更新前台服务的显式 Intent。 */
+                    val serviceIntent = DownloadForegroundService.updateIntent(
+                        context = this,
+                        waitingCount = waitingCount,
+                        runningCount = runningCount,
+                        pausedCount = pausedCount,
+                        successCount = successCount,
+                        failedCount = failedCount,
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    result.success(null)
+                }
+
+                "stop" -> {
+                    stopService(Intent(this, DownloadForegroundService::class.java))
+                    result.success(null)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** Android 13 及以上首次后台下载时申请通知权限，拒绝后不阻断队列持久化。 */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            notificationPermissionRequested ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        notificationPermissionRequested = true
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9001)
     }
 
     /** 注册日志通道，使 Android Studio Logcat 可以按业务 Tag 直接筛选。 */

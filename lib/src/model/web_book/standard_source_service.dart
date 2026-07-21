@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../api/http/http_contract.dart';
 import '../../api/http/response_decoder.dart';
 import '../../api/http/source_url_resolver.dart';
 import '../../api/js/script_context.dart';
 import '../../api/js/js_engine.dart';
+import '../../api/js/webview_script_bridge.dart';
+import '../../data/dao/cache_dao.dart';
+import '../../domain/model/cache.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
@@ -33,8 +38,11 @@ final class StandardBookSourceService {
     this._urlResolver,
     this._parser,
     LegadoJavaScriptService javaScriptService,
+    this._cacheDao,
+    this._webViewBridge,
     this._logger,
-  ) : _ruleEvaluator = LegadoRuleEvaluator(javaScriptService);
+  ) : _javaScriptService = javaScriptService,
+      _ruleEvaluator = LegadoRuleEvaluator(javaScriptService);
 
   /// 统一 HTTP 客户端。
   final UnifiedHttpClient _httpClient;
@@ -48,11 +56,80 @@ final class StandardBookSourceService {
   /// 后台 isolate 规则解析器。
   final StandardBookSourceParser _parser;
 
+  /// 执行 `loginCheckJs` 并保留对象返回值的 JavaScript 服务。
+  final LegadoJavaScriptService _javaScriptService;
+
+  /// 保存搜索期交互策略的通用缓存 DAO。
+  final CacheDao _cacheDao;
+
+  /// 执行 URL 选项 `webView/webJs/webViewDelayTime` 的后台页面边界。
+  final WebViewScriptBridge _webViewBridge;
+
+  /// 搜索期书源登录和验证交互设置缓存键。
+  static const String _searchInteractionSettingKey = 'setting_search_source_interaction';
+
+  /// 当前会话是否允许搜索脚本申请用户交互；启动和未读取设置时默认关闭。
+  bool _allowSearchInteraction = false;
+
+  /// 是否已经从持久缓存读取过搜索期交互设置。
+  bool _searchInteractionSettingLoaded = false;
+
   /// Android `AnalyzeUrl` 对应的普通规则与 JavaScript 混合执行器。
   final LegadoRuleEvaluator _ruleEvaluator;
 
   /// 【搜书诊断日志】项目统一日志接口，用于记录请求、解码和规则解析阶段。
   final AppLogger _logger;
+
+  /// 读取持久化的搜索期登录与验证交互设置；缺失或损坏值均按关闭处理。
+  Future<bool> loadSearchInteractionSetting() async {
+    /// 缓存表中保存的布尔文本。
+    final String? value = (await _cacheDao.get(_searchInteractionSettingKey))?.value;
+    _allowSearchInteraction = value == 'true';
+    _searchInteractionSettingLoaded = true;
+    return _allowSearchInteraction;
+  }
+
+  /// 保存搜索期登录与验证交互设置，并立即更新后续脚本上下文。
+  Future<void> setSearchInteractionAllowed(bool allowed) async {
+    _allowSearchInteraction = allowed;
+    _searchInteractionSettingLoaded = true;
+    await _cacheDao.upsert(
+      Cache(key: _searchInteractionSettingKey, value: allowed.toString()),
+    );
+  }
+
+  /// 根据业务操作返回脚本交互策略；只有显式开启后的搜索允许提出交互申请。
+  LegadoScriptInteractionPolicy _interactionPolicy(LegadoScriptOperation operation) {
+    if (operation == LegadoScriptOperation.search && _allowSearchInteraction) {
+      return LegadoScriptInteractionPolicy.allow;
+    }
+    return LegadoScriptInteractionPolicy.deny;
+  }
+
+  /// 搜索开始前惰性恢复交互设置，保证用户无需先打开设置页也能应用上次选择。
+  Future<void> _ensureSearchInteractionSettingLoaded() async {
+    if (_searchInteractionSettingLoaded) {
+      return;
+    }
+    await loadSearchInteractionSetting();
+  }
+
+  /// 创建单次业务操作共享的规则状态，并预载无需 QuickJS 也可能读取的书源变量。
+  Future<LegadoScriptExecutionState> _createScriptExecutionState({
+    required BookSource source,
+    Book? book,
+    BookChapter? chapter,
+  }) async {
+    /// Android `sourceVariable_书源URL` 对应的持久变量文本。
+    final String? sourceVariable = await _cacheDao.getValidValue(
+      'sourceVariable_${source.bookSourceUrl}',
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    return LegadoScriptExecutionState(
+      modelState: LegadoScriptModelState(book: book, chapter: chapter),
+      variables: <String, String>{'sourceVariable': sourceVariable ?? ''},
+    );
+  }
 
   /// 执行搜索 URL 并解析候选书列表。
   Future<List<SearchBook>> search({
@@ -60,8 +137,10 @@ final class StandardBookSourceService {
     required String keyword,
     required int page,
     required int receivedAt,
+    LegadoScriptOperation scriptOperation = LegadoScriptOperation.search,
     HttpCancellationToken? cancellationToken,
   }) async {
+    await _ensureSearchInteractionSettingLoaded();
     /// 【搜书诊断日志】当前书源不可逆标识。
     final String sourceId = appLogDiagnosticId(source.bookSourceUrl);
     /// 【搜书诊断日志】搜索服务阶段耗时计时器。
@@ -71,11 +150,17 @@ final class StandardBookSourceService {
     if (searchUrl == null || searchUrl.trim().isEmpty) {
       throw const StandardRuleException('搜索 URL 不能为空');
     }
+    /// 搜索 URL、响应检测和列表字段共享的临时规则状态。
+    final LegadoScriptExecutionState scriptExecutionState = await _createScriptExecutionState(
+      source: source,
+    );
     /// 解析后的请求。
     final ResolvedSourceRequest resolved = await _resolveRequest(
       rawUrl: searchUrl,
       baseUri: Uri.parse(source.bookSourceUrl),
       source: source,
+      scriptExecutionState: scriptExecutionState,
+      scriptOperation: scriptOperation,
       keyword: keyword,
       page: page,
       cancellationToken: cancellationToken,
@@ -93,6 +178,8 @@ final class StandardBookSourceService {
       operation: 'search',
       subjectId: sourceId,
       scriptSource: source,
+      scriptExecutionState: scriptExecutionState,
+      scriptOperation: scriptOperation,
       keyword: keyword,
       page: page,
     );
@@ -104,6 +191,8 @@ final class StandardBookSourceService {
       receivedAt: receivedAt,
       keyword: keyword,
       page: page,
+      scriptExecutionState: scriptExecutionState,
+      interactionPolicy: _interactionPolicy(scriptOperation),
       cancellationToken: cancellationToken,
     );
     /// 【原生规则容错日志】可选字段失败不终止当前书源搜索。
@@ -122,10 +211,11 @@ final class StandardBookSourceService {
     return parsed.books;
   }
 
-  /// 请求并解析书籍详情。
+  /// 请求并解析书籍详情；请求前刷新可传入现有状态以保持模型变量连续。
   Future<ParsedBookInfo> loadBookInfo({
     required BookSource source,
     required Book book,
+    LegadoScriptExecutionState? executionState,
     HttpCancellationToken? cancellationToken,
   }) async {
     /// 【搜书诊断日志】当前书籍不可逆标识。
@@ -133,11 +223,18 @@ final class StandardBookSourceService {
     /// 【搜书诊断日志】详情服务阶段耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
     /// 详情请求。
+    final LegadoScriptExecutionState scriptExecutionState = executionState ??
+        await _createScriptExecutionState(
+          source: source,
+          book: book,
+        );
     final ResolvedSourceRequest resolved = await _resolveRequest(
       rawUrl: book.bookUrl,
       baseUri: Uri.parse(source.bookSourceUrl),
       source: source,
       book: book,
+      scriptExecutionState: scriptExecutionState,
+      scriptOperation: LegadoScriptOperation.bookInfo,
       cancellationToken: cancellationToken,
     );
     /// 解码响应。
@@ -149,11 +246,14 @@ final class StandardBookSourceService {
       subjectId: bookId,
       scriptSource: source,
       scriptBook: book,
+      scriptExecutionState: scriptExecutionState,
+      scriptOperation: LegadoScriptOperation.bookInfo,
     );
     /// 规则解析得到的详情字段。
     final ParsedBookInfo parsed = await _parser.parseBookInfo(
       source: source,
       book: book,
+      scriptExecutionState: scriptExecutionState,
       body: response.text,
       finalUri: response.response.finalUri,
       cancellationToken: cancellationToken,
@@ -218,10 +318,11 @@ final class StandardBookSourceService {
     }
   }
 
-  /// 请求并顺序解析完整目录，检测循环分页并限制最多页数。
+  /// 请求并顺序解析完整目录；仅显式刷新时执行 `preUpdateJs`，对齐 Android `runPerJs`。
   Future<List<BookChapter>> loadToc({
     required BookSource source,
     required Book book,
+    bool runPreUpdateJavaScript = false,
     HttpCancellationToken? cancellationToken,
     int maxPages = 100,
   }) async {
@@ -232,8 +333,29 @@ final class StandardBookSourceService {
     _logger.info(tag: bookTocLogTag, message: '目录分页加载开始 bookId=$bookId maxPages=$maxPages');
     // FLUTTER_REWRITE_DEBUG_LOG：输出本次目录请求使用的书源身份、地址关系和完整目录规则。
     _logTocRuleDiagnostics(source: source, book: book, bookId: bookId);
-    /// 首个目录地址；空值回退详情地址。
-    Uri nextUri = Uri.parse(book.tocUrl.isEmpty ? book.bookUrl : book.tocUrl);
+    /// 目录 URL、响应脚本和分页规则共享的 Android 兼容书籍状态。
+    final LegadoScriptExecutionState scriptExecutionState = await _createScriptExecutionState(
+      source: source,
+      book: book,
+    );
+    if (runPreUpdateJavaScript) {
+      await _runTocPreUpdateJavaScript(
+        source: source,
+        book: book,
+        executionState: scriptExecutionState,
+        cancellationToken: cancellationToken,
+      );
+    }
+    /// `preUpdateJs` 可能直接修改脚本书籍快照中的目录地址。
+    final String updatedTocUrl =
+        scriptExecutionState.modelState.fieldValue(bookModel: true, field: 'tocUrl')?.toString() ??
+        '';
+    /// `reGetBook` 精确搜索后可能替换的详情地址。
+    final String updatedBookUrl =
+        scriptExecutionState.modelState.fieldValue(bookModel: true, field: 'bookUrl')?.toString() ??
+        book.bookUrl;
+    /// 首个目录地址；优先使用刷新后的目录地址，空值回退刷新后的详情地址。
+    Uri nextUri = Uri.parse(updatedTocUrl.isEmpty ? updatedBookUrl : updatedTocUrl);
     /// 已访问地址，防止规则产生分页环。
     final Set<String> visited = <String>{};
     /// 按章节地址去重的章节。
@@ -248,6 +370,8 @@ final class StandardBookSourceService {
         baseUri: Uri.parse(source.bookSourceUrl),
         source: source,
         book: book,
+        scriptExecutionState: scriptExecutionState,
+        scriptOperation: LegadoScriptOperation.toc,
         cancellationToken: cancellationToken,
       );
       // FLUTTER_REWRITE_DEBUG_LOG：记录目录请求地址、方法和非敏感请求结构，不输出 Header 值或请求正文。
@@ -268,6 +392,8 @@ final class StandardBookSourceService {
         subjectId: bookId,
         scriptSource: source,
         scriptBook: book,
+        scriptExecutionState: scriptExecutionState,
+        scriptOperation: LegadoScriptOperation.toc,
       );
       /// 当前目录页解析结果；`late final` 仅用于在异常路径先输出本页完整诊断数据。
       late final ParsedTocPage parsed;
@@ -275,6 +401,7 @@ final class StandardBookSourceService {
         parsed = await _parser.parseTocPage(
           source: source,
           book: book,
+          scriptExecutionState: scriptExecutionState,
           body: response.text,
           finalUri: response.response.finalUri,
           startIndex: chapters.length,
@@ -359,7 +486,10 @@ final class StandardBookSourceService {
   /// 请求并顺序合并完整章节正文，检测循环分页并限制最多页数。
   Future<ParsedContentPage> loadContent({
     required BookSource source,
+    required Book book,
     required BookChapter chapter,
+    String? nextChapterUrl,
+    LegadoScriptOperation scriptOperation = LegadoScriptOperation.content,
     HttpCancellationToken? cancellationToken,
     int maxPages = 100,
   }) async {
@@ -373,6 +503,14 @@ final class StandardBookSourceService {
     );
     /// 首个正文地址。
     Uri nextUri = Uri.parse(chapter.url);
+    /// 正文 URL、响应脚本和内容规则共享的 Android 兼容模型状态。
+    final LegadoScriptExecutionState scriptExecutionState = await _createScriptExecutionState(
+      source: source,
+      book: book,
+      chapter: chapter,
+    );
+    /// 正文页面环境脚本和资源提取规则。
+    final ContentSourceRule contentRule = const BookSourceRuleDecoder().decodeContent(source);
     /// 已访问地址。
     final Set<String> visited = <String>{};
     /// 每页正文。
@@ -388,7 +526,10 @@ final class StandardBookSourceService {
         rawUrl: nextUri.toString(),
         baseUri: Uri.parse(chapter.baseUrl.isEmpty ? source.bookSourceUrl : chapter.baseUrl),
         source: source,
+        book: book,
         chapter: chapter,
+        scriptExecutionState: scriptExecutionState,
+        scriptOperation: scriptOperation,
         cancellationToken: cancellationToken,
       );
       /// 当前正文响应。
@@ -399,12 +540,21 @@ final class StandardBookSourceService {
         operation: 'contentPage',
         subjectId: chapterId,
         scriptSource: source,
+        scriptBook: book,
         scriptChapter: chapter,
+        scriptExecutionState: scriptExecutionState,
+        scriptOperation: scriptOperation,
+        webViewJavaScript: contentRule.webJs,
+        sourceRegex: contentRule.sourceRegex,
       );
       /// 当前正文页解析结果。
       final ParsedContentPage parsed = await _parser.parseContentPage(
         source: source,
+        book: book,
         chapter: chapter,
+        nextChapterUrl: nextChapterUrl,
+        scriptExecutionState: scriptExecutionState,
+        scriptOperation: scriptOperation,
         body: response.text,
         finalUri: response.response.finalUri,
         cancellationToken: cancellationToken,
@@ -677,6 +827,8 @@ final class StandardBookSourceService {
     int? page,
     Book? book,
     BookChapter? chapter,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptOperation scriptOperation = LegadoScriptOperation.unknown,
     HttpCancellationToken? cancellationToken,
   }) async {
     /// 同时观察统一 HTTP 取消状态的脚本取消令牌。
@@ -689,6 +841,9 @@ final class StandardBookSourceService {
       baseUri: baseUri,
       book: book,
       chapter: chapter,
+      executionState: scriptExecutionState,
+      operation: scriptOperation,
+      interactionPolicy: _interactionPolicy(scriptOperation),
       result: rawUrl,
       key: keyword,
       page: page,
@@ -730,10 +885,12 @@ final class StandardBookSourceService {
       baseUri: Uri.parse(absoluteOptionUrl),
       book: book,
       chapter: chapter,
+      executionState: scriptContext.executionState,
+      operation: scriptOperation,
+      interactionPolicy: _interactionPolicy(scriptOperation),
       result: absoluteOptionUrl,
       key: keyword,
       page: page,
-      variables: scriptContext.variables,
       bridgeCalls: scriptContext.bridgeCalls,
       httpCancellationToken: cancellationToken,
     );
@@ -812,6 +969,10 @@ final class StandardBookSourceService {
     BookSource? scriptSource,
     Book? scriptBook,
     BookChapter? scriptChapter,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptOperation scriptOperation = LegadoScriptOperation.unknown,
+    String? webViewJavaScript,
+    String? sourceRegex,
     String? keyword,
     int? page,
   }) async {
@@ -819,16 +980,22 @@ final class StandardBookSourceService {
     int attempt = 0;
     while (true) {
       try {
-        /// 原始响应。
-        final HttpResponse response = await _httpClient.execute(
-          resolved.request,
-          cancellationToken: cancellationToken,
-        );
-        /// 解码后的响应。
-        final DecodedHttpResponse decoded = _responseDecoder.decode(
-          response,
-          ruleCharset: resolved.charset,
-        );
+        /// HTTP 或后台 WebView 得到的响应；后续脚本仍可替换正文和最终地址。
+        DecodedHttpResponse decoded = resolved.useWebView
+            ? await _executeWebViewRequest(
+                resolved,
+                source: scriptSource,
+                javaScript: resolved.webViewJavaScript ?? webViewJavaScript,
+                sourceRegex: sourceRegex,
+                cancellationToken: cancellationToken,
+              )
+            : _responseDecoder.decode(
+                await _httpClient.execute(
+                  resolved.request,
+                  cancellationToken: cancellationToken,
+                ),
+                ruleCharset: resolved.charset,
+              );
         /// Android URL 选项中的响应正文脚本。
         final String? bodyJavaScript = resolved.bodyJavaScript;
         if (bodyJavaScript?.trim().isNotEmpty == true && scriptSource != null) {
@@ -839,9 +1006,12 @@ final class StandardBookSourceService {
           /// `bodyJs` 使用最终响应地址和解码正文创建独立脚本上下文。
           final LegadoScriptContext bodyContext = LegadoScriptContext(
             source: scriptSource,
-            baseUri: response.finalUri,
+            baseUri: decoded.response.finalUri,
             book: scriptBook,
             chapter: scriptChapter,
+            executionState: scriptExecutionState,
+            operation: scriptOperation,
+            interactionPolicy: _interactionPolicy(scriptOperation),
             result: decoded.text,
             key: keyword,
             page: page,
@@ -854,16 +1024,29 @@ final class StandardBookSourceService {
             context: bodyContext,
             cancellationToken: jsCancellationToken,
           );
-          return DecodedHttpResponse(
+          decoded = DecodedHttpResponse(
             text: transformedBody,
             charset: decoded.charset,
             response: decoded.response,
           );
         }
+        if (scriptSource != null && scriptSource.loginCheckJs?.trim().isNotEmpty == true) {
+          decoded = await _applyLoginCheck(
+            source: scriptSource,
+            decoded: decoded,
+            book: scriptBook,
+            chapter: scriptChapter,
+            executionState: scriptExecutionState,
+            operation: scriptOperation,
+            keyword: keyword,
+            page: page,
+            cancellationToken: cancellationToken,
+          );
+        }
         _logger.debug(
           tag: logTag,
           message: 'HTTP 响应已解码 operation=$operation subjectId=$subjectId '
-              'status=${response.statusCode} byteCount=${response.bytes.length} '
+              'status=${decoded.response.statusCode} byteCount=${decoded.response.bytes.length} '
               'charset=${decoded.charset} attempt=${attempt + 1}',
         );
         return decoded;
@@ -881,6 +1064,332 @@ final class StandardBookSourceService {
         );
       }
     }
+  }
+
+  /// 执行 Android URL 选项的后台 WebView 请求；POST 先请求正文再载入页面环境。
+  Future<DecodedHttpResponse> _executeWebViewRequest(
+    ResolvedSourceRequest resolved, {
+    required BookSource? source,
+    String? javaScript,
+    String? sourceRegex,
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    if (source == null) {
+      throw const JsEngineException(
+        kind: JsFailureKind.bridge,
+        message: 'WebView 书源请求缺少脚本来源上下文',
+      );
+    }
+    /// POST 请求先通过统一 HTTP 管线获得待载入 HTML，对齐 Android BackstageWebView。
+    final DecodedHttpResponse? initialResponse;
+    if (resolved.request.method == HttpRequestMethod.post) {
+      initialResponse = _responseDecoder.decode(
+        await _httpClient.execute(
+          resolved.request,
+          cancellationToken: cancellationToken,
+        ),
+        ruleCharset: resolved.charset,
+      );
+    } else {
+      initialResponse = null;
+    }
+    /// 把统一 HTTP 取消状态转换为页面桥取消状态。
+    final JsCancellationToken? jsCancellationToken = cancellationToken == null
+        ? null
+        : _ServiceHttpBackedJsCancellationToken(cancellationToken);
+    /// 页面环境执行结果。
+    final WebViewScriptResponse pageResponse = await _webViewBridge.execute(
+      WebViewScriptRequest(
+        sourceId: source.bookSourceUrl,
+        uri: initialResponse?.response.finalUri ?? resolved.request.uri,
+        html: initialResponse?.text,
+        script: javaScript,
+        sourceRegex: sourceRegex,
+        delay: resolved.webViewDelay,
+        timeout: resolved.request.totalTimeout,
+        headers: resolved.request.headers,
+      ),
+      cancellationToken: jsCancellationToken,
+    );
+    /// 页面脚本、资源正则或完整 DOM 得到的正文文本。
+    final String text = pageResponse.value?.toString() ?? '';
+    /// 页面结果对应的 UTF-8 字节，仅用于统一响应契约和安全长度统计。
+    final Uint8List bytes = Uint8List.fromList(utf8.encode(text));
+    /// 保留 POST 原响应状态；直接页面请求按成功状态表达。
+    final HttpResponse response = HttpResponse(
+      requestUri: resolved.request.uri,
+      finalUri: pageResponse.finalUri,
+      statusCode: initialResponse?.response.statusCode ?? 200,
+      bytes: bytes,
+      headers: initialResponse?.response.headers ?? const <String, List<String>>{},
+      reasonPhrase: initialResponse?.response.reasonPhrase,
+    );
+    return DecodedHttpResponse(
+      text: text,
+      charset: 'UTF-8',
+      response: response,
+    );
+  }
+
+  /// 在目录首个请求前执行一次 `preUpdateJs`，不再在每页响应解析后重复执行。
+  Future<void> _runTocPreUpdateJavaScript({
+    required BookSource source,
+    required Book book,
+    required LegadoScriptExecutionState executionState,
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    /// 目录请求前脚本。
+    final String preUpdateJavaScript =
+        const BookSourceRuleDecoder().decodeToc(source).preUpdateJs?.trim() ?? '';
+    if (preUpdateJavaScript.isEmpty) {
+      return;
+    }
+    /// 同时观察目录 HTTP 取消状态的脚本取消令牌。
+    final JsCancellationToken? jsCancellationToken = cancellationToken == null
+        ? null
+        : _ServiceHttpBackedJsCancellationToken(cancellationToken);
+    /// 请求前脚本共享书籍模型与目录临时变量。
+    final LegadoScriptContext context = LegadoScriptContext(
+      source: source,
+      baseUri: Uri.parse(book.tocUrl.isEmpty ? book.bookUrl : book.tocUrl),
+      book: book,
+      executionState: executionState,
+      preUpdateActionHandler: (LegadoPreUpdateAction action) => _handleTocPreUpdateAction(
+        action: action,
+        source: source,
+        originalBook: book,
+        executionState: executionState,
+        cancellationToken: cancellationToken,
+      ),
+      operation: LegadoScriptOperation.toc,
+      interactionPolicy: LegadoScriptInteractionPolicy.deny,
+      httpCancellationToken: cancellationToken,
+    );
+    await _javaScriptService.evaluate(
+      scriptName: '${source.bookSourceName}/toc-pre-update',
+      script: preUpdateJavaScript,
+      context: context,
+      cancellationToken: jsCancellationToken,
+    );
+  }
+
+  /// 执行 Android `AnalyzeRule.reGetBook/refreshTocUrl` 对应的目录请求前业务动作。
+  Future<void> _handleTocPreUpdateAction({
+    required LegadoPreUpdateAction action,
+    required BookSource source,
+    required Book originalBook,
+    required LegadoScriptExecutionState executionState,
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    if (action == LegadoPreUpdateAction.reGetBook) {
+      /// 精确搜索使用脚本可能已经修改的书名。
+      final String bookName =
+          executionState.modelState.fieldValue(bookModel: true, field: 'name')?.toString() ??
+          originalBook.name;
+      /// 精确搜索使用脚本可能已经修改的作者。
+      final String bookAuthor =
+          executionState.modelState.fieldValue(bookModel: true, field: 'author')?.toString() ??
+          originalBook.author;
+      /// 同一书源返回的候选；目录请求前搜索仍使用无交互策略。
+      final List<SearchBook> candidates = await search(
+        source: source,
+        keyword: bookName,
+        page: 1,
+        receivedAt: DateTime.now().millisecondsSinceEpoch,
+        scriptOperation: LegadoScriptOperation.toc,
+        cancellationToken: cancellationToken,
+      );
+      /// 与 Android 一致同时匹配书名和作者的首个候选。
+      final SearchBook? matchedBook = candidates
+          .where(
+            (SearchBook candidate) =>
+                candidate.name == bookName && candidate.author == bookAuthor,
+          )
+          .firstOrNull;
+      if (matchedBook == null) {
+        throw StandardRuleException('preUpdateJs 未搜索到精确匹配书籍');
+      }
+      executionState.modelState.setField(
+        bookModel: true,
+        field: 'bookUrl',
+        value: matchedBook.bookUrl,
+      );
+      _mergePreUpdateBookVariables(executionState, matchedBook.variable);
+    }
+    /// 使用搜索后或脚本直接修改后的模型快照重新构造详情请求书籍。
+    final Book refreshedBook = _bookFromScriptState(originalBook, executionState.modelState);
+    /// 详情规则结果，用于更新后续目录请求依赖的脚本书籍快照。
+    final ParsedBookInfo parsed = await loadBookInfo(
+      source: source,
+      book: refreshedBook,
+      executionState: executionState,
+      cancellationToken: cancellationToken,
+    );
+    _applyPreUpdateBookInfo(executionState.modelState, parsed);
+  }
+
+  /// 合并精确搜索候选携带的 Book 变量，不清除请求前脚本已经写入的其他键。
+  void _mergePreUpdateBookVariables(
+    LegadoScriptExecutionState executionState,
+    String? variable,
+  ) {
+    if (variable == null || variable.trim().isEmpty) {
+      return;
+    }
+    try {
+      /// 搜索结果变量 JSON 对象。
+      final Object? decoded = jsonDecode(variable);
+      if (decoded is! Map) {
+        return;
+      }
+      for (final MapEntry<Object?, Object?> entry in decoded.entries) {
+        if (entry.key != null && entry.value != null) {
+          executionState.modelState.putVariable(
+            bookModel: true,
+            key: entry.key.toString(),
+            value: entry.value.toString(),
+          );
+        }
+      }
+    } on FormatException {
+      return;
+    }
+  }
+
+  /// 使用共享脚本状态构造详情请求所需的不可变 Book，不直接修改数据库领域实体。
+  Book _bookFromScriptState(Book fallback, LegadoScriptModelState modelState) {
+    return Book(
+      bookUrl:
+          modelState.fieldValue(bookModel: true, field: 'bookUrl')?.toString() ?? fallback.bookUrl,
+      tocUrl:
+          modelState.fieldValue(bookModel: true, field: 'tocUrl')?.toString() ?? fallback.tocUrl,
+      origin: fallback.origin,
+      originName: fallback.originName,
+      name: modelState.fieldValue(bookModel: true, field: 'name')?.toString() ?? fallback.name,
+      author:
+          modelState.fieldValue(bookModel: true, field: 'author')?.toString() ?? fallback.author,
+      kind: modelState.fieldValue(bookModel: true, field: 'kind')?.toString(),
+      customTag: fallback.customTag,
+      coverUrl: modelState.fieldValue(bookModel: true, field: 'coverUrl')?.toString(),
+      customCoverUrl: fallback.customCoverUrl,
+      intro: modelState.fieldValue(bookModel: true, field: 'intro')?.toString(),
+      customIntro: fallback.customIntro,
+      remark: fallback.remark,
+      charset: fallback.charset,
+      type: fallback.type,
+      group: fallback.group,
+      latestChapterTitle:
+          modelState.fieldValue(bookModel: true, field: 'latestChapterTitle')?.toString(),
+      latestChapterTime: fallback.latestChapterTime,
+      lastCheckTime: fallback.lastCheckTime,
+      lastCheckCount: fallback.lastCheckCount,
+      totalChapterNum: fallback.totalChapterNum,
+      durChapterTitle: fallback.durChapterTitle,
+      durChapterIndex: fallback.durChapterIndex,
+      durChapterPos: fallback.durChapterPos,
+      durChapterTime: fallback.durChapterTime,
+      wordCount: modelState.fieldValue(bookModel: true, field: 'wordCount')?.toString(),
+      canUpdate: fallback.canUpdate,
+      order: fallback.order,
+      originOrder: fallback.originOrder,
+      variable: modelState.fieldValue(bookModel: true, field: 'variable')?.toString(),
+      readConfig: fallback.readConfig,
+      syncTime: fallback.syncTime,
+    );
+  }
+
+  /// 将重新加载的详情字段写回当前规则链快照，供首个目录请求和后续规则读取。
+  void _applyPreUpdateBookInfo(
+    LegadoScriptModelState modelState,
+    ParsedBookInfo parsed,
+  ) {
+    modelState.setField(bookModel: true, field: 'intro', value: parsed.intro);
+    modelState.setField(bookModel: true, field: 'kind', value: parsed.kind);
+    modelState.setField(bookModel: true, field: 'coverUrl', value: parsed.coverUrl);
+    modelState.setField(bookModel: true, field: 'tocUrl', value: parsed.tocUrl);
+    modelState.setField(
+      bookModel: true,
+      field: 'latestChapterTitle',
+      value: parsed.latestChapterTitle,
+    );
+    modelState.setField(bookModel: true, field: 'wordCount', value: parsed.wordCount);
+  }
+
+  /// 按 Android 顺序在响应 `bodyJs` 后执行 `loginCheckJs`，并接收返回的响应对象。
+  Future<DecodedHttpResponse> _applyLoginCheck({
+    required BookSource source,
+    required DecodedHttpResponse decoded,
+    required LegadoScriptOperation operation,
+    Book? book,
+    BookChapter? chapter,
+    LegadoScriptExecutionState? executionState,
+    String? keyword,
+    int? page,
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    /// 已确认非空的登录检测脚本。
+    final String loginCheckJavaScript = source.loginCheckJs?.trim() ?? '';
+    if (loginCheckJavaScript.isEmpty) {
+      return decoded;
+    }
+    /// 同时观察统一 HTTP 取消状态的 JavaScript 取消令牌。
+    final JsCancellationToken? jsCancellationToken = cancellationToken == null
+        ? null
+        : _ServiceHttpBackedJsCancellationToken(cancellationToken);
+    /// 与 Android `StrResponse` 对齐的脚本响应 DTO。
+    final Map<String, Object?> responseBinding = <String, Object?>{
+      'url': decoded.response.finalUri.toString(),
+      'body': decoded.text,
+      'statusCode': decoded.response.statusCode,
+      'headers': decoded.response.headers,
+    };
+    /// 默认禁止用户交互的登录检测上下文；搜索不会从底层直接弹出页面。
+    final LegadoScriptContext loginContext = LegadoScriptContext(
+      source: source,
+      baseUri: decoded.response.finalUri,
+      book: book,
+      chapter: chapter,
+      executionState: executionState,
+      result: responseBinding,
+      key: keyword,
+      page: page,
+      operation: operation,
+      interactionPolicy: _interactionPolicy(operation),
+      httpCancellationToken: cancellationToken,
+    );
+    /// 登录检测返回值；Android 要求返回 `StrResponse`，Flutter 接受对应 Map 快照。
+    final JsBridgeValue checked = await _javaScriptService.evaluate(
+      scriptName: '${source.bookSourceName}/login-check',
+      script: loginCheckJavaScript,
+      context: loginContext,
+      cancellationToken: jsCancellationToken,
+    );
+    if (checked is! Map) {
+      throw const JsEngineException(
+        kind: JsFailureKind.bridge,
+        message: 'loginCheckJs 必须返回响应对象',
+      );
+    }
+    /// 登录检测可能替换的响应正文。
+    final String checkedBody = checked['body']?.toString() ?? decoded.text;
+    /// 登录检测可能替换的最终地址文本。
+    final String checkedUrl = checked['url']?.toString() ?? decoded.response.finalUri.toString();
+    /// 仅在返回合法绝对或相对地址时更新最终地址。
+    final Uri checkedFinalUri = decoded.response.finalUri.resolve(checkedUrl);
+    /// 保留原始状态、Header 与字节，仅替换规则后续实际观察到的最终地址。
+    final HttpResponse checkedResponse = HttpResponse(
+      requestUri: decoded.response.requestUri,
+      finalUri: checkedFinalUri,
+      statusCode: decoded.response.statusCode,
+      bytes: decoded.response.bytes,
+      headers: decoded.response.headers,
+      reasonPhrase: decoded.response.reasonPhrase,
+    );
+    return DecodedHttpResponse(
+      text: checkedBody,
+      charset: decoded.charset,
+      response: checkedResponse,
+    );
   }
 
   /// 判断网络错误是否适合立即重试。

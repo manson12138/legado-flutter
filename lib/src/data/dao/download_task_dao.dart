@@ -48,6 +48,99 @@ final class DownloadTaskDao {
     }
   }
 
+  /// 读取一本书持久化的下载批次与自动换源状态。
+  Future<DownloadBookState?> getBookState(String bookUrl) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.downloadBookStates,
+      where: 'bookUrl = ?',
+      argumentCount: 1,
+    );
+    /// 指定书籍最多一条策略状态行。
+    final List<Map<String, Object?>> rows = await database.query(
+      DatabaseTables.downloadBookStates,
+      where: 'bookUrl = ?',
+      whereArgs: <Object?>[bookUrl],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return downloadBookStateFromMap(rows.first);
+  }
+
+  /// 观察一本书的下载策略、锁定候选和批次评分状态。
+  Stream<DownloadBookState?> watchBookState(String bookUrl) async* {
+    /// 当前观察依赖的下载书籍状态表。
+    final Set<String> observedTables = <String>{
+      DatabaseTables.downloadBookStates,
+    };
+    /// 已消费的最近一次状态表提交版本。
+    int observedRevision =
+        _database.changeNotifier.revisionForTables(observedTables);
+    while (true) {
+      yield await getBookState(bookUrl);
+      observedRevision = await _database.changeNotifier.waitForTableChange(
+        observedTables,
+        observedRevision,
+      );
+    }
+  }
+
+  /// 写入一本书下载状态；同一书籍主键直接覆盖。
+  Future<void> upsertBookState(DownloadBookState state) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'INSERT_REPLACE',
+      table: DatabaseTables.downloadBookStates,
+      itemCount: 1,
+    );
+    await database.insert(
+      DatabaseTables.downloadBookStates,
+      downloadBookStateToMap(state),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _database.changeNotifier.notifyTables(
+      <String>{DatabaseTables.downloadBookStates},
+    );
+  }
+
+  /// 观察全部书籍下载任务；任务表变化时按最近状态变化顺序重新查询。
+  Stream<List<DownloadTask>> watchAll() async* {
+    /// 当前观察依赖的下载任务表。
+    final Set<String> observedTables = <String>{DatabaseTables.downloadTasks};
+    /// 已消费的最近一次下载任务表提交版本。
+    int observedRevision =
+        _database.changeNotifier.revisionForTables(observedTables);
+    while (true) {
+      yield await getAll();
+      observedRevision = await _database.changeNotifier.waitForTableChange(
+        observedTables,
+        observedRevision,
+      );
+    }
+  }
+
+  /// 读取全部书籍下载任务，供跨书管理页汇总。
+  Future<List<DownloadTask>> getAll() async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.downloadTasks,
+      where: 'all orderBy=updatedAt DESC',
+    );
+    /// 全部下载任务行。
+    final List<Map<String, Object?>> rows = await database.query(
+      DatabaseTables.downloadTasks,
+      orderBy: 'updatedAt DESC, bookUrl ASC, chapterIndex ASC',
+    );
+    return rows.map(downloadTaskFromMap).toList(growable: false);
+  }
+
   /// 读取全部等待或运行中的任务；供调度器领取和应用重启后的崩溃恢复使用。
   Future<List<DownloadTask>> getPending() async {
     /// 已打开的数据库连接。
@@ -163,6 +256,117 @@ final class DownloadTaskDao {
     );
     if (count > 0) {
       _database.changeNotifier.notifyTables(<String>{DatabaseTables.downloadTasks});
+    }
+    return count;
+  }
+
+  /// 暂停全部等待或运行任务。
+  Future<int> pauseAll(int now) {
+    return _replaceStatuses(
+      from: const <DownloadTaskStatus>{
+        DownloadTaskStatus.waiting,
+        DownloadTaskStatus.running,
+      },
+      to: DownloadTaskStatus.paused,
+      now: now,
+    );
+  }
+
+  /// 暂停一本书的等待或运行任务。
+  Future<int> pauseBook(String bookUrl, int now) {
+    return _replaceStatuses(
+      from: const <DownloadTaskStatus>{
+        DownloadTaskStatus.waiting,
+        DownloadTaskStatus.running,
+      },
+      to: DownloadTaskStatus.paused,
+      now: now,
+      bookUrl: bookUrl,
+    );
+  }
+
+  /// 暂停指定章节的等待或运行任务。
+  Future<int> pauseTask(String bookUrl, int chapterIndex, int now) {
+    return _replaceStatuses(
+      from: const <DownloadTaskStatus>{
+        DownloadTaskStatus.waiting,
+        DownloadTaskStatus.running,
+      },
+      to: DownloadTaskStatus.paused,
+      now: now,
+      bookUrl: bookUrl,
+      chapterIndex: chapterIndex,
+    );
+  }
+
+  /// 恢复全部暂停任务为等待状态。
+  Future<int> resumeAll(int now) {
+    return _replaceStatuses(
+      from: const <DownloadTaskStatus>{DownloadTaskStatus.paused},
+      to: DownloadTaskStatus.waiting,
+      now: now,
+    );
+  }
+
+  /// 恢复一本书的全部暂停任务为等待状态。
+  Future<int> resumeBook(String bookUrl, int now) {
+    return _replaceStatuses(
+      from: const <DownloadTaskStatus>{DownloadTaskStatus.paused},
+      to: DownloadTaskStatus.waiting,
+      now: now,
+      bookUrl: bookUrl,
+    );
+  }
+
+  /// 按可选书籍和章节范围批量替换任务状态，并只在真实变化后通知观察流。
+  Future<int> _replaceStatuses({
+    required Set<DownloadTaskStatus> from,
+    required DownloadTaskStatus to,
+    required int now,
+    String? bookUrl,
+    int? chapterIndex,
+  }) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    /// 原状态集合对应的 SQL 占位符。
+    final String statusPlaceholders =
+        List<String>.filled(from.length, '?').join(',');
+    /// 最终更新条件片段。
+    final List<String> whereParts = <String>[
+      'status IN ($statusPlaceholders)',
+    ];
+    /// 最终更新条件参数。
+    final List<Object?> whereArgs = from
+        .map((DownloadTaskStatus status) => status.name)
+        .toList(growable: true);
+    if (bookUrl != null) {
+      whereParts.add('bookUrl = ?');
+      whereArgs.add(bookUrl);
+    }
+    if (chapterIndex != null) {
+      whereParts.add('chapterIndex = ?');
+      whereArgs.add(chapterIndex);
+    }
+    _database.logOperation(
+      operation: 'UPDATE_STATUS',
+      table: DatabaseTables.downloadTasks,
+      where: whereParts.join(' AND '),
+      argumentCount: whereArgs.length,
+    );
+    /// 被本次状态替换命中的任务数量。
+    final int count = await database.update(
+      DatabaseTables.downloadTasks,
+      <String, Object?>{
+        'status': to.name,
+        'updatedAt': now,
+      },
+      where: whereParts.join(' AND '),
+      whereArgs: whereArgs,
+    );
+    if (count > 0) {
+      _database.changeNotifier.notifyTables(
+        <String>{DatabaseTables.downloadTasks},
+      );
     }
     return count;
   }

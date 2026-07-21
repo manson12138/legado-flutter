@@ -2,18 +2,21 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import '../../domain/gateway/bookmark_gateway.dart';
+import '../../domain/gateway/book_content_process_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/gateway/replace_rule_gateway.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/reading_progress.dart';
 import '../../domain/model/replace_rule.dart';
 import '../../domain/usecase/load_book_chapters_use_case.dart';
 import '../../domain/usecase/restore_reading_progress_use_case.dart';
 import '../../domain/usecase/save_reading_progress_use_case.dart';
+import '../../domain/usecase/save_book_content_process_use_case.dart';
 import '../../help/error/app_result.dart';
 import '../../help/logging/app_logger.dart';
 import '../../model/reader/read_book_coordinator.dart';
@@ -30,18 +33,22 @@ final class ReaderViewModel {
     required RestoreReadingProgressUseCase restoreReadingProgress,
     required SaveReadingProgressUseCase saveReadingProgress,
     required BookmarkGateway bookmarkGateway,
+    required BookContentProcessGateway bookContentProcessGateway,
     required ReplaceRuleGateway replaceRuleGateway,
     required ReaderCacheGateway cacheGateway,
     required ReadBookCoordinator coordinator,
+    required SaveBookContentProcessUseCase saveBookContentProcess,
     required AppLogger logger,
   }) : _bookshelfGateway = bookshelfGateway,
        _loadBookChapters = loadBookChapters,
        _restoreReadingProgress = restoreReadingProgress,
        _saveReadingProgress = saveReadingProgress,
        _bookmarkGateway = bookmarkGateway,
+       _bookContentProcessGateway = bookContentProcessGateway,
        _replaceRuleGateway = replaceRuleGateway,
        _cacheGateway = cacheGateway,
        _coordinator = coordinator,
+       _saveBookContentProcess = saveBookContentProcess,
        _logger = logger;
 
   /// 路由提供的稳定书籍 URL。
@@ -65,6 +72,9 @@ final class ReaderViewModel {
   /// 书签持久化边界。
   final BookmarkGateway _bookmarkGateway;
 
+  /// 用户正文高亮与下划线持久化边界。
+  final BookContentProcessGateway _bookContentProcessGateway;
+
   /// 替换规则读取边界，用于展示当前书的完整可用规则列表。
   final ReplaceRuleGateway _replaceRuleGateway;
 
@@ -73,6 +83,9 @@ final class ReaderViewModel {
 
   /// 对应 Android ReadBook 的正文加载协调器。
   final ReadBookCoordinator _coordinator;
+
+  /// 从稳定正文选区创建用户标注的业务动作。
+  final SaveBookContentProcessUseCase _saveBookContentProcess;
 
   /// 【搜书诊断日志】项目统一日志接口，用于记录阅读入口和章节状态。
   final AppLogger _logger;
@@ -88,6 +101,9 @@ final class ReaderViewModel {
 
   /// 当前书签流订阅。
   StreamSubscription<List<Bookmark>>? _bookmarkSubscription;
+
+  /// 当前章节正文高亮与下划线流订阅。
+  StreamSubscription<List<BookContentProcess>>? _contentProcessSubscription;
 
   /// 滚动锚点状态更新节流定时器。
   Timer? _anchorUpdateTimer;
@@ -187,6 +203,20 @@ final class ReaderViewModel {
         _coordinator.handleMemoryPressure();
       case OpenReaderBookSourceChangeIntent():
         unawaited(_requestBookSourceChange());
+      case ShareReaderContentImageIntent(imageUrl: final String imageUrl):
+        _shareContentImage(imageUrl);
+      case ApplyReaderSelectionIntent(
+        selection: final ReaderTextSelection selection,
+        action: final ReaderSelectionAction action,
+      ):
+        unawaited(_applySelection(selection, action));
+      case ToggleReaderContentProcessIntent(
+        id: final String id,
+        enabled: final bool enabled,
+      ):
+        unawaited(_toggleContentProcess(id, enabled));
+      case DeleteReaderContentProcessIntent(id: final String id):
+        unawaited(_deleteContentProcess(id));
       case SaveReaderChapterSourceContentIntent(
         chapterIndex: final int chapterIndex,
         content: final String content,
@@ -195,6 +225,19 @@ final class ReaderViewModel {
       case CloseReaderIntent():
         unawaited(_close());
     }
+  }
+
+  /// 校验正文图片地址后请求路由打开系统保存或分享面板。
+  void _shareContentImage(String imageUrl) {
+    /// 从正文资源块读取的候选图片地址。
+    final Uri? uri = Uri.tryParse(imageUrl);
+    if (uri == null ||
+        uri.host.isEmpty ||
+        !<String>{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
+      _effectController.add(const ShowReaderMessageEffect('正文图片地址无效'));
+      return;
+    }
+    _effectController.add(ShareReaderContentImageEffect(uri.toString()));
   }
 
   /// 初始化书籍、目录、配置、稳定锚点和兼容进度。
@@ -302,6 +345,7 @@ final class ReaderViewModel {
         ),
       );
       _subscribeBookmarks(book);
+      _subscribeContentProcesses(book.bookUrl, chapterIndex);
       _effectController.add(EnterReaderSystemEffect(config));
       await _loadCurrentChapter();
       _logger.info(
@@ -379,6 +423,27 @@ final class ReaderViewModel {
     );
   }
 
+  /// 订阅当前章节用户标注，并忽略切章后晚到的旧订阅数据。
+  void _subscribeContentProcesses(String targetBookUrl, int chapterIndex) {
+    _contentProcessSubscription?.cancel();
+    _contentProcessSubscription = _bookContentProcessGateway
+        .watchForChapter(targetBookUrl, chapterIndex)
+        .listen(
+      (List<BookContentProcess> processes) {
+        if (_state.book?.bookUrl != targetBookUrl ||
+            _state.currentChapterIndex != chapterIndex) {
+          return;
+        }
+        _emit(_state.copyWith(contentProcesses: processes));
+      },
+      onError: (Object error) {
+        _effectController.add(
+          const ShowReaderMessageEffect('读取正文标注失败'),
+        );
+      },
+    );
+  }
+
   /// 加载当前章节并在成功后恢复字符锚点和启动相邻章预加载。
   Future<void> _loadCurrentChapter({
     bool forceRefresh = false,
@@ -421,6 +486,7 @@ final class ReaderViewModel {
         book: book,
         chapter: chapter,
         config: _state.config,
+        nextChapterUrl: _nextChapterUrl(chapter.index),
         forceRefresh: forceRefresh,
       );
       if (_disposed || generation != _loadGeneration || _state.currentChapter?.url != chapter.url) {
@@ -625,10 +691,12 @@ final class ReaderViewModel {
           context: '',
         ),
         searchState: const ReaderSearchState(),
+        contentProcesses: const <BookContentProcess>[],
         chapterTransitionDirection: transitionDirection,
         clearSheet: true,
       ),
     );
+    _subscribeContentProcesses(bookUrl, chapterIndex);
     await _loadCurrentChapter(preserveCurrentContent: preserveCurrentContent);
   }
 
@@ -770,6 +838,7 @@ final class ReaderViewModel {
                 book: book,
                 chapter: chapter,
                 config: _state.config,
+                nextChapterUrl: _nextChapterUrl(chapter.index),
               );
         matches.addAll(
           _searchText(
@@ -969,7 +1038,9 @@ final class ReaderViewModel {
         previous.fullScreen != config.fullScreen) {
       _effectController.add(UpdateReaderSystemEffect(config));
     }
-    if (previous.useReplaceRules != config.useReplaceRules) {
+    if (previous.useReplaceRules != config.useReplaceRules ||
+        previous.chineseConversionMode != config.chineseConversionMode ||
+        previous.reSegmentContent != config.reSegmentContent) {
       await _loadCurrentChapter();
       return;
     }
@@ -1019,6 +1090,101 @@ final class ReaderViewModel {
       ),
     );
     _effectController.add(const ShowReaderMessageEffect('书签已添加'));
+  }
+
+  /// 执行选区书签、高亮或下划线，并保持当前阅读字符锚点不变。
+  Future<void> _applySelection(
+    ReaderTextSelection selection,
+    ReaderSelectionAction action,
+  ) async {
+    /// 当前书籍。
+    final Book? book = _state.book;
+    /// 当前章节。
+    final BookChapter? chapter = _state.currentChapter;
+    /// 当前处理后完整正文。
+    final String? chapterText = _state.content?.text;
+    if (book == null || chapter == null || chapterText == null) {
+      return;
+    }
+    if (selection.start < 0 ||
+        selection.end > chapterText.length ||
+        selection.end <= selection.start) {
+      _effectController.add(
+        const ShowReaderMessageEffect('选区已经失效，请重新选择'),
+      );
+      return;
+    }
+    try {
+      switch (action) {
+        case ReaderSelectionAction.bookmark:
+          await _bookmarkGateway.saveBookmark(
+            Bookmark(
+              time: DateTime.now().millisecondsSinceEpoch,
+              bookName: book.name,
+              bookAuthor: book.author,
+              chapterIndex: _state.currentChapterIndex,
+              chapterPos: selection.start,
+              chapterName: chapter.title,
+              bookText: selection.text,
+              content: selection.text,
+            ),
+          );
+          _effectController.add(
+            const ShowReaderMessageEffect('选区书签已添加'),
+          );
+        case ReaderSelectionAction.highlight:
+          await _saveBookContentProcess.execute(
+            bookUrl: book.bookUrl,
+            chapterIndex: _state.currentChapterIndex,
+            chapterText: chapterText,
+            selection: selection,
+            kind: BookContentProcessKind.userHighlight,
+          );
+          _effectController.add(
+            const ShowReaderMessageEffect('高亮已添加'),
+          );
+        case ReaderSelectionAction.underline:
+          await _saveBookContentProcess.execute(
+            bookUrl: book.bookUrl,
+            chapterIndex: _state.currentChapterIndex,
+            chapterText: chapterText,
+            selection: selection,
+            kind: BookContentProcessKind.userUnderline,
+          );
+          _effectController.add(
+            const ShowReaderMessageEffect('下划线已添加'),
+          );
+      }
+    } on Object {
+      _effectController.add(
+        const ShowReaderMessageEffect('保存选区操作失败'),
+      );
+    }
+  }
+
+  /// 启用或停用用户正文标注，流更新后自动重绘当前章节。
+  Future<void> _toggleContentProcess(String id, bool enabled) async {
+    try {
+      await _bookContentProcessGateway.setEnabled(id, enabled);
+    } on Object {
+      _effectController.add(
+        const ShowReaderMessageEffect('更新正文标注失败'),
+      );
+    }
+  }
+
+  /// 软删除用户正文标注，保留同步与冲突处理所需记录。
+  Future<void> _deleteContentProcess(String id) async {
+    try {
+      await _bookContentProcessGateway.delete(id);
+      _effectController.add(
+        const ShowReaderMessageEffect('正文标注已删除'),
+      );
+    } on Object {
+      _effectController.add(
+        const ShowReaderMessageEffect('删除正文标注失败'),
+      );
+    }
   }
 
   /// 删除指定书签并保留当前阅读位置。
@@ -1155,6 +1321,7 @@ final class ReaderViewModel {
           book: book,
           chapter: chapter,
           config: _state.config,
+          nextChapterUrl: _nextChapterUrl(chapter.index),
           forceRefresh: true,
         );
         successCount += 1;
@@ -1174,6 +1341,16 @@ final class ReaderViewModel {
     _effectController.add(
       ShowReaderMessageEffect('章节刷新完成：$successCount / ${indexes.length}'),
     );
+  }
+
+  /// 读取指定目录索引的下一章 URL，供书源正文脚本使用 Android 兼容变量 `nextChapterUrl`。
+  String? _nextChapterUrl(int chapterIndex) {
+    /// 下一章在当前完整目录中的位置。
+    final int nextIndex = chapterIndex + 1;
+    if (nextIndex < 0 || nextIndex >= _state.chapters.length) {
+      return _state.chapters.firstOrNull?.url;
+    }
+    return _state.chapters[nextIndex].url;
   }
 
   /// 根据用户选择的刷新范围生成可阅读章节索引。
@@ -1274,6 +1451,7 @@ final class ReaderViewModel {
     _anchorUpdateTimer?.cancel();
     _progressSaveTimer?.cancel();
     _bookmarkSubscription?.cancel();
+    _contentProcessSubscription?.cancel();
     _refreshGeneration += 1;
     _searchGeneration += 1;
     _coordinator.dispose();

@@ -1,4 +1,5 @@
 import '../../api/http/http_contract.dart';
+import '../../api/js/script_context.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
@@ -159,13 +160,18 @@ final class ChangeChapterSourceCoordinator {
   /// 拉取候选目录中用户手动选定章节的正文。
   Future<String> fetchChapterContent({
     required BookSource source,
+    required Book book,
     required BookChapter chapter,
+    String? nextChapterUrl,
     required HttpCancellationToken cancellationToken,
   }) async {
     /// 候选章节解析后的正文页。
     final ParsedContentPage parsed = await _standardService.loadContent(
       source: source,
+      book: book,
       chapter: chapter,
+      nextChapterUrl: nextChapterUrl,
+      scriptOperation: LegadoScriptOperation.changeSource,
       cancellationToken: cancellationToken,
     );
     if (parsed.content.trim().isEmpty) {

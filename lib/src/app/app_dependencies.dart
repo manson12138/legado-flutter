@@ -14,6 +14,7 @@ import '../api/js/js_engine_pool.dart';
 import '../api/js/jsf_engine.dart';
 import '../api/js/legado_script_bridge.dart';
 import '../api/js/script_context.dart';
+import '../api/js/script_interaction_broker.dart';
 import '../api/js/webview_script_bridge.dart';
 import '../data/dao/book_chapter_dao.dart';
 import '../data/dao/book_group_dao.dart';
@@ -22,6 +23,7 @@ import '../data/dao/book_source_dao.dart';
 import '../data/dao/cookie_dao.dart';
 import '../data/dao/cache_dao.dart';
 import '../data/dao/bookmark_dao.dart';
+import '../data/dao/book_content_process_dao.dart';
 import '../data/dao/replace_rule_dao.dart';
 import '../data/dao/download_task_dao.dart';
 import '../data/local/legado_database.dart';
@@ -35,6 +37,7 @@ import '../data/repository/search_history_repository.dart';
 import '../data/repository/reader_repository.dart';
 import '../domain/gateway/adult_content_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
+import '../domain/gateway/book_content_process_gateway.dart';
 import '../domain/gateway/bookshelf_gateway.dart';
 import '../domain/gateway/book_group_gateway.dart';
 import '../domain/gateway/book_source_gateway.dart';
@@ -45,6 +48,7 @@ import '../domain/gateway/reader_cache_gateway.dart';
 import '../domain/gateway/replace_rule_gateway.dart';
 import '../domain/gateway/search_history_gateway.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
+import '../domain/usecase/save_book_content_process_use_case.dart';
 import '../domain/usecase/delete_books_from_bookshelf_use_case.dart';
 import '../domain/usecase/create_bookshelf_group_use_case.dart';
 import '../domain/usecase/change_book_source_use_case.dart';
@@ -69,6 +73,7 @@ import '../model/book_source/book_source_import_text_resolver.dart';
 import '../model/analyze_rule/legado_javascript_service.dart';
 import '../model/reader/read_book_coordinator.dart';
 import '../model/reader/reader_text_processor.dart';
+import '../platform/download_background_service.dart';
 import '../model/local_book/epub_local_book_parser.dart';
 import '../model/local_book/local_book_parser.dart';
 import '../model/local_book/local_book_service.dart';
@@ -95,11 +100,13 @@ final class AppDependencies {
     required this.chapterGateway,
     required this.readingProgressGateway,
     required this.bookmarkGateway,
+    required this.bookContentProcessGateway,
     required this.replaceRuleGateway,
     required this.readerCacheGateway,
     required this.coverCacheGateway,
     required this.searchHistoryGateway,
     required this.cookieManager,
+    required this.scriptInteractionBroker,
     required this.defaultBookSourceBootstrapper,
     required this.importBookSources,
     required this.bookSourceImportTextResolver,
@@ -112,6 +119,7 @@ final class AppDependencies {
     required this.saveBookChapters,
     required this.saveReadingProgress,
     required this.restoreReadingProgress,
+    required this.saveBookContentProcess,
     required this.standardBookSourceService,
     required this.bookDetailService,
     required this.javaScriptService,
@@ -142,6 +150,9 @@ final class AppDependencies {
     final CacheDao cacheDao = CacheDao(database);
     /// 阅读书签 DAO，只由 ReaderRepository 访问。
     final BookmarkDao bookmarkDao = BookmarkDao(database);
+    /// 用户正文高亮与下划线 DAO，只由 ReaderRepository 访问。
+    final BookContentProcessDao bookContentProcessDao =
+        BookContentProcessDao(database);
     /// 正文替换规则 DAO，只由 ReaderRepository 访问。
     final ReplaceRuleDao replaceRuleDao = ReplaceRuleDao(database);
     /// 离线下载队列 DAO，只由 DownloadRepository 访问。
@@ -200,6 +211,9 @@ final class AppDependencies {
       cookieManager,
       webViewCookieBridge,
     );
+    /// 搜索页和脚本宿主桥共用的应用级单消费者交互队列。
+    final LegadoScriptInteractionBroker scriptInteractionBroker =
+        LegadoScriptInteractionBroker();
     /// M4 Legado、网络、Cookie、缓存与 Java 白名单统一桥。
     final LegadoScriptBridge scriptBridge = LegadoScriptBridge(
       httpClient,
@@ -209,6 +223,7 @@ final class AppDependencies {
       cacheDao,
       const JavaCompatibilityBridge(),
       webViewScriptBridge,
+      scriptInteractionBroker,
     );
     /// 按书源隔离的 QuickJS 引擎池。
     final JsEnginePool jsEnginePool = JsEnginePool(JsfJsEngineFactory(scriptBridge));
@@ -221,6 +236,8 @@ final class AppDependencies {
       const SourceUrlResolver(),
       StandardBookSourceParser(javaScriptService: javaScriptService),
       javaScriptService,
+      cacheDao,
+      webViewScriptBridge,
       logger,
     );
     /// M06 搜索历史 Repository，通过缓存表保持独立数据边界。
@@ -229,6 +246,7 @@ final class AppDependencies {
     final ReaderRepository readerRepository = ReaderRepository(
       cacheDao,
       bookmarkDao,
+      bookContentProcessDao,
       replaceRuleDao,
     );
     // BookCover 深埋在书架/搜索/详情等无状态 Screen 里，不经过路由层依赖注入；
@@ -275,6 +293,24 @@ final class AppDependencies {
         ImportBookSourcesUseCase(bookSourceRepository);
     /// 离线下载队列持久化 Repository。
     final DownloadRepository downloadRepository = DownloadRepository(downloadTaskDao);
+    /// 自动下载换源专用单 worker 搜索器；搜索成功本身不评分，由整书批次统一结算。
+    final BookSearchCoordinator automaticDownloadSearchCoordinator =
+        BookSearchCoordinator(
+          sourceGateway: bookSourceRepository,
+          standardService: standardBookSourceService,
+          adultContentGateway: adultContentRepository,
+          cancellationTokenFactory: () => DioHttpCancellationToken(),
+          logger: logger,
+          maximumConcurrency: 1,
+          recordSourceOutcomes: false,
+        );
+    /// 自动下载换源候选详情与目录协调器，不执行书架主源替换。
+    final ChangeSourceCoordinator automaticDownloadSourceCoordinator =
+        ChangeSourceCoordinator(
+          searchCoordinator: automaticDownloadSearchCoordinator,
+          detailService: bookDetailService,
+          logger: logger,
+        );
     /// App 级单例离线下载队列调度器；由本组合根长期持有，跨页面继续运行。
     final DownloadCoordinator downloadCoordinator = DownloadCoordinator(
       downloadGateway: downloadRepository,
@@ -283,8 +319,10 @@ final class AppDependencies {
       bookSourceGateway: bookSourceRepository,
       cacheGateway: readerRepository,
       standardService: standardBookSourceService,
+      automaticSourceCoordinator: automaticDownloadSourceCoordinator,
       cancellationTokenFactory: () => DioHttpCancellationToken(),
       logger: logger,
+      backgroundService: const MethodChannelDownloadBackgroundService(),
     );
 
     return AppDependencies(
@@ -297,11 +335,13 @@ final class AppDependencies {
       chapterGateway: bookRepository,
       readingProgressGateway: bookRepository,
       bookmarkGateway: readerRepository,
+      bookContentProcessGateway: readerRepository,
       replaceRuleGateway: readerRepository,
       readerCacheGateway: readerRepository,
       coverCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
       cookieManager: cookieManager,
+      scriptInteractionBroker: scriptInteractionBroker,
       defaultBookSourceBootstrapper: DefaultBookSourceBootstrapper(
         sourceGateway: bookSourceRepository,
         importBookSources: importBookSources,
@@ -319,6 +359,7 @@ final class AppDependencies {
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
       saveReadingProgress: SaveReadingProgressUseCase(bookRepository),
       restoreReadingProgress: RestoreReadingProgressUseCase(bookRepository),
+      saveBookContentProcess: SaveBookContentProcessUseCase(readerRepository),
       standardBookSourceService: standardBookSourceService,
       bookDetailService: bookDetailService,
       javaScriptService: javaScriptService,
@@ -356,6 +397,9 @@ final class AppDependencies {
   /// 阅读器书签持久化边界。
   final BookmarkGateway bookmarkGateway;
 
+  /// 用户正文高亮、下划线和管理操作的持久化边界。
+  final BookContentProcessGateway bookContentProcessGateway;
+
   /// 阅读器正文替换规则读取边界。
   final ReplaceRuleGateway replaceRuleGateway;
 
@@ -370,6 +414,9 @@ final class AppDependencies {
 
   /// 普通 HTTP、登录 WebView 与 JavaScript 页面请求共用的统一 Cookie 管理器。
   final LegadoCookieManager cookieManager;
+
+  /// 书源脚本申请登录或验证码交互时使用的应用级单消费者串行队列。
+  final LegadoScriptInteractionBroker scriptInteractionBroker;
 
   /// 启动期按需导入 Flutter assets 内置书源的业务协调器。
   final DefaultBookSourceBootstrapper defaultBookSourceBootstrapper;
@@ -406,6 +453,9 @@ final class AppDependencies {
 
   /// 恢复最后阅读位置的业务动作。
   final RestoreReadingProgressUseCase restoreReadingProgress;
+
+  /// 从稳定正文选区创建用户高亮或下划线的业务动作。
+  final SaveBookContentProcessUseCase saveBookContentProcess;
 
   /// M3 统一网络与普通规则的搜索、详情、目录和正文入口。
   final StandardBookSourceService standardBookSourceService;

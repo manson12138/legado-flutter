@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
@@ -101,9 +102,12 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       restoreReadingProgress: widget.dependencies.restoreReadingProgress,
       saveReadingProgress: widget.dependencies.saveReadingProgress,
       bookmarkGateway: widget.dependencies.bookmarkGateway,
+      bookContentProcessGateway:
+          widget.dependencies.bookContentProcessGateway,
       replaceRuleGateway: widget.dependencies.replaceRuleGateway,
       cacheGateway: widget.dependencies.readerCacheGateway,
       coordinator: widget.dependencies.createReadBookCoordinator(),
+      saveBookContentProcess: widget.dependencies.saveBookContentProcess,
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
@@ -225,8 +229,36 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(message)));
+      case ShareReaderContentImageEffect(imageUrl: final String imageUrl):
+        unawaited(_shareContentImage(imageUrl));
       case OpenReaderBookSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openChangeSource(bookUrl));
+    }
+  }
+
+  /// 打开 Android/iOS 系统分享面板，让用户保存、打开或转发正文图片。
+  Future<void> _shareContentImage(String imageUrl) async {
+    try {
+      /// iPad 分享面板需要的当前路由全局锚点。
+      final RenderObject? renderObject = context.findRenderObject();
+      /// 系统分享弹窗在大屏设备上的显示区域。
+      final Rect? shareOrigin = renderObject is RenderBox
+          ? renderObject.localToGlobal(Offset.zero) & renderObject.size
+          : null;
+      await SharePlus.instance.share(
+        ShareParams(
+          uri: Uri.parse(imageUrl),
+          title: '正文图片',
+          subject: '正文图片',
+          sharePositionOrigin: shareOrigin,
+        ),
+      );
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('正文图片分享失败')));
+      }
     }
   }
 
@@ -439,6 +471,8 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
 
   /// 构建目录、显示设置或书签面板内容。
   Widget _buildSheet(ReaderSheet sheet, ReaderUiState state) {
+    /// 当前阅读书籍的可空快照，局部分支检查后由 Dart 类型提升，避免强制空值断言。
+    final Book? currentBook = state.book;
     return switch (sheet) {
       ReaderTocSheet() => _ReaderTocSheetBody(state: state, onIntent: _viewModel.onIntent),
       ReaderSettingsSheet() => ReaderSettingsSheetBody(
@@ -461,16 +495,20 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         onIntent: _viewModel.onIntent,
       ),
       ReaderReplaceInfoSheet() => ReaderReplaceInfoSheetBody(state: state),
+      ReaderContentProcessesSheet() => ReaderContentProcessesSheetBody(
+        state: state,
+        onIntent: _viewModel.onIntent,
+      ),
       ReaderFutureFeaturesSheet() => const ReaderFutureFeaturesSheetBody(),
       ReaderChangeChapterSourceSheet(
         chapterIndex: final int chapterIndex,
         chapterTitle: final String chapterTitle,
       ) =>
-        state.book == null
+        currentBook == null
             ? const SizedBox.shrink()
             : _ChangeChapterSourceSheetHost(
                 dependencies: widget.dependencies,
-                book: state.book!,
+                book: currentBook,
                 chapterIndex: chapterIndex,
                 chapterTitle: chapterTitle,
                 totalChapterCount: state.chapters.length,
@@ -480,11 +518,11 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
                 },
                 onDismiss: () => Navigator.of(context).pop(),
               ),
-      ReaderDownloadSheet() => state.book == null
+      ReaderDownloadSheet() => currentBook == null
           ? const SizedBox.shrink()
           : ReaderDownloadSheetBody(
               coordinator: widget.dependencies.downloadCoordinator,
-              book: state.book!,
+              book: currentBook,
               chapters: state.chapters,
               currentChapterIndex: state.currentChapterIndex,
             ),

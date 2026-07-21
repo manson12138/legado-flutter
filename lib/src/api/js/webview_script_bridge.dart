@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -73,6 +74,9 @@ abstract interface class WebViewScriptBridge {
 /// iOS 底层由 WKWebView 执行，Android 底层由系统 WebView 执行；Cookie 始终通过
 /// [LegadoCookieManager] 与统一 HTTP 会话双向同步，页面关闭后不保留 Delegate 或脚本 Handler。
 final class FlutterWebViewScriptBridge implements WebViewScriptBridge {
+  /// Android `BackstageWebView` 在页面完成后固定等待一秒再读取 DOM 或执行 `webJs`。
+  static const Duration _androidPageSettleDelay = Duration(seconds: 1);
+
   /// 创建页面脚本桥。
   FlutterWebViewScriptBridge(this._cookieManager, this._webViewCookieBridge);
 
@@ -156,14 +160,14 @@ final class FlutterWebViewScriptBridge implements WebViewScriptBridge {
     final String initialCookieHeader = await _cookieManager.getCookieHeader(request.uri);
     await _webViewCookieBridge.writeCookies(request.uri, initialCookieHeader);
     await session.load(request);
-    if (request.delay > Duration.zero) {
-      await Future<void>.delayed(request.delay);
-      session.throwIfCancelled();
-    }
-    /// 页面脚本为空时返回完整 DOM；非空时返回脚本结构化结果。
-    final Object? rawValue = await session.evaluate(request.script);
-    /// sourceMode 提供正则时，从页面结果提取首个匹配或首个捕获组。
-    final Object? value = _extractSourceValue(rawValue, request.sourceRegex);
+    /// 原生固定等待与书源 `webViewDelayTime` 相加，给动态资源和页面脚本留出稳定时间。
+    final Duration pageSettleDelay = _androidPageSettleDelay + request.delay;
+    await Future<void>.delayed(pageSettleDelay);
+    session.throwIfCancelled();
+    /// `sourceRegex` 优先匹配页面实际加载的资源 URL，贴近 Android SnifferWebClient。
+    final String? resourceUrl = await session.firstMatchingResourceUrl(request.sourceRegex);
+    /// 未命中资源 URL 时继续返回页面脚本结果或完整 DOM，保持动态正文的回退能力。
+    final Object? value = resourceUrl ?? await session.evaluate(request.script);
     /// 重定向完成后的页面地址，用于 Cookie 回写和相对资源基准。
     final Uri finalUri = await session.currentUri(request.uri);
     await _syncCookiesBack(request.uri);
@@ -180,21 +184,6 @@ final class FlutterWebViewScriptBridge implements WebViewScriptBridge {
     if (cookieHeader != null && cookieHeader.trim().isNotEmpty) {
       await _cookieManager.replaceCookieHeader(uri, cookieHeader);
     }
-  }
-
-  /// 根据可选正则返回首个捕获值，未匹配时返回空字符串以兼容 Android sourceMode。
-  Object? _extractSourceValue(Object? rawValue, String? sourceRegex) {
-    if (sourceRegex == null || sourceRegex.trim().isEmpty) {
-      return rawValue;
-    }
-    /// WebView 脚本或 DOM 转成的待匹配文本。
-    final String text = rawValue?.toString() ?? '';
-    /// 用户书源提供的正则表达式；语法错误会进入受控 bridge 异常。
-    final RegExpMatch? match = RegExp(sourceRegex).firstMatch(text);
-    if (match == null) {
-      return '';
-    }
-    return match.groupCount > 0 ? match.group(1) ?? '' : match.group(0) ?? '';
   }
 
   /// 终止全部页面并永久关闭桥，供应用进程释放原生 WebView 资源。
@@ -256,11 +245,22 @@ final class _ManagedWebViewSession {
     );
     await controller.setNavigationDelegate(
       NavigationDelegate(
+        onPageStarted: (String url) {
+          /// 尽早扩大资源时间线并安装观察器，覆盖页面完成前后的动态接口和媒体请求。
+          unawaited(_installResourceObserver(controller));
+        },
         onPageFinished: (String url) {
-          /// 页面可能因重定向多次完成，只消费第一个最终完成信号。
+          /// 页面可能因重定向多次完成，只消费第一个完成信号。
           final Completer<void>? pageLoaded = _pageLoaded;
           if (pageLoaded != null && !pageLoaded.isCompleted) {
-            pageLoaded.complete();
+            /// 页面开始阶段注入可能落在旧文档，再在当前文档补装并读取缓冲资源。
+            unawaited(
+              _installResourceObserver(controller).whenComplete(() {
+                if (!pageLoaded.isCompleted) {
+                  pageLoaded.complete();
+                }
+              }),
+            );
           }
         },
         onWebResourceError: (WebResourceError error) {
@@ -361,6 +361,93 @@ final class _ManagedWebViewSession {
     final Object value = await controller.runJavaScriptReturningResult(source);
     throwIfCancelled();
     return value;
+  }
+
+  /// 从页面 Performance Resource Timing 中返回首个命中 `sourceRegex` 的资源 URL。
+  ///
+  /// Flutter 官方 WebView 没有统一暴露 Android `onLoadResource` 回调，因此这里在页面完成后读取
+  /// 浏览器已经记录的资源条目。它覆盖普通脚本、接口、样式和媒体请求，同时保持 Android/iOS 共用逻辑。
+  Future<String?> firstMatchingResourceUrl(String? sourceRegex) async {
+    /// 去除首尾空白后的书源资源正则。
+    final String normalizedRegex = sourceRegex?.trim() ?? '';
+    if (normalizedRegex.isEmpty) {
+      return null;
+    }
+    throwIfCancelled();
+    /// 已完成初始化的 Controller。
+    final WebViewController? controller = _controller;
+    if (controller == null) {
+      throw const JsEngineException(
+        kind: JsFailureKind.bridge,
+        message: '页面 WebView 尚未初始化',
+      );
+    }
+    /// 页面已加载资源地址的 JSON 文本，避免把任意页面对象直接传回 Dart。
+    final Object rawResourceUrls = await controller.runJavaScriptReturningResult('''
+      JSON.stringify(
+        (globalThis.__legadoLoadedResourceUrls || []).concat(
+          performance.getEntriesByType('resource').map(function(entry) {
+            return String(entry.name || '');
+          })
+        )
+      )
+    ''');
+    /// 平台插件可能返回 JSON 字符串或已解码列表，这里统一成字符串列表。
+    final List<String> resourceUrls = _decodeResourceUrls(rawResourceUrls);
+    /// Dart 正则与普通规则引擎保持同一跨平台语法和异常边界。
+    final RegExp matcher = RegExp(normalizedRegex);
+    for (final String resourceUrl in resourceUrls) {
+      if (matcher.hasMatch(resourceUrl)) {
+        return resourceUrl;
+      }
+    }
+    return null;
+  }
+
+  /// 宽容解码 WebView 返回的资源 URL 数组；未知平台返回形态按空列表处理。
+  List<String> _decodeResourceUrls(Object rawValue) {
+    if (rawValue is List) {
+      return rawValue.map((Object? value) => value?.toString() ?? '').toList(growable: false);
+    }
+    if (rawValue is! String || rawValue.trim().isEmpty) {
+      return const <String>[];
+    }
+    try {
+      /// 首次解码后的页面 JSON 值。
+      Object? decoded = jsonDecode(rawValue);
+      if (decoded is String) {
+        decoded = jsonDecode(decoded);
+      }
+      if (decoded is List) {
+        return decoded.map((Object? value) => value?.toString() ?? '').toList(growable: false);
+      }
+    } on FormatException {
+      return const <String>[];
+    }
+    return const <String>[];
+  }
+
+  /// 在当前文档尽早安装资源观察器，弥补 Flutter WebView 未统一暴露 `onLoadResource` 的限制。
+  Future<void> _installResourceObserver(WebViewController controller) async {
+    try {
+      await controller.runJavaScript('''
+        (function() {
+          performance.setResourceTimingBufferSize(2000);
+          globalThis.__legadoLoadedResourceUrls = globalThis.__legadoLoadedResourceUrls || [];
+          if (globalThis.__legadoResourceObserver) {
+            return;
+          }
+          globalThis.__legadoResourceObserver = new PerformanceObserver(function(list) {
+            list.getEntries().forEach(function(entry) {
+              globalThis.__legadoLoadedResourceUrls.push(String(entry.name || ''));
+            });
+          });
+          globalThis.__legadoResourceObserver.observe({type: 'resource', buffered: true});
+        })();
+      ''');
+    } catch (error) {
+      // 页面刚开始导航时文档可能已经被平台替换；最终仍会读取 Performance Resource Timing。
+    }
   }
 
   /// 注入 Android WebView 兼容的最小 `window.legado` 结果桥，不暴露网络或文件能力。

@@ -3,6 +3,11 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- M5：扫一扫导入书源只在扫码页面申请相机权限。 -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- P1-05：Android 串行离线下载使用数据同步前台服务维持后台运行。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Android 13+ 首次后台下载时由宿主动态申请。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- M5：相机是可选能力，无摄像头设备仍可安装并使用文件或剪贴板导入。 -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
 
@@ -33,6 +38,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- P1-05：只承载下载通知和进程优先级，章节状态机仍由 Dart 单例协调器管理。 -->
+        <service
+            android:name=".DownloadForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

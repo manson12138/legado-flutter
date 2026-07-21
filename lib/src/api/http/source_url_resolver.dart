@@ -11,6 +11,9 @@ final class ResolvedSourceRequest {
     required this.charset,
     required this.retryCount,
     this.bodyJavaScript,
+    this.useWebView = false,
+    this.webViewJavaScript,
+    this.webViewDelay = Duration.zero,
   });
 
   /// 可交给统一网络层执行的请求。
@@ -24,6 +27,15 @@ final class ResolvedSourceRequest {
 
   /// Android URL 选项中的 `bodyJs`，由上层在响应解码后执行。
   final String? bodyJavaScript;
+
+  /// 是否使用后台页面环境完成请求。
+  final bool useWebView;
+
+  /// 页面加载完成后执行的 URL 选项 `webJs`。
+  final String? webViewJavaScript;
+
+  /// 页面加载完成后、执行脚本前的等待时间。
+  final Duration webViewDelay;
 }
 
 /// URL 普通部分与 Android JavaScript 选项的只读解析结果。
@@ -121,6 +133,11 @@ final class SourceUrlResolver {
       charset: _asString(option['charset']),
       retryCount: _asInt(option['retry']) ?? 0,
       bodyJavaScript: _asString(option['bodyJs']),
+      useWebView: _isTruthyOption(option['webView']),
+      webViewJavaScript: _asString(option['webJs']),
+      webViewDelay: Duration(
+        milliseconds: (_asInt(option['webViewDelayTime']) ?? 0).clamp(0, 60000).toInt(),
+      ),
     );
   }
 
@@ -252,19 +269,11 @@ final class SourceUrlResolver {
     return result;
   }
 
-  /// 拒绝 M3 不支持的 JS、WebView、自定义 DNS 与服务端选项。
+  /// 拒绝尚未执行的 JavaScript、自定义 DNS、服务端和二进制媒体选项。
   void _rejectUnsupportedOptions(
     Map<String, Object?> option, {
     required bool javaScriptOptionsEvaluated,
   }) {
-    /// Android 除空、false 与字符串 false 外均视为启用 WebView。
-    final bool webView = _isTruthyOption(option['webView']);
-    if (webView || _asString(option['webJs'])?.isNotEmpty == true) {
-      throw const UnifiedHttpException(
-        HttpFailureKind.unsupportedOption,
-        'WebView 请求属于 M4 平台能力',
-      );
-    }
     if (!javaScriptOptionsEvaluated &&
         (_asString(option['js'])?.isNotEmpty == true ||
             _asString(option['bodyJs'])?.isNotEmpty == true)) {

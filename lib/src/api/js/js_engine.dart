@@ -9,6 +9,7 @@ enum JsFailureKind {
   syntax,
   runtime,
   bridge,
+  interactionRequired,
   unsupportedApi,
   closed,
   unknown,

@@ -23,6 +23,7 @@ final class BookSearchCoordinator {
     required HttpCancellationTokenFactory cancellationTokenFactory,
     required AppLogger logger,
     this.maximumConcurrency = 4,
+    this.recordSourceOutcomes = true,
   }) : _sourceGateway = sourceGateway,
        _standardService = standardService,
        _adultContentGateway = adultContentGateway,
@@ -46,6 +47,9 @@ final class BookSearchCoordinator {
 
   /// 同时运行的最大书源数，默认与 Android 常用线程数保持保守上限。
   final int maximumConcurrency;
+
+  /// 搜索成功时是否立即调整书源分数；自动下载换源关闭此项，改为整书批次统一评分。
+  final bool recordSourceOutcomes;
 
   /// 读取当前启用书源快照。
   Future<List<BookSource>> loadEnabledSources() async {
@@ -166,11 +170,13 @@ final class BookSearchCoordinator {
             );
             onEvent(BookSearchResultsEvent(source: source, books: books));
             /// 搜索成功累加书源成功率；只在成功时加分，失败不扣分。
-            unawaited(
-              _sourceGateway
-                  .recordSourceOutcome(source.bookSourceUrl, delta: 1)
-                  .catchError((Object _) {}),
-            );
+            if (recordSourceOutcomes) {
+              unawaited(
+                _sourceGateway
+                    .recordSourceOutcome(source.bookSourceUrl, delta: 1)
+                    .catchError((Object _) {}),
+              );
+            }
           }
         } catch (error, stackTrace) {
           if (!run.isCancelled) {
@@ -292,6 +298,9 @@ final class BookSearchCoordinator {
   /// 将异常转换为不泄漏请求数据的稳定分类。
   String _failureCategory(Object error) {
     if (error is JsEngineException) {
+      if (error.kind == JsFailureKind.interactionRequired) {
+        return '需要登录或验证';
+      }
       return 'JavaScript';
     }
     if (error is TimeoutException) {

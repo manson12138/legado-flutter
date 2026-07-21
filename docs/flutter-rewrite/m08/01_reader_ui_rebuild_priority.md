@@ -1,6 +1,6 @@
 # 小说正文阅读界面 UI 重构优先级
 
-> 文档状态：`IN_PROGRESS / P0～P4 可落地项已写入 Flutter，标题排版、段落排版、长章节首屏增量分页和后台续算已接入；单章换源和离线下载（前台运行范围）已接入，等待用户运行验证`  
+> 文档状态：`IN_PROGRESS / P0～P4 可落地项已写入 Flutter，标题排版、段落排版、长章节首屏增量分页和后台续算已接入；单章换源和离线下载管理已接入，等待用户运行验证`  
 > 创建日期：2026-07-16  
 > 适用范围：Flutter `ui/reader/` 小说正文阅读界面对齐 Android `ui/book/read/` 当前阅读界面。  
 > 不包含范围：书籍详情页、书架页、搜索页、漫画阅读器完整能力、音频书完整能力、RSS 阅读器、原 Android 代码修改。
@@ -158,7 +158,7 @@ AI 未运行 `flutter analyze`、`dart analyze`、测试、构建、格式化或
 - 方向锁定使用 Flutter `SystemChrome.setPreferredOrientations`，退出阅读器时恢复跟随系统；
 - 平台电量或亮度不可用时降级为隐藏电量或跟随系统，不阻断正文阅读。
 
-2026-07-20 已接入单章换源和离线下载（前台运行范围），详见
+2026-07-21 已接入单章换源，以及具备平台后台续传边界的离线下载管理，详见
 [m11/chapter_change_source](../m11/chapter_change_source/README.md) 和
 [m11/offline_download](../m11/offline_download/README.md)：
 
@@ -168,11 +168,11 @@ AI 未运行 `flutter analyze`、`dart analyze`、测试、构建、格式化或
 - 单章换源正文替换写入 `ReaderCacheGateway.saveChapterContent(..., deadline: 0)`，复用 `caches`
   表已有的“永久缓存”语义；`ReadBookCoordinator` 新增 `invalidateChapter` 清理内存 LRU，避免正在
   阅读的章节被旧内存内容挡住新缓存；"刷新本章"天然充当撤销。
-- 离线下载新增 `download_tasks` 表（schemaVersion 2→3）、`DownloadTaskDao`/`DownloadGateway`/
-  `DownloadRepository` 和 App 级单例 `model/reader/download_coordinator.dart`：`DownloadCoordinator`
-  （事件驱动调度、有界并发、失败重试封顶 3 次）；正文同样写入永久缓存，与单章换源共用存储路径。
-- 离线下载明确不包含 Android 式前台服务/通知、暂停恢复和跨书全局缓存管理仪表盘；应用被系统回收
-  或退出后下载停止，下次打开只恢复继续调度，不补下线期间的下载。
+- 离线下载使用 `download_tasks` 表（当前 schemaVersion 6）、`DownloadTaskDao`/`DownloadGateway`/
+  `DownloadRepository` 和 App 级 `DownloadCoordinator`；全局固定单 worker、真实请求至少间隔 1.5 秒、
+  单次请求 45 秒超时、失败退避并封顶 5 次，达到上限后跳过本章继续队列；正文与单章换源共用永久缓存。
+- 独立 `/downloads` 页面支持跨书范围入队、暂停恢复、失败重试和删除离线正文；Android 接入
+  `dataSync` 前台服务通知，iOS 只在系统有限后台窗口内继续，窗口结束后持久化等待下次续传。
 - "后续能力"面板移除"单章换源"和"离线下载"两项禁用占位。
 
 AI 未运行 `flutter analyze`、`dart analyze`、测试、构建或应用启动；是否可用以用户运行结果为准。
@@ -306,7 +306,7 @@ P4 目标：登记 Android 阅读器完整功能，但必须等对应业务子�
 | 项目 | Android 对照 | Flutter 处理策略 |
 |---|---|---|
 | 单章换源 | `ChangeChapterSourceSheet` | 已接入（[m11/chapter_change_source](../m11/chapter_change_source/README.md)），等待用户真机验收。 |
-| 离线下载 | `DownloadSheet`、`DownloadChapters` | 已接入前台运行范围（[m11/offline_download](../m11/offline_download/README.md)）；Android 式前台服务/通知、暂停恢复和跨书仪表盘仍延后。 |
+| 离线下载 | `DownloadSheet`、`DownloadChapters`、`BookCacheManageScreen`、`CacheBookService` | 已接入范围下载、固定串行、跨书管理、暂停恢复和 Android 前台通知（[m11/offline_download](../m11/offline_download/README.md)）；iOS 按有限后台窗口降级，漫画/图片下载未实现。 |
 | 朗读/TTS | `ReadAloudSheet`、`ReadAloudConfigSheet`、HTTP TTS 系列 Intent | 单独作为 TTS Feature 迁移，包含平台音频焦点、媒体按钮、后台播放和缓存清理。 |
 | 自动翻页 | `AutoReadSheet`、`AutoPager` | 等分页/滚动引擎稳定后接入速度、方向、暂停和退出保存。 |
 | 内容编辑 | `ContentEditSheet`、`SaveChapterContent` | 先支持本地书或缓存章节，再评估网络源回写；不能误改书源原始数据。 |
@@ -376,7 +376,7 @@ P3/P4 验收：
 依赖底层子系统后才能继续的项目：
 
 - 自动亮度策略、实体按键真机兼容和更完整的系统栏策略；
-- 单章换源、离线下载队列（应用前台运行范围）已接入，等待真机验收；离线下载的 Android 式前台服务/通知、暂停恢复仍延后；TTS/后台音频、自动翻页、正文编辑、阅读记录和同步进度仍未开始；
+- 单章换源、离线下载与跨书下载管理已接入，等待真机验收；iOS 长时间后台下载受系统限制，漫画/图片下载未实现；TTS/后台音频、自动翻页、正文编辑、阅读记录和同步进度仍未开始；
 - 正文图片操作、UMD/MOBI/AZW/PDF/压缩包完整阅读、AI 总结/清理/改写；
 - JavaScript 正文书源仍受 M4 门禁约束，不能因阅读 UI 完成而宣称真实书源全量可用。
 

@@ -115,4 +115,29 @@ final class CacheDao {
     );
     _database.changeNotifier.notifyTables(<String>{DatabaseTables.caches});
   }
+
+  /// 批量删除一组已解析的缓存键，并在整批提交后只通知一次观察流。
+  Future<void> deleteAll(List<String> keys) async {
+    if (keys.isEmpty) {
+      return;
+    }
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    _database.logOperation(
+      operation: 'BATCH_DELETE',
+      table: DatabaseTables.caches,
+      itemCount: keys.length,
+    );
+    /// 把全部缓存删除加入同一 SQLite 批次。
+    final Batch batch = database.batch();
+    for (final String key in keys) {
+      batch.delete(
+        DatabaseTables.caches,
+        where: '`key` = ?',
+        whereArgs: <Object?>[key],
+      );
+    }
+    await batch.commit(noResult: true);
+    _database.changeNotifier.notifyTables(<String>{DatabaseTables.caches});
+  }
 }

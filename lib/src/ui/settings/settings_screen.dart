@@ -17,6 +17,9 @@ final class SettingsScreen extends StatelessWidget {
     required this.onOpenThemeManagement,
     required this.onOpenLanguageManagement,
     required this.onOpenBookSources,
+    required this.onOpenDownloadManagement,
+    required this.allowSearchSourceInteraction,
+    required this.onChangeSearchSourceInteraction,
     required this.onOpenLogManagement,
     required this.onOpenAbout,
     this.showBackButton = true,
@@ -46,6 +49,15 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 打开书源管理的回调。
   final VoidCallback onOpenBookSources;
+
+  /// 打开跨书离线下载管理页的回调。
+  final VoidCallback onOpenDownloadManagement;
+
+  /// 搜索时是否允许书源脚本申请登录或验证交互；默认关闭。
+  final bool allowSearchSourceInteraction;
+
+  /// 用户切换搜索期书源登录与验证交互权限时的回调。
+  final ValueChanged<bool> onChangeSearchSourceInteraction;
 
   /// 打开日志管理页的导航回调。
   final VoidCallback onOpenLogManagement;
@@ -125,6 +137,16 @@ final class SettingsScreen extends StatelessWidget {
                     onTap: onOpenBookSources,
                   ),
                   _SettingsItem(
+                    icon: Icons.download_for_offline_outlined,
+                    title: '下载管理',
+                    subtitle: '串行下载、暂停恢复和离线内容管理',
+                    onTap: onOpenDownloadManagement,
+                  ),
+                  _SearchSourceInteractionSwitch(
+                    initialValue: allowSearchSourceInteraction,
+                    onChanged: onChangeSearchSourceInteraction,
+                  ),
+                  _SettingsItem(
                     icon: Icons.description_outlined,
                     title: '日志管理',
                     subtitle: '查看、分享或删除运行日志',
@@ -133,7 +155,7 @@ final class SettingsScreen extends StatelessWidget {
                   _SettingsItem(
                     icon: Icons.info_outline,
                     title: '关于',
-                    subtitle: 'Legado Flutter 1.0.0+1',
+                    subtitle: 'Legado Flutter 1.0.0+5',
                     onTap: onOpenAbout,
                   ),
                 ],
@@ -186,6 +208,66 @@ final class SettingsScreen extends StatelessWidget {
       ThemeMode.light => '浅色',
       ThemeMode.dark => '深色',
     };
+  }
+}
+
+/// 展示并立即反馈搜索期书源登录与验证交互开关。
+final class _SearchSourceInteractionSwitch extends StatefulWidget {
+  /// 创建默认关闭、可由持久设置恢复的交互权限开关。
+  const _SearchSourceInteractionSwitch({
+    required this.initialValue,
+    required this.onChanged,
+  });
+
+  /// 路由从持久设置读取到的初始值。
+  final bool initialValue;
+
+  /// 保存新值的回调。
+  final ValueChanged<bool> onChanged;
+
+  /// 创建开关的本地即时反馈状态。
+  @override
+  State<_SearchSourceInteractionSwitch> createState() =>
+      _SearchSourceInteractionSwitchState();
+}
+
+/// 管理搜索期书源交互开关的即时视觉状态。
+final class _SearchSourceInteractionSwitchState
+    extends State<_SearchSourceInteractionSwitch> {
+  /// 当前开关值；写入持久层期间也立即更新界面。
+  late bool _value;
+
+  /// 在 State 绑定 Widget 后应用默认关闭或持久恢复值。
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.initialValue;
+  }
+
+  /// 持久设置异步读取完成后，用真实值替换首帧使用的默认关闭状态。
+  @override
+  void didUpdateWidget(covariant _SearchSourceInteractionSwitch oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialValue != widget.initialValue) {
+      _value = widget.initialValue;
+    }
+  }
+
+  /// 构建带安全说明的开关列表项。
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      secondary: const Icon(Icons.login_outlined, size: 20),
+      title: const Text('搜索时允许书源登录与验证提示'),
+      subtitle: const Text('默认关闭；关闭时需要交互的书源会被跳过'),
+      value: _value,
+      onChanged: (bool value) {
+        setState(() {
+          _value = value;
+        });
+        widget.onChanged(value);
+      },
+    );
   }
 }
 

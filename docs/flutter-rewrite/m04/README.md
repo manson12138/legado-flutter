@@ -11,9 +11,9 @@
 M4 不能进入 `ANDROID_READY`，原因有两项：
 
 1. 用户已经确认使用合集中的代表书源，但尚未完成搜索、详情、目录、正文四段真机对照。
-2. Android Rhino 的 `java.ajax/connect/get/post` 是同步调用；Dart 统一网络层是异步调用，JSF 桥会返回 Promise。未使用 `await` 的历史脚本会出现可诊断失败，不能宣称透明兼容。
+2. Android Rhino 的 `java.ajax/connect/get/post` 是同步调用；Flutter 已加入“等待 Dart Future 后按宿主调用记录重放规则”的同步外观原型，但尚未取得 S4 与复杂真实书源结果，不能宣称透明兼容。
 
-仓库自带“消消乐听书”只能作为 API 扫描证据，不能替代用户确认样本。它使用同步 `java.connect(...).body()`、登录 Header 与模型 getter，当前原型能识别相关 API，但同步网络语义仍不兼容。
+仓库自带“消消乐听书”只能作为 API 扫描证据，不能替代用户确认样本。它使用同步 `java.connect(...).body()`、登录 Header 与模型 getter；同步结果重放已经接入，模型 getter 和登录 Header 语义仍需分别收口。
 
 ## 已实现
 
@@ -36,6 +36,14 @@ M4 不能进入 `ANDROID_READY`，原因有两项：
 - JSF 宿主函数统一返回结构化成功/失败信封，Dart `unsupportedApi/bridge` 不再被当作普通对象或 URL 文本继续执行。
 - `source.getVariable/putVariable` 复用 Flutter 独立缓存，并在书源编辑器提供自定义变量入口；脚本开始前预载变量以保持同步 getter 语义。
 - `Packages.org.jsoup.Jsoup` 与直接 `org.jsoup.Jsoup` 已建立跨平台只读白名单，覆盖 `parse/select/size/get/first/last/attr/text/html`；需要可变 DOM 的 `remove` 仍明确不支持。
+- JSF 异步宿主调用已接入有限同步重放：网络、Cookie、持久缓存和 WebView Future 完成后从头重放规则，既有宿主结果同步复用，旧脚本无需增加 `await`；响应对象不再被再次包装成 Promise。
+- Book/Chapter 已使用规则链共享的受控模型状态，支持 getter/setter、`getVariable/putVariable/getVariableMap` 和 `java.put/get` 的章节→书籍→规则→书源读取优先级；字段修改尚未宣称自动持久化。
+- 正文脚本已获得 `book/chapter/nextChapterUrl`，阅读、相邻章预加载、离线下载和单章换源均传入对应上下文。
+- `loginCheckJs` 已在 `bodyJs` 后执行；搜索交互开关默认关闭并持久化，交互 API 被拒绝时返回 `interactionRequired`，不会弹出窗口。
+- `LegadoScriptExecutionState` 已贯通 URL、响应脚本、登录检测与字段解析；普通规则支持常见非嵌套 `@put:{key: rule}` 和 `@get:{key}`，变量按章节、书籍、规则临时状态、书源状态读取。
+- 目录 `preUpdateJs` 已改为仅在用户显式刷新时于首请求前执行一次，对齐 Android `runPerJs`；脚本直接修改的 `bookUrl/tocUrl` 可决定首个目录请求，`java.reGetBook/refreshTocUrl` 通过仅限请求前脚本的受控回调执行同书源精确搜索或详情刷新。
+- URL `webView/webJs/webViewDelayTime` 与正文 `webJs/sourceRegex` 已接入后台 WebView；GET 直接加载页面，POST 先走统一 HTTP 再加载 HTML，Cookie、取消和超时复用已有边界。
+- `sourceRegex` 会在页面开始时安装 PerformanceObserver、扩大 Resource Timing 缓冲区并持续记录资源 URL；Flutter 官方 WebView 没有统一的原生实时子资源回调，因此仍需动态资源书源双端验证。
 
 ## 尚未证明
 
@@ -43,8 +51,12 @@ M4 不能进入 `ANDROID_READY`，原因有两项：
 - 取消监听是否能在所有平台立即触发 QuickJS interrupt handler。
 - JSF 1.1.0 的最终 APK/IPA 增量和内存峰值。
 - Rhino Date、Regex、数字、getter/setter 与异常堆栈的全部兼容差异。
-- 同步网络历史脚本的跨平台解决方案。
+- 同步重放对 S4、链式响应对象、多次网络调用、取消以及脚本全局副作用的真实书源结果。
 - 任意 `Packages.*`、JavaImporter、JavaAdapter、Android API 或 Java 反射；当前 Jsoup 仅是固定只读白名单。
 - `java.createSymmetricCrypto` 需要新增经过评估的跨平台 AES/DES 依赖，当前不能用哈希库或伪对象替代。
 - M10 WebView/Cookie 实现尚无 S6～S8 的 Android/iOS 真机结果，不能据此关闭 M4。
-- 历史脚本同步调用 `java.webView` 时仍可能观察到 Promise；页面桥实现不等于 Rhino 同步调用已透明兼容。
+- 历史脚本同步调用 `java.webView` 已进入同一重放协议，但页面桥、DOM 回传和用户验证交互仍需 S6～S7 双平台确认。
+- 开启搜索交互开关后，可见登录/网页验证、图片验证码和应用级 FIFO 单提示队列已经接入；用户取消只结束当前书源，页面关闭后才派发下一条，等待 S6～S7 Android/iOS 真机验证。
+- `preUpdateJs` 的直接模型修改、`java.reGetBook()` 和 `java.refreshTocUrl()` 已进入验证；两个 Helper 在其他脚本阶段仍会按原生约束明确拒绝。
+- `sourceRegex` 的 Resource Timing 方案尚未证明能覆盖原生 `onLoadResource` 可观察、但 Web Performance Timeline 不保留的全部资源请求。
+- `@put/@get` 已覆盖常见状态传递，但原生 `SourceRule` 的复杂组合符、替换表达式和阶段边界尚无命中样本结论。

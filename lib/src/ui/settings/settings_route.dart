@@ -7,7 +7,7 @@ import '../../domain/model/book.dart';
 import 'settings_screen.dart';
 
 /// 连接“我的”页面、书架历史流与应用路由的轻量入口。
-final class SettingsRoute extends StatelessWidget {
+final class SettingsRoute extends StatefulWidget {
   /// 创建“我的”页路由。
   const SettingsRoute({
     required this.dependencies,
@@ -29,47 +29,81 @@ final class SettingsRoute extends StatelessWidget {
   /// 是否嵌入应用一级导航；嵌入时不显示返回按钮。
   final bool embedded;
 
+  /// 创建持有一次性设置读取 Future 的路由状态。
+  @override
+  State<SettingsRoute> createState() => _SettingsRouteState();
+}
+
+/// 连接“我的”页面数据，并避免构建期间重复读取交互设置。
+final class _SettingsRouteState extends State<SettingsRoute> {
+  /// 首次进入页面时读取一次的搜索期交互设置。
+  late final Future<bool> _searchInteractionSetting;
+
+  /// 在 State 已绑定 Widget 后创建一次持久设置读取任务。
+  @override
+  void initState() {
+    super.initState();
+    _searchInteractionSetting =
+        widget.dependencies.standardBookSourceService.loadSearchInteractionSetting();
+  }
+
   /// 构建“我的”页并注入阅读历史、主题、书源、日志和关于回调。
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
-      valueListenable: themeModeListenable,
+      valueListenable: widget.themeModeListenable,
       builder: (BuildContext context, ThemeMode themeMode, Widget? child) {
         return StreamBuilder<List<Book>>(
-          stream: dependencies.bookshelfGateway.watchBookshelf(),
+          stream: widget.dependencies.bookshelfGateway.watchBookshelf(),
           initialData: const <Book>[],
           builder: (BuildContext context, AsyncSnapshot<List<Book>> snapshot) {
             /// 只保留真正打开过正文的书籍，并按最近阅读时间倒序展示。
             final List<Book> recentBooks = List<Book>.of(snapshot.data ?? const <Book>[])
               ..removeWhere((Book book) => book.durChapterTime <= 0)
               ..sort((Book left, Book right) => right.durChapterTime.compareTo(left.durChapterTime));
-            return SettingsScreen(
-              recentBooks: recentBooks,
-              themeMode: themeMode,
-              onBack: () {
-                Navigator.of(context).pop();
-              },
-              showBackButton: !embedded,
-              onOpenBook: (Book book) {
-                Navigator.of(context).pushNamed(AppRoute.reader, arguments: book.bookUrl);
-              },
-              onOpenAllHistory: () {
-                _showReadingHistory(context, recentBooks);
-              },
-              onOpenThemeManagement: () {
-                _showThemeManagement(context, themeMode);
-              },
-              onOpenLanguageManagement: () {
-                _showLanguageManagement(context);
-              },
-              onOpenBookSources: () {
-                Navigator.of(context).pushNamed(AppRoute.bookSourceManagement);
-              },
-              onOpenLogManagement: () {
-                Navigator.of(context).pushNamed(AppRoute.logManagement);
-              },
-              onOpenAbout: () {
-                Navigator.of(context).pushNamed(AppRoute.about);
+            return FutureBuilder<bool>(
+              future: _searchInteractionSetting,
+              initialData: false,
+              builder: (BuildContext context, AsyncSnapshot<bool> interactionSnapshot) {
+                return SettingsScreen(
+                  recentBooks: recentBooks,
+                  themeMode: themeMode,
+                  allowSearchSourceInteraction: interactionSnapshot.data ?? false,
+                  onChangeSearchSourceInteraction: (bool allowed) {
+                    widget.dependencies.standardBookSourceService
+                        .setSearchInteractionAllowed(allowed);
+                  },
+                  onBack: () {
+                    Navigator.of(context).pop();
+                  },
+                  showBackButton: !widget.embedded,
+                  onOpenBook: (Book book) {
+                    Navigator.of(context).pushNamed(AppRoute.reader, arguments: book.bookUrl);
+                  },
+                  onOpenAllHistory: () {
+                    _showReadingHistory(context, recentBooks);
+                  },
+                  onOpenThemeManagement: () {
+                    _showThemeManagement(context, themeMode);
+                  },
+                  onOpenLanguageManagement: () {
+                    _showLanguageManagement(context);
+                  },
+                  onOpenBookSources: () {
+                    Navigator.of(context).pushNamed(AppRoute.bookSourceManagement);
+                  },
+                  onOpenDownloadManagement: () {
+                    Navigator.of(context).pushNamed(
+                      AppRoute.downloadManagement,
+                    );
+                  },
+                  onOpenLogManagement: () {
+                    Navigator.of(context).pushNamed(AppRoute.logManagement);
+                  },
+                  onOpenAbout: () {
+                    Navigator.of(context).pushNamed(AppRoute.about);
+                  },
+                );
               },
             );
           },
@@ -142,7 +176,7 @@ final class SettingsRoute extends StatelessWidget {
             groupValue: themeMode,
             onChanged: (ThemeMode? mode) {
               if (mode != null) {
-                onChangeThemeMode(mode);
+                widget.onChangeThemeMode(mode);
                 Navigator.of(dialogContext).pop();
               }
             },

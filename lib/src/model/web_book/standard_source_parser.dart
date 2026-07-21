@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
 import '../../api/http/http_contract.dart';
@@ -9,6 +10,7 @@ import '../../api/js/script_context.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
+import '../../domain/model/reader_content_markup.dart';
 import '../../domain/model/search_book.dart';
 import '../analyze_rule/legado_javascript_service.dart';
 import '../analyze_rule/legado_rule_evaluator.dart';
@@ -164,6 +166,8 @@ final class StandardBookSourceParser {
     required int receivedAt,
     required String keyword,
     required int page,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptInteractionPolicy interactionPolicy = LegadoScriptInteractionPolicy.deny,
     HttpCancellationToken? cancellationToken,
   }) {
     if (_ruleEvaluator.containsJavaScript(source.ruleSearch)) {
@@ -174,6 +178,8 @@ final class StandardBookSourceParser {
         receivedAt,
         keyword,
         page,
+        scriptExecutionState,
+        interactionPolicy,
         cancellationToken,
       );
     }
@@ -186,12 +192,20 @@ final class StandardBookSourceParser {
   Future<ParsedBookInfo> parseBookInfo({
     required BookSource source,
     required Book book,
+    LegadoScriptExecutionState? scriptExecutionState,
     required String body,
     required Uri finalUri,
     HttpCancellationToken? cancellationToken,
   }) {
     if (_ruleEvaluator.containsJavaScript(source.ruleBookInfo)) {
-      return _parseBookInfoAsync(source, book, body, finalUri, cancellationToken);
+      return _parseBookInfoAsync(
+        source,
+        book,
+        scriptExecutionState,
+        body,
+        finalUri,
+        cancellationToken,
+      );
     }
     return Isolate.run<ParsedBookInfo>(
       () => _parseBookInfoSync(source, book, body, finalUri),
@@ -202,6 +216,7 @@ final class StandardBookSourceParser {
   Future<ParsedTocPage> parseTocPage({
     required BookSource source,
     required Book book,
+    LegadoScriptExecutionState? scriptExecutionState,
     required String body,
     required Uri finalUri,
     required int startIndex,
@@ -210,11 +225,11 @@ final class StandardBookSourceParser {
     /// 强类型目录规则，用于识别无需显式 `@js:` 标记的专属脚本字段。
     final TocSourceRule rule = const BookSourceRuleDecoder().decodeToc(source);
     if (_ruleEvaluator.containsJavaScript(source.ruleToc) ||
-        rule.preUpdateJs?.trim().isNotEmpty == true ||
         rule.formatJs?.trim().isNotEmpty == true) {
       return _parseTocAsync(
         source,
         book,
+        scriptExecutionState,
         body,
         finalUri,
         startIndex,
@@ -229,13 +244,27 @@ final class StandardBookSourceParser {
   /// 解析单页正文。
   Future<ParsedContentPage> parseContentPage({
     required BookSource source,
+    required Book book,
     required BookChapter chapter,
+    String? nextChapterUrl,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptOperation scriptOperation = LegadoScriptOperation.content,
     required String body,
     required Uri finalUri,
     HttpCancellationToken? cancellationToken,
   }) {
     if (_ruleEvaluator.containsJavaScript(source.ruleContent)) {
-      return _parseContentAsync(source, chapter, body, finalUri, cancellationToken);
+      return _parseContentAsync(
+        source,
+        book,
+        chapter,
+        nextChapterUrl,
+        scriptExecutionState,
+        scriptOperation,
+        body,
+        finalUri,
+        cancellationToken,
+      );
     }
     return Isolate.run<ParsedContentPage>(
       () => _parseContentSync(source, chapter, body, finalUri),
@@ -250,6 +279,8 @@ final class StandardBookSourceParser {
     int receivedAt,
     String keyword,
     int page,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptInteractionPolicy interactionPolicy,
     HttpCancellationToken? cancellationToken,
   ) async {
     /// 强类型搜索规则。
@@ -263,6 +294,9 @@ final class StandardBookSourceParser {
       result: body,
       key: keyword,
       page: page,
+      executionState: scriptExecutionState,
+      operation: LegadoScriptOperation.search,
+      interactionPolicy: interactionPolicy,
       httpCancellationToken: cancellationToken,
     );
     /// 是否反转最终列表。
@@ -385,6 +419,7 @@ final class StandardBookSourceParser {
   Future<ParsedBookInfo> _parseBookInfoAsync(
     BookSource source,
     Book book,
+    LegadoScriptExecutionState? scriptExecutionState,
     String body,
     Uri finalUri,
     HttpCancellationToken? cancellationToken,
@@ -398,6 +433,8 @@ final class StandardBookSourceParser {
       source: source,
       baseUri: finalUri,
       book: book,
+      executionState: scriptExecutionState,
+      operation: LegadoScriptOperation.bookInfo,
       result: body,
       httpCancellationToken: cancellationToken,
     );
@@ -502,6 +539,7 @@ final class StandardBookSourceParser {
   Future<ParsedTocPage> _parseTocAsync(
     BookSource source,
     Book book,
+    LegadoScriptExecutionState? scriptExecutionState,
     String body,
     Uri finalUri,
     int startIndex,
@@ -516,17 +554,11 @@ final class StandardBookSourceParser {
       source: source,
       baseUri: finalUri,
       book: book,
+      executionState: scriptExecutionState,
+      operation: LegadoScriptOperation.toc,
       result: body,
       httpCancellationToken: cancellationToken,
     );
-    if (rule.preUpdateJs?.trim().isNotEmpty == true) {
-      await _ruleEvaluator.string(
-        rule: _asJavaScriptRule(rule.preUpdateJs ?? ''),
-        input: body,
-        context: scriptContext,
-        cancellationToken: jsCancellationToken,
-      );
-    }
     /// 章节节点。
     final List<StandardRuleNode> nodes = (await _ruleEvaluator.elements(
       rule: rule.chapterList,
@@ -641,15 +673,17 @@ final class StandardBookSourceParser {
   /// 在主 isolate 中异步解析含 JavaScript 的单页正文。
   Future<ParsedContentPage> _parseContentAsync(
     BookSource source,
+    Book book,
     BookChapter chapter,
+    String? nextChapterUrl,
+    LegadoScriptExecutionState? scriptExecutionState,
+    LegadoScriptOperation scriptOperation,
     String body,
     Uri finalUri,
     HttpCancellationToken? cancellationToken,
   ) async {
     /// 强类型正文规则。
     final ContentSourceRule rule = const BookSourceRuleDecoder().decodeContent(source);
-    _rejectNonEmptyJavaScript(rule.webJs, '正文 webJs');
-    _rejectNonEmptyJavaScript(rule.sourceRegex, '正文 sourceRegex');
     _rejectNonEmptyJavaScript(rule.imageDecode, '正文 imageDecode');
     _rejectNonEmptyJavaScript(rule.payAction, '正文 payAction');
     /// 同时观察 HTTP 取消状态的 JavaScript 取消令牌。
@@ -658,7 +692,11 @@ final class StandardBookSourceParser {
     final LegadoScriptContext scriptContext = LegadoScriptContext(
       source: source,
       baseUri: finalUri,
+      book: book,
       chapter: chapter,
+      nextChapterUrl: nextChapterUrl,
+      executionState: scriptExecutionState,
+      operation: scriptOperation,
       result: body,
       httpCancellationToken: cancellationToken,
     );
@@ -678,7 +716,7 @@ final class StandardBookSourceParser {
       );
     }
     /// 统一 HTML 与段落换行后的正文。
-    final String formatted = _formatContent(content);
+    final String formatted = _formatContent(content, finalUri);
     if (!chapter.isVolume && formatted.trim().isEmpty) {
       throw const StandardRuleException('正文规则匹配成功但内容为空');
     }
@@ -982,7 +1020,6 @@ final class StandardBookSourceParser {
   ) {
     /// 强类型目录规则。
     final TocSourceRule rule = const BookSourceRuleDecoder().decodeToc(source);
-    _rejectNonEmptyJavaScript(rule.preUpdateJs, '目录 preUpdateJs');
     _rejectNonEmptyJavaScript(rule.formatJs, '目录 formatJs');
     /// 普通规则引擎。
     const StandardRuleEngine engine = StandardRuleEngine();
@@ -1052,8 +1089,6 @@ final class StandardBookSourceParser {
   ) {
     /// 强类型正文规则。
     final ContentSourceRule rule = const BookSourceRuleDecoder().decodeContent(source);
-    _rejectNonEmptyJavaScript(rule.webJs, '正文 webJs');
-    _rejectNonEmptyJavaScript(rule.sourceRegex, '正文 sourceRegex');
     _rejectNonEmptyJavaScript(rule.imageDecode, '正文 imageDecode');
     _rejectNonEmptyJavaScript(rule.payAction, '正文 payAction');
     /// 普通规则引擎。
@@ -1064,7 +1099,7 @@ final class StandardBookSourceParser {
       content = engine.string(rule.replaceRegex, content);
     }
     /// 格式化后的正文。
-    final String formatted = _formatContent(content);
+    final String formatted = _formatContent(content, finalUri);
     if (!chapter.isVolume && formatted.trim().isEmpty) {
       throw const StandardRuleException('正文规则匹配成功但内容为空');
     }
@@ -1146,19 +1181,154 @@ final class StandardBookSourceParser {
     return html_parser.parseFragment(value).text?.trim() ?? '';
   }
 
-  /// 将 HTML 正文转为保留段落换行的文本。
-  static String _formatContent(String value) {
-    /// 用换行替代常见块级结束与换行标签。
-    final String withBreaks = value
-        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
-        .replaceAll(RegExp(r'</(?:p|div|li|h[1-6])>', caseSensitive: false), '\n');
-    /// HTML 解码后的文本。
-    final String text = html_parser.parseFragment(withBreaks).text ?? '';
-    return text
+  /// 将正文 HTML 安全转换为段落文本和受控图片标记，不把脚本或任意标签带入阅读器。
+  static String _formatContent(String value, Uri baseUri) {
+    if (!RegExp(r'<[A-Za-z!/][^>]*>').hasMatch(value)) {
+      return value
+          .split(RegExp(r'\r?\n'))
+          .map((String line) => line.trim())
+          .where((String line) => line.isNotEmpty)
+          .join('\n');
+    }
+    /// 解析后的不可信 HTML 片段。
+    final dom.DocumentFragment fragment = html_parser.parseFragment(value);
+    /// 输出纯文本、段落换行和图片资源标记的缓冲区。
+    final StringBuffer output = StringBuffer();
+    for (final dom.Node node in fragment.nodes) {
+      _appendReadableNode(node, output, baseUri);
+    }
+    return output
+        .toString()
+        .replaceAll(RegExp(r'[\t\f\v]+'), ' ')
         .split(RegExp(r'\r?\n'))
         .map((String line) => line.trim())
         .where((String line) => line.isNotEmpty)
         .join('\n');
+  }
+
+  /// 递归提取可读文本、块级换行、Ruby 注音和 HTTP(S) 图片资源。
+  static void _appendReadableNode(
+    dom.Node node,
+    StringBuffer output,
+    Uri baseUri,
+  ) {
+    if (node is dom.Text) {
+      output.write(node.data);
+      return;
+    }
+    if (node is! dom.Element) {
+      return;
+    }
+    /// 当前 HTML 标签的小写名称。
+    final String tag = node.localName?.toLowerCase() ?? '';
+    if (<String>{'script', 'style', 'noscript', 'template'}.contains(tag)) {
+      return;
+    }
+    if (tag == 'br') {
+      output.write('\n');
+      return;
+    }
+    if (tag == 'img') {
+      _appendImageMarker(node, output, baseUri);
+      return;
+    }
+    if (tag == 'rt') {
+      /// Ruby 注音在纯文本阅读器中使用全角括号保留可读语义。
+      final String annotation = node.text.trim();
+      if (annotation.isNotEmpty) {
+        output.write('（$annotation）');
+      }
+      return;
+    }
+    /// 当前标签是否形成独立段落。
+    final bool block = <String>{
+      'address',
+      'article',
+      'aside',
+      'blockquote',
+      'div',
+      'figcaption',
+      'figure',
+      'footer',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      'header',
+      'li',
+      'main',
+      'nav',
+      'ol',
+      'p',
+      'pre',
+      'section',
+      'table',
+      'tr',
+      'ul',
+    }.contains(tag);
+    if (block && output.isNotEmpty) {
+      output.write('\n');
+    }
+    for (final dom.Node child in node.nodes) {
+      _appendReadableNode(child, output, baseUri);
+    }
+    if (block) {
+      output.write('\n');
+    }
+  }
+
+  /// 从常见懒加载属性中选择首个安全图片地址并写入资源标记。
+  static void _appendImageMarker(
+    dom.Element image,
+    StringBuffer output,
+    Uri baseUri,
+  ) {
+    /// 书源常见图片与懒加载地址属性候选。
+    const List<String> sourceAttributes = <String>[
+      'src',
+      'data-src',
+      'data-original',
+      'data-url',
+      'data-lazy-src',
+    ];
+    /// 首个非空图片地址文本。
+    String source = '';
+    for (final String attribute in sourceAttributes) {
+      final String candidate = image.attributes[attribute]?.trim() ?? '';
+      if (candidate.isNotEmpty) {
+        source = candidate;
+        break;
+      }
+    }
+    /// 图片加载失败时可展示的替代文本。
+    final String altText = image.attributes['alt']?.trim() ?? '';
+    if (source.isEmpty || source.startsWith('data:')) {
+      if (altText.isNotEmpty) {
+        output.write(altText);
+      }
+      return;
+    }
+    /// 基于正文响应地址解析的绝对图片地址。
+    final Uri uri = baseUri.resolve(source);
+    if (uri.host.isEmpty ||
+        !<String>{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
+      if (altText.isNotEmpty) {
+        output.write(altText);
+      }
+      return;
+    }
+    output
+      ..write('\n')
+      ..write(
+        ReaderContentMarkup.encodeImage(
+          uri: uri,
+          altText: altText,
+          referer: baseUri,
+        ),
+      )
+      ..write('\n');
   }
 
   /// 将空文本转为 `null`，并限制 Android 对齐字段长度。

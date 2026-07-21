@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:flutter_open_chinese_convert/flutter_open_chinese_convert.dart';
+
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/reader_content.dart';
+import '../../domain/model/reader_content_markup.dart';
 import '../../domain/model/replace_rule.dart';
 
 /// 正文净化、替换或分块失败时抛出的明确错误。
@@ -31,18 +34,36 @@ final class ReaderTextProcessor {
     required String rawContent,
     required List<ReplaceRule> replaceRules,
     required bool useReplaceRules,
+    required ReaderChineseConversionMode chineseConversionMode,
+    required bool reSegmentContent,
     required bool fromCache,
   }) async {
+    /// 按设置转换且保持图片资源标记原样的正文。
+    final String convertedContent = await _convertChineseText(
+      rawContent,
+      chineseConversionMode,
+    );
+    /// 与正文使用同一模式转换后的章节显示标题。
+    final String convertedTitle = await _convertChineseText(
+      displayTitle,
+      chineseConversionMode,
+    );
+    /// 与正文使用同一模式转换后的书名，用于准确识别重复标题。
+    final String convertedBookName = await _convertChineseText(
+      book.name,
+      chineseConversionMode,
+    );
     /// 接收后台处理结果和 isolate 错误的端口。
     final ReceivePort resultPort = ReceivePort();
     /// 传给 isolate 的可发送请求数据。
     final Map<String, Object?> request = <String, Object?>{
       'sendPort': resultPort.sendPort,
-      'bookName': book.name,
+      'bookName': convertedBookName,
       'chapterUrl': chapter.url,
-      'chapterTitle': displayTitle,
-      'rawContent': rawContent,
+      'chapterTitle': convertedTitle,
+      'rawContent': convertedContent,
       'useReplaceRules': useReplaceRules,
+      'reSegment': reSegmentContent || (book.readConfig?.reSegment ?? false),
       'rules': replaceRules.map(_ruleToMap).toList(growable: false),
     };
     /// 当前专用处理 isolate。
@@ -71,7 +92,12 @@ final class ReaderTextProcessor {
       final Object? countValue = message['effectiveRuleCount'];
       /// 分块原始数组。
       final Object? blocksValue = message['blocks'];
-      if (textValue is! String || countValue is! int || blocksValue is! List<Object?>) {
+      /// 图片资源原始数组。
+      final Object? imagesValue = message['images'];
+      if (textValue is! String ||
+          countValue is! int ||
+          blocksValue is! List<Object?> ||
+          imagesValue is! List<Object?>) {
         throw const ReaderTextProcessException('正文后台处理结果字段不完整');
       }
       /// 已收窄的正文块。
@@ -88,23 +114,80 @@ final class ReaderTextProcessor {
         final Object? start = blockValue['start'];
         /// 结束字符位置。
         final Object? end = blockValue['end'];
-        if (index is! int || blockText is! String || start is! int || end is! int) {
+        /// 正文块类型名称。
+        final Object? kindValue = blockValue['kind'];
+        /// 图片资源地址；文本块固定为空字符串。
+        final Object? resourceUrlValue = blockValue['resourceUrl'];
+        /// 图片替代文本；文本块固定为空字符串。
+        final Object? altTextValue = blockValue['altText'];
+        /// 图片防盗链来源地址；文本块固定为空字符串。
+        final Object? refererValue = blockValue['referer'];
+        if (index is! int ||
+            blockText is! String ||
+            start is! int ||
+            end is! int ||
+            kindValue is! String ||
+            resourceUrlValue is! String ||
+            altTextValue is! String ||
+            refererValue is! String) {
           throw const ReaderTextProcessException('正文分块字段格式无效');
         }
+        /// 已收窄的正文块类型。
+        final ReaderContentBlockKind kind = kindValue == ReaderContentBlockKind.image.name
+            ? ReaderContentBlockKind.image
+            : ReaderContentBlockKind.text;
         blocks.add(
           ReaderContentBlock(
             id: '${chapter.url}#$index',
             text: blockText,
             startOffset: start,
             endOffset: end,
+            kind: kind,
+            resourceUrl: resourceUrlValue,
+            altText: altTextValue,
+            resourceReferer: refererValue,
+          ),
+        );
+      }
+      /// 已收窄的正文图片列表。
+      final List<ReaderContentImage> images = <ReaderContentImage>[];
+      for (final Object? imageValue in imagesValue) {
+        if (imageValue is! Map<Object?, Object?>) {
+          throw const ReaderTextProcessException('正文图片结果格式无效');
+        }
+        /// 图片顺序索引。
+        final Object? index = imageValue['index'];
+        /// 图片绝对地址。
+        final Object? url = imageValue['url'];
+        /// 图片替代文本。
+        final Object? altText = imageValue['altText'];
+        /// 图片稳定字符位置。
+        final Object? characterOffset = imageValue['characterOffset'];
+        /// 图片防盗链来源地址。
+        final Object? referer = imageValue['referer'];
+        if (index is! int ||
+            url is! String ||
+            altText is! String ||
+            characterOffset is! int ||
+            referer is! String) {
+          throw const ReaderTextProcessException('正文图片字段格式无效');
+        }
+        images.add(
+          ReaderContentImage(
+            id: '${chapter.url}#image-$index',
+            url: url,
+            altText: altText,
+            characterOffset: characterOffset,
+            referer: referer,
           ),
         );
       }
       return ReaderChapterContent(
         chapterUrl: chapter.url,
-        title: displayTitle,
+        title: convertedTitle,
         text: textValue,
         blocks: blocks,
+        images: images,
         effectiveReplaceRuleCount: countValue,
         fromCache: fromCache,
       );
@@ -113,6 +196,44 @@ final class ReaderTextProcessor {
     } finally {
       isolate.kill(priority: Isolate.immediate);
       resultPort.close();
+    }
+  }
+
+  /// 使用 OpenCC 完成 Android/iOS 共用的简繁转换，并保护正文图片资源标记。
+  Future<String> _convertChineseText(
+    String input,
+    ReaderChineseConversionMode mode,
+  ) async {
+    if (input.isEmpty || mode == ReaderChineseConversionMode.none) {
+      return input;
+    }
+    /// 转换期间用只含 ASCII 的稳定占位符保护图片 URL 和替代文本。
+    final Map<String, String> protectedMarkers = <String, String>{};
+    /// 不含资源标记的待转换文本。
+    final String protectedInput = input.replaceAllMapped(
+      ReaderContentMarkup.imageMarkerPattern,
+      (Match match) {
+        /// 当前图片标记的稳定占位符。
+        final String placeholder = 'LEGADORESOURCE${protectedMarkers.length}TOKEN';
+        protectedMarkers[placeholder] = match.group(0) ?? '';
+        return placeholder;
+      },
+    );
+    try {
+      /// OpenCC 平台实现返回的完整转换文本。
+      String converted = switch (mode) {
+        ReaderChineseConversionMode.none => protectedInput,
+        ReaderChineseConversionMode.traditionalToSimplified =>
+          await ChineseConverter.convert(protectedInput, T2S()),
+        ReaderChineseConversionMode.simplifiedToTraditional =>
+          await ChineseConverter.convert(protectedInput, S2T()),
+      };
+      for (final MapEntry<String, String> entry in protectedMarkers.entries) {
+        converted = converted.replaceAll(entry.key, entry.value);
+      }
+      return converted;
+    } on Object {
+      throw const ReaderTextProcessException('简繁转换失败，请关闭转换后重试');
     }
   }
 
@@ -157,6 +278,10 @@ void _readerTextWorker(Map<String, Object?> request) {
     final bool useReplaceRules = request['useReplaceRules'] is bool
         ? request['useReplaceRules'] as bool
         : false;
+    /// 是否按单书配置重新连接错误断行并切分过长段落。
+    final bool reSegment = request['reSegment'] is bool
+        ? request['reSegment'] as bool
+        : false;
     /// 统一换行、空白和不换行空格后的正文。
     String text = rawContent
         .replaceAll('\r\n', '\n')
@@ -164,6 +289,12 @@ void _readerTextWorker(Map<String, Object?> request) {
         .replaceAll('\u00A0', ' ')
         .trim();
     text = _removeRepeatedTitle(text, bookName, chapterTitle);
+    if (reSegment) {
+      text = _reSegmentContent(text);
+    }
+    /// 替换规则执行期间受到保护的图片资源标记。
+    final _ProtectedReaderMarkers protectedMarkers = _protectReaderMarkers(text);
+    text = protectedMarkers.text;
     /// 实际改变正文的规则数量。
     int effectiveRuleCount = 0;
     if (useReplaceRules) {
@@ -199,14 +330,18 @@ void _readerTextWorker(Map<String, Object?> request) {
         }
       }
     }
+    text = _restoreReaderMarkers(text, protectedMarkers.markers);
     text = _normalizeParagraphs(text);
     if (text.isEmpty) {
       throw const FormatException('正文处理完成后为空，请检查书源或替换规则');
     }
+    /// 把资源标记转换为对象字符、文本块和图片块后的结果。
+    final _ReaderContentSplitResult splitResult = _splitContent(text);
     sendPortValue.send(<String, Object?>{
-      'text': text,
+      'text': splitResult.text,
       'effectiveRuleCount': effectiveRuleCount,
-      'blocks': _splitBlocks(text),
+      'blocks': splitResult.blocks,
+      'images': splitResult.images,
     });
   } on FormatException catch (error) {
     sendPortValue.send(<String, Object?>{'error': error.message});
@@ -215,8 +350,129 @@ void _readerTextWorker(Map<String, Object?> request) {
   }
 }
 
+/// 对齐 Android `ContentHelp.reSegment` 的核心行为：连接错误断行并按句末重排长段。
+String _reSegmentContent(String text) {
+  /// 重排后的段落列表。
+  final List<String> paragraphs = <String>[];
+  /// 尚未形成完整段落的文本缓冲区。
+  final StringBuffer pending = StringBuffer();
+
+  /// 完成当前普通文本缓冲区，并按句末标点拆分过长段落。
+  void flushPending() {
+    if (pending.isEmpty) {
+      return;
+    }
+    /// 去除段内错误全角或半角空白后的正文。
+    final String normalized = pending
+        .toString()
+        .replaceAll(RegExp(r'[\s\u3000]+'), '')
+        .trim();
+    pending.clear();
+    if (normalized.isEmpty) {
+      return;
+    }
+    /// 逐句匹配表达式，保留结束标点和其后的右引号。
+    final RegExp sentencePattern = RegExp(r'.+?[。！？!?…]+[”」』》）)]*|.+$');
+    /// 当前重新组合的段落。
+    final StringBuffer paragraph = StringBuffer();
+    for (final RegExpMatch match in sentencePattern.allMatches(normalized)) {
+      /// 当前包含句末标点的完整句子。
+      final String sentence = match.group(0) ?? '';
+      paragraph.write(sentence);
+      if (paragraph.length >= 180 || sentence.endsWith('”')) {
+        paragraphs.add(paragraph.toString());
+        paragraph.clear();
+      }
+    }
+    if (paragraph.isNotEmpty) {
+      paragraphs.add(paragraph.toString());
+    }
+  }
+
+  for (final String rawLine in text.split('\n')) {
+    /// 当前去除外层空白后的原始行。
+    final String line = rawLine.trim();
+    if (line.isEmpty) {
+      continue;
+    }
+    if (ReaderContentMarkup.tryParseImage(line) != null) {
+      flushPending();
+      paragraphs.add(line);
+      continue;
+    }
+    pending.write(line);
+    if (RegExp(r'[。！？!?…][”」』》）)]?$').hasMatch(line)) {
+      flushPending();
+    }
+  }
+  flushPending();
+  return paragraphs.join('\n');
+}
+
+/// 替换规则执行期间的正文和资源标记映射。
+final class _ProtectedReaderMarkers {
+  /// 创建资源标记保护结果。
+  const _ProtectedReaderMarkers({required this.text, required this.markers});
+
+  /// 已把资源标记替换为稳定占位符的正文。
+  final String text;
+
+  /// 占位符到原始资源标记的映射。
+  final Map<String, String> markers;
+}
+
+/// 用稳定占位符保护图片标记，避免正文替换规则改写 URL 或协议结构。
+_ProtectedReaderMarkers _protectReaderMarkers(String text) {
+  /// 占位符到原始标记的映射。
+  final Map<String, String> markers = <String, String>{};
+  /// 已替换全部图片标记的正文。
+  final String protectedText = text.replaceAllMapped(
+    ReaderContentMarkup.imageMarkerPattern,
+    (Match match) {
+      /// 当前资源标记占位符。
+      final String placeholder = 'LEGADOPROTECTEDIMAGE${markers.length}TOKEN';
+      markers[placeholder] = match.group(0) ?? '';
+      return placeholder;
+    },
+  );
+  return _ProtectedReaderMarkers(text: protectedText, markers: markers);
+}
+
+/// 在替换规则执行结束后恢复受控图片资源标记。
+String _restoreReaderMarkers(String text, Map<String, String> markers) {
+  /// 逐项恢复后的正文。
+  String restored = text;
+  for (final MapEntry<String, String> entry in markers.entries) {
+    restored = restored.replaceAll(entry.key, entry.value);
+  }
+  return restored;
+}
+
 /// 去除正文首部与书名或章节标题重复的独立行。
 String _removeRepeatedTitle(String text, String bookName, String chapterTitle) {
+  /// 章节标题去除外层空白后的匹配文本。
+  final String normalizedTitle = chapterTitle.trim();
+  if (normalizedTitle.isNotEmpty) {
+    /// 允许标题原有空白在正文中变成任意数量空白的安全正则片段。
+    final String titlePattern = normalizedTitle
+        .split(RegExp(r'\s+'))
+        .map(RegExp.escape)
+        .join(r'\s*');
+    /// 书名作为标题前缀出现时使用的安全正则片段。
+    final String bookPattern = RegExp.escape(bookName.trim());
+    /// 对齐 Android 的章首标题匹配：允许标题前存在书名、空白或 Unicode 标点。
+    final RegExp leadingTitlePattern = RegExp(
+      bookPattern.isEmpty
+          ? '^(?:\\s|\\p{P})*$titlePattern\\s*'
+          : '^(?:\\s|\\p{P}|$bookPattern)*$titlePattern\\s*',
+      unicode: true,
+    );
+    /// 章首标题匹配结果。
+    final RegExpMatch? leadingMatch = leadingTitlePattern.firstMatch(text);
+    if (leadingMatch != null && leadingMatch.start == 0) {
+      return text.substring(leadingMatch.end).trim();
+    }
+  }
   /// 正文行列表。
   final List<String> lines = text.split('\n');
   while (lines.isNotEmpty) {
@@ -254,47 +510,113 @@ String _normalizeParagraphs(String text) {
   return paragraphs.join('\n');
 }
 
-/// 将正文按段落聚合成不超过约 1200 字符的惰性列表块。
-List<Map<String, Object?>> _splitBlocks(String text) {
+/// 正文分块后同时返回稳定纯文本、显示块和图片锚点。
+final class _ReaderContentSplitResult {
+  /// 创建 isolate 内部正文分块结果。
+  const _ReaderContentSplitResult({
+    required this.text,
+    required this.blocks,
+    required this.images,
+  });
+
+  /// 图片使用对象替代字符占位后的稳定正文。
+  final String text;
+
+  /// 可发送回主 isolate 的文本和图片块。
+  final List<Map<String, Object?>> blocks;
+
+  /// 可发送回主 isolate 的图片稳定位置列表。
+  final List<Map<String, Object?>> images;
+}
+
+/// 将正文按段落聚合文本块，并把图片标记转换为独立资源块。
+_ReaderContentSplitResult _splitContent(String text) {
   /// 最终分块。
   final List<Map<String, Object?>> blocks = <Map<String, Object?>>[];
-  /// 当前块缓冲区。
-  final StringBuffer buffer = StringBuffer();
-  /// 当前块起始字符位置。
-  int blockStart = 0;
-  /// 当前扫描字符位置。
-  int cursor = 0;
-  for (final String paragraph in text.split('\n')) {
-    /// 加入当前段落所需字符数，非首段额外包含一个换行。
-    final int requiredLength = paragraph.length + (buffer.isEmpty ? 0 : 1);
-    if (buffer.isNotEmpty && buffer.length + requiredLength > 1200) {
-      /// 已完成的块文本。
-      final String blockText = buffer.toString();
-      blocks.add(<String, Object?>{
-        'index': blocks.length,
-        'text': blockText,
-        'start': blockStart,
-        'end': blockStart + blockText.length,
-      });
-      blockStart = cursor;
-      buffer.clear();
+  /// 最终图片稳定位置列表。
+  final List<Map<String, Object?>> images = <Map<String, Object?>>[];
+  /// 对字符锚点可见的完整正文缓冲区。
+  final StringBuffer plainText = StringBuffer();
+  /// 当前待聚合文本块缓冲区。
+  final StringBuffer textBlock = StringBuffer();
+  /// 当前文本块在完整正文中的起始位置。
+  int textBlockStart = 0;
+
+  /// 完成当前文本块并清空缓冲区。
+  void flushTextBlock() {
+    if (textBlock.isEmpty) {
+      return;
     }
-    if (buffer.isNotEmpty) {
-      buffer.write('\n');
-      cursor += 1;
-    }
-    buffer.write(paragraph);
-    cursor += paragraph.length;
-  }
-  if (buffer.isNotEmpty) {
-    /// 最后一个正文块。
-    final String blockText = buffer.toString();
+    /// 已完成的正文块文本。
+    final String blockText = textBlock.toString();
     blocks.add(<String, Object?>{
       'index': blocks.length,
+      'kind': ReaderContentBlockKind.text.name,
       'text': blockText,
-      'start': blockStart,
-      'end': blockStart + blockText.length,
+      'resourceUrl': '',
+      'altText': '',
+      'referer': '',
+      'start': textBlockStart,
+      'end': textBlockStart + blockText.length,
     });
+    textBlock.clear();
   }
-  return blocks;
+
+  /// 已规范化的正文段落列表。
+  final List<String> paragraphs = text.split('\n');
+  for (int paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+    /// 当前段落。
+    final String paragraph = paragraphs[paragraphIndex];
+    /// 当前段落是否是受控图片标记。
+    final ReaderMarkedImage? markedImage = ReaderContentMarkup.tryParseImage(paragraph);
+    if (markedImage != null) {
+      flushTextBlock();
+      if (plainText.isNotEmpty) {
+        plainText.write('\n');
+      }
+      /// 图片在稳定正文中的对象字符位置。
+      final int imageOffset = plainText.length;
+      plainText.write('\uFFFC');
+      blocks.add(<String, Object?>{
+        'index': blocks.length,
+        'kind': ReaderContentBlockKind.image.name,
+        'text': '',
+        'resourceUrl': markedImage.uri.toString(),
+        'altText': markedImage.altText,
+        'referer': markedImage.referer,
+        'start': imageOffset,
+        'end': imageOffset + 1,
+      });
+      images.add(<String, Object?>{
+        'index': images.length,
+        'url': markedImage.uri.toString(),
+        'altText': markedImage.altText,
+        'characterOffset': imageOffset,
+        'referer': markedImage.referer,
+      });
+      continue;
+    }
+    /// 当前段落相对已有文本块需要增加的字符数。
+    final int separatorLength = plainText.isEmpty ? 0 : 1;
+    if (textBlock.isNotEmpty && textBlock.length + 1 + paragraph.length > 1200) {
+      flushTextBlock();
+    }
+    if (separatorLength > 0) {
+      plainText.write('\n');
+      if (textBlock.isNotEmpty) {
+        textBlock.write('\n');
+      }
+    }
+    if (textBlock.isEmpty) {
+      textBlockStart = plainText.length;
+    }
+    plainText.write(paragraph);
+    textBlock.write(paragraph);
+  }
+  flushTextBlock();
+  return _ReaderContentSplitResult(
+    text: plainText.toString(),
+    blocks: blocks,
+    images: images,
+  );
 }

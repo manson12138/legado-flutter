@@ -3,23 +3,36 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import '../../domain/gateway/bookmark_gateway.dart';
+import '../../domain/gateway/book_content_process_gateway.dart';
 import '../../domain/gateway/cover_cache_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/gateway/replace_rule_gateway.dart';
 import '../../domain/model/bookmark.dart';
+import '../../domain/model/book_content_process.dart';
 import '../../domain/model/cache.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/replace_rule.dart';
 import '../dao/bookmark_dao.dart';
+import '../dao/book_content_process_dao.dart';
 import '../dao/cache_dao.dart';
 import '../dao/replace_rule_dao.dart';
 import '../local/data_error.dart';
 
 /// 组合阅读缓存、书签和替换规则 DAO，实现 M08 阅读数据边界。
 final class ReaderRepository
-    implements BookmarkGateway, ReplaceRuleGateway, ReaderCacheGateway, CoverCacheGateway {
+    implements
+        BookmarkGateway,
+        BookContentProcessGateway,
+        ReplaceRuleGateway,
+        ReaderCacheGateway,
+        CoverCacheGateway {
   /// 创建阅读数据 Repository。
-  const ReaderRepository(this._cacheDao, this._bookmarkDao, this._replaceRuleDao);
+  const ReaderRepository(
+    this._cacheDao,
+    this._bookmarkDao,
+    this._bookContentProcessDao,
+    this._replaceRuleDao,
+  );
 
   /// 通用缓存 DAO，用于正文、锚点和显示配置。
   final CacheDao _cacheDao;
@@ -27,8 +40,63 @@ final class ReaderRepository
   /// 书签 DAO。
   final BookmarkDao _bookmarkDao;
 
+  /// 用户正文高亮与下划线 DAO。
+  final BookContentProcessDao _bookContentProcessDao;
+
   /// 替换规则 DAO。
   final ReplaceRuleDao _replaceRuleDao;
+
+  /// 观察指定章节全部未删除正文标注。
+  @override
+  Stream<List<BookContentProcess>> watchForChapter(
+    String bookUrl,
+    int chapterIndex,
+  ) {
+    return guardDataStream<List<BookContentProcess>>(
+      _bookContentProcessDao.watchForChapter(bookUrl, chapterIndex),
+    );
+  }
+
+  /// 返回同一本书下一个正文标注排序值。
+  @override
+  Future<int> nextOrder(String bookUrl) {
+    return guardDataOperation<int>(() async {
+      /// 当前最大排序值。
+      final int maximum = await _bookContentProcessDao.maxOrder(bookUrl);
+      return maximum + 1;
+    });
+  }
+
+  /// 保存正文高亮或下划线记录。
+  @override
+  Future<void> upsert(BookContentProcess process) {
+    return guardDataOperation<void>(
+      () => _bookContentProcessDao.upsert(process),
+    );
+  }
+
+  /// 启用或停用指定正文标注。
+  @override
+  Future<void> setEnabled(String id, bool enabled) {
+    return guardDataOperation<void>(
+      () => _bookContentProcessDao.setEnabled(
+        id,
+        enabled,
+        DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+  }
+
+  /// 软删除指定正文标注。
+  @override
+  Future<void> delete(String id) {
+    return guardDataOperation<void>(
+      () => _bookContentProcessDao.markDeleted(
+        id,
+        DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+  }
 
   /// 观察一本书的书签并统一转换数据库错误。
   @override
@@ -79,6 +147,27 @@ final class ReaderRepository
         Cache(key: _contentKey(bookUrl, chapterUrl), value: content, deadline: deadline),
       ),
     );
+  }
+
+  /// 删除指定章节的原始正文缓存。
+  @override
+  Future<void> removeChapterContent(String bookUrl, String chapterUrl) {
+    return guardDataOperation<void>(
+      () => _cacheDao.delete(_contentKey(bookUrl, chapterUrl)),
+    );
+  }
+
+  /// 批量删除一本书指定章节的原始正文缓存。
+  @override
+  Future<void> removeChapterContents(
+    String bookUrl,
+    List<String> chapterUrls,
+  ) {
+    /// 不泄漏原始 URL 的正文缓存键集合。
+    final List<String> keys = chapterUrls
+        .map((String chapterUrl) => _contentKey(bookUrl, chapterUrl))
+        .toList(growable: false);
+    return guardDataOperation<void>(() => _cacheDao.deleteAll(keys));
   }
 
   /// 读取稳定正文锚点；损坏的旧缓存按无锚点处理。
@@ -168,6 +257,12 @@ final class ReaderRepository
           backgroundColorValue: _integer(decoded['backgroundColorValue'], 0xFFFFFBF2),
           textColorValue: _integer(decoded['textColorValue'], 0xFF2B2925),
           useReplaceRules: decoded['useReplaceRules'] is bool ? decoded['useReplaceRules'] as bool : true,
+          chineseConversionMode: _chineseConversionMode(
+            decoded['chineseConversionMode'],
+          ),
+          reSegmentContent: decoded['reSegmentContent'] is bool
+              ? decoded['reSegmentContent'] as bool
+              : false,
           keepScreenOn: decoded['keepScreenOn'] is bool ? decoded['keepScreenOn'] as bool : true,
           preDownloadCount: _preDownloadCount(decoded['preDownloadCount']),
           readingMode: hasHorizontalCoverDefault
@@ -282,6 +377,8 @@ final class ReaderRepository
         'backgroundColorValue': config.backgroundColorValue,
         'textColorValue': config.textColorValue,
         'useReplaceRules': config.useReplaceRules,
+        'chineseConversionMode': config.chineseConversionMode.name,
+        'reSegmentContent': config.reSegmentContent,
         'keepScreenOn': config.keepScreenOn,
         'preDownloadCount': config.preDownloadCount,
         'readingMode': config.readingMode.name,
@@ -389,6 +486,19 @@ final class ReaderRepository
       }
     }
     return ReaderPageTurnStyle.cover;
+  }
+
+  /// 把持久化名称收窄为受支持的 OpenCC 简繁转换模式。
+  ReaderChineseConversionMode _chineseConversionMode(Object? value) {
+    if (value is String) {
+      for (final ReaderChineseConversionMode mode
+          in ReaderChineseConversionMode.values) {
+        if (mode.name == value) {
+          return mode;
+        }
+      }
+    }
+    return ReaderChineseConversionMode.none;
   }
 
   /// 把持久化名称收窄为受支持的章节标题排版方式。

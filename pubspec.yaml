@@ -1,7 +1,7 @@
 name: legado_flutter
 description: "Legado Android 与 iOS 共用的 Flutter 重写工程。"
 publish_to: 'none'
-version: 1.0.0+2
+version: 1.0.0+5
 
 environment:
   sdk: '>=3.11.3 <4.0.0'
@@ -15,6 +15,8 @@ dependencies:
   file_picker: ^11.0.2
   flutter:
     sdk: flutter
+  # P1-01 使用 OpenCC 的 Android/iOS 原生实现完成完整简繁转换，避免维护不完整字符表。
+  flutter_open_chinese_convert: ^0.9.0
   html: ^0.15.6
   json_path: ^0.9.0
   jsf: ^1.1.0
