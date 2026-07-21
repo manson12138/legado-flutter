@@ -51,7 +51,11 @@ final class SearchViewModel {
   void onIntent(SearchIntent intent) {
     switch (intent) {
       case ChangeSearchKeywordIntent(keyword: final String keyword):
-        _emit(_state.copyWith(keyword: keyword, clearError: true));
+        if (keyword.trim().isEmpty && _state.committedKeyword.isNotEmpty) {
+          _clearSearch();
+        } else {
+          _emit(_state.copyWith(keyword: keyword, clearError: true));
+        }
       case SubmitSearchIntent(keyword: final String? keyword):
         _startSearch(keyword ?? _state.keyword, sourceUrls: _state.selectedSourceUrls);
       case CancelSearchIntent():
@@ -305,6 +309,32 @@ final class SearchViewModel {
       );
       _emit(_state.copyWith(searching: false, cancelled: true));
     }
+  }
+
+  /// 用户清空搜索框时停止当前搜索并重置结果、失败和进度，回到初始态。
+  void _clearSearch() {
+    /// 【搜书诊断日志】记录清空前是否仍有运行中的搜索。
+    final bool hadActiveRun = _run != null;
+    _run?.cancel();
+    _run = null;
+    _generation += 1;
+    _resultBooks.clear();
+    _logger.info(
+      tag: bookSearchUiLogTag,
+      message: '搜索关键字被清空，重置结果列表 hadActiveRun=$hadActiveRun newGeneration=$_generation',
+    );
+    _emit(
+      _state.copyWith(
+        keyword: '',
+        committedKeyword: '',
+        searching: false,
+        cancelled: false,
+        results: const <BookSearchResultGroup>[],
+        failures: const <BookSearchSourceFailure>[],
+        progress: const BookSearchProgress(total: 0, completed: 0, succeeded: 0, failed: 0),
+        clearError: true,
+      ),
+    );
   }
 
   /// 清空持久化历史。

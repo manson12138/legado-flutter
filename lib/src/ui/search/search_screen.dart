@@ -73,29 +73,7 @@ final class SearchScreen extends StatelessWidget {
         children: <Widget>[
           Padding(
             padding: const EdgeInsets.all(SpacingToken.medium),
-            child: TextFormField(
-              key: ValueKey<String>('search-${state.committedKeyword}'),
-              initialValue: state.keyword,
-              textInputAction: TextInputAction.search,
-              onChanged: (String value) => onIntent(ChangeSearchKeywordIntent(value)),
-              onFieldSubmitted: (String value) => onIntent(SubmitSearchIntent(keyword: value)),
-              decoration: InputDecoration(
-                labelText: '书名或作者',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: state.searching
-                    ? IconButton(
-                        onPressed: () => onIntent(const CancelSearchIntent()),
-                        icon: const Icon(Icons.stop_circle_outlined),
-                        tooltip: '停止搜索',
-                      )
-                    : IconButton(
-                        onPressed: () => onIntent(const SubmitSearchIntent()),
-                        icon: const Icon(Icons.arrow_forward),
-                        tooltip: '开始搜索',
-                      ),
-              ),
-            ),
+            child: _SearchField(state: state, onIntent: onIntent),
           ),
           if (state.history.isNotEmpty && state.committedKeyword.isEmpty)
             _SearchHistory(state: state, onIntent: onIntent),
@@ -105,6 +83,129 @@ final class SearchScreen extends StatelessWidget {
             _SearchFailures(state: state, onIntent: onIntent),
           Expanded(child: _SearchBody(state: state, onIntent: onIntent)),
         ],
+      ),
+    );
+  }
+}
+
+/// 搜索输入框，自带受控 [TextEditingController]，用于支持带动画的一键清空按钮。
+final class _SearchField extends StatefulWidget {
+  /// 创建搜索输入框。
+  const _SearchField({required this.state, required this.onIntent});
+  /// 当前状态。
+  final SearchUiState state;
+  /// Intent 入口。
+  final ValueChanged<SearchIntent> onIntent;
+
+  @override
+  State<_SearchField> createState() => _SearchFieldState();
+}
+
+/// 持有输入控制器，双向同步外部状态与用户输入。
+final class _SearchFieldState extends State<_SearchField> {
+  /// 输入框文本控制器，驱动清空按钮的显隐动画。
+  late final TextEditingController _controller;
+
+  /// 用当前状态关键字初始化控制器并监听用户输入。
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.state.keyword)..addListener(_handleControllerChanged);
+  }
+
+  /// 用户输入变化时同步回 ViewModel；忽略程序化赋值触发的重复事件。
+  void _handleControllerChanged() {
+    if (_controller.text != widget.state.keyword) {
+      widget.onIntent(ChangeSearchKeywordIntent(_controller.text));
+    }
+  }
+
+  /// 已提交关键字被外部改变（历史点击、清空搜索）时，把输入框文本同步过去。
+  @override
+  void didUpdateWidget(covariant _SearchField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state.committedKeyword != widget.state.committedKeyword &&
+        _controller.text != widget.state.keyword) {
+      _controller.value = TextEditingValue(
+        text: widget.state.keyword,
+        selection: TextSelection.collapsed(offset: widget.state.keyword.length),
+      );
+    }
+  }
+
+  /// 释放控制器。
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// 构建输入框、动画清空按钮和搜索/停止按钮。
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: _controller,
+      textInputAction: TextInputAction.search,
+      onFieldSubmitted: (String value) => widget.onIntent(SubmitSearchIntent(keyword: value)),
+      decoration: InputDecoration(
+        labelText: '书名或作者',
+        border: const OutlineInputBorder(),
+        prefixIcon: const Icon(Icons.search),
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _controller,
+              builder: (BuildContext context, TextEditingValue value, Widget? child) {
+                return _ClearSearchButton(visible: value.text.isNotEmpty, onPressed: _controller.clear);
+              },
+            ),
+            widget.state.searching
+                ? IconButton(
+                    onPressed: () => widget.onIntent(const CancelSearchIntent()),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    tooltip: '停止搜索',
+                  )
+                : IconButton(
+                    onPressed: () => widget.onIntent(const SubmitSearchIntent()),
+                    icon: const Icon(Icons.arrow_forward),
+                    tooltip: '开始搜索',
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 有输入内容时以动画淡入淡出并展开/收起的一键清空按钮。
+final class _ClearSearchButton extends StatelessWidget {
+  /// 创建清空按钮。
+  const _ClearSearchButton({required this.visible, required this.onPressed});
+  /// 是否应显示。
+  final bool visible;
+  /// 点击回调。
+  final VoidCallback onPressed;
+
+  /// 用 [AnimatedSize] 配合 [AnimatedOpacity] 让按钮显隐时平滑收展。
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeInOut,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 150),
+        opacity: visible ? 1 : 0,
+        child: IgnorePointer(
+          ignoring: !visible,
+          child: visible
+              ? IconButton(
+                  onPressed: onPressed,
+                  icon: const Icon(Icons.close),
+                  tooltip: '清空',
+                )
+              : const SizedBox.shrink(),
+        ),
       ),
     );
   }
