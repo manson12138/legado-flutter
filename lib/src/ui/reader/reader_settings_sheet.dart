@@ -42,44 +42,49 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
       length: 4,
       child: SizedBox(
         height: MediaQuery.sizeOf(context).height * 0.82,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                SpacingToken.medium,
-                SpacingToken.medium,
-                SpacingToken.medium,
-                0,
+        /// `showModalBottomSheet` 的 `useSafeArea` 只处理顶部，底部按设计允许弹窗
+        /// 延伸到导航栏之下，需要面板自己避让，否则“应用”按钮会被导航栏遮挡。
+        child: SafeArea(
+          top: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  SpacingToken.medium,
+                  SpacingToken.medium,
+                  SpacingToken.medium,
+                  0,
+                ),
+                child: Text('显示设置', style: Theme.of(context).textTheme.titleLarge),
               ),
-              child: Text('显示设置', style: Theme.of(context).textTheme.titleLarge),
-            ),
-            const TabBar(
-              tabs: <Widget>[
-                Tab(text: '样式'),
-                Tab(text: '文字'),
-                Tab(text: '间距'),
-                Tab(text: '系统'),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
-                children: <Widget>[
-                  _sheetPage(_buildStylePage(context)),
-                  _sheetPage(_buildTextPage(context)),
-                  _sheetPage(_buildSpacingPage(context)),
-                  _sheetPage(_buildSystemPage(context)),
+              const TabBar(
+                tabs: <Widget>[
+                  Tab(text: '样式'),
+                  Tab(text: '文字'),
+                  Tab(text: '间距'),
+                  Tab(text: '系统'),
                 ],
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(SpacingToken.medium),
-              child: FilledButton(
-                onPressed: () => widget.onApply(_draft),
-                child: const Text('应用'),
+              Expanded(
+                child: TabBarView(
+                  children: <Widget>[
+                    _sheetPage(_buildStylePage(context)),
+                    _sheetPage(_buildTextPage(context)),
+                    _sheetPage(_buildSpacingPage(context)),
+                    _sheetPage(_buildSystemPage(context)),
+                  ],
+                ),
               ),
-            ),
-          ],
+              Padding(
+                padding: const EdgeInsets.all(SpacingToken.medium),
+                child: FilledButton(
+                  onPressed: () => widget.onApply(_draft),
+                  child: const Text('应用'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
