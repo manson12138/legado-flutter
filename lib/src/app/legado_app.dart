@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../ui/theme/app_theme.dart';
 import 'app_dependencies.dart';
@@ -67,8 +68,27 @@ final class _LegadoAppState extends State<LegadoApp> {
       onGenerateRoute: router.onGenerateRoute,
       navigatorObservers: <NavigatorObserver>[navigationObserver],
       builder: (BuildContext context, Widget? child) {
-        return AppErrorBoundary(child: child);
+        /// 透明系统导航栏可以让 edge-to-edge 内容在其后完整显示，因此每个页面
+        /// 底部会自动露出该页面自身的背景色，不需要逐页手动同步导航栏颜色。
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: _systemOverlayStyleFor(Theme.of(context).brightness),
+          child: AppErrorBoundary(child: child),
+        );
       },
+    );
+  }
+
+  /// 根据当前生效主题亮度生成透明系统栏样式，避免系统默认的导航栏黑色对比度保护层。
+  SystemUiOverlayStyle _systemOverlayStyleFor(Brightness brightness) {
+    final bool isDark = brightness == Brightness.dark;
+    return SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
     );
   }
 }
