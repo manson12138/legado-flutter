@@ -690,6 +690,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 首次进入长章节时优先测量的页数，保证首屏和短时间翻页先可用。
   static const int _initialLayoutPageCount = 8;
 
+  /// 页面上下边距：显示页眉页脚时页眉页脚只需贴近安全区留出固定小间距，
+  /// 正文与安全区的距离改由页眉页脚下方的阅读边距承担；不显示页眉页脚时
+  /// 仍按用户配置的阅读边距直接包裹正文。
+  double get _edgeVerticalPadding => widget.state.config.showHeaderFooter
+      ? SpacingToken.small
+      : widget.state.config.verticalPadding;
+
   /// 当前章节页面控制器，不写入业务状态。
   final PageController _pageController = PageController();
 
@@ -808,7 +815,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             : 0;
         /// 扣除真实页眉、页脚和上下边距后的正文排版高度。
         final double contentHeight =
-            (constraints.maxHeight - chromeHeight - widget.state.config.verticalPadding * 2)
+            (constraints.maxHeight - chromeHeight - _edgeVerticalPadding * 2)
                 .clamp(1, double.infinity)
                 .toDouble();
         /// 当前系统文字缩放策略。
@@ -1159,7 +1166,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           width: contentWidth,
           child: Padding(
             padding: EdgeInsets.symmetric(
-              vertical: widget.state.config.verticalPadding,
+              vertical: _edgeVerticalPadding,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

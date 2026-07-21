@@ -30,6 +30,9 @@ final class ReaderScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     /// 阅读背景色。
     final Color backgroundColor = Color(state.config.backgroundColorValue);
+    /// 非全屏模式下系统状态栏和导航栏常驻显示，正文需要避让；全屏沉浸模式下系统栏被
+    /// 隐藏，不需要额外让出空间。
+    final bool avoidsSystemBars = !state.config.fullScreen;
     return Scaffold(
       backgroundColor: backgroundColor,
       body: Stack(
@@ -37,7 +40,13 @@ final class ReaderScreen extends StatelessWidget {
           Positioned.fill(
             child: ColoredBox(
               color: backgroundColor,
-              child: _buildBody(context),
+              child: SafeArea(
+                left: avoidsSystemBars,
+                top: avoidsSystemBars,
+                right: avoidsSystemBars,
+                bottom: avoidsSystemBars,
+                child: _buildBody(context),
+              ),
             ),
           ),
           Positioned.fill(
@@ -359,9 +368,12 @@ final class _ReaderContentList extends StatelessWidget {
         onLongPress: _handleLongPress,
         child: ListView.builder(
         controller: scrollController,
+        /// 显示页眉时页眉只需贴近安全区留出固定小间距，不再叠加用户配置的阅读边距。
         padding: EdgeInsets.fromLTRB(
           state.config.horizontalPadding,
-          state.config.verticalPadding,
+          state.config.showHeaderFooter
+              ? SpacingToken.small
+              : state.config.verticalPadding,
           state.config.horizontalPadding,
           state.config.verticalPadding,
         ),
