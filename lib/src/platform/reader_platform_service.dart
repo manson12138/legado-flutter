@@ -4,13 +4,17 @@ import '../domain/model/reader_content.dart';
 
 /// 定义阅读器系统栏和屏幕常亮平台能力，业务 ViewModel 只通过 Effect 请求。
 abstract interface class ReaderPlatformService {
-  /// 进入阅读模式，隐藏系统栏并按配置设置屏幕常亮。
+  /// 进入阅读模式，按配置设置系统栏沉浸模式和屏幕常亮。
   Future<void> enterReader({
     required bool keepScreenOn,
     required bool useSystemBrightness,
     required double readerBrightness,
     required ReaderOrientationMode orientationMode,
+    required bool fullScreen,
   });
+
+  /// 阅读中更新是否隐藏系统状态栏和导航栏。
+  Future<void> setFullScreen(bool enabled);
 
   /// 阅读中更新屏幕常亮状态。
   Future<void> setKeepScreenOn(bool enabled);
@@ -36,21 +40,30 @@ final class MethodChannelReaderPlatformService implements ReaderPlatformService 
   /// Android MainActivity 与 iOS AppDelegate 共用的通道名称。
   static const MethodChannel _channel = MethodChannel('io.legado.flutter/reader_platform');
 
-  /// 隐藏系统栏并设置屏幕常亮；平台桥缺失时仍保留 Flutter 沉浸模式。
+  /// 按配置设置系统栏沉浸模式和屏幕常亮；平台桥缺失时仍保留 Flutter 系统栏控制。
   @override
   Future<void> enterReader({
     required bool keepScreenOn,
     required bool useSystemBrightness,
     required double readerBrightness,
     required ReaderOrientationMode orientationMode,
+    required bool fullScreen,
   }) async {
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    await setFullScreen(fullScreen);
     await _invokePlatform('enterReader', <String, Object?>{
       'enabled': keepScreenOn,
       'useSystemBrightness': useSystemBrightness,
       'brightness': readerBrightness,
     });
     await setOrientation(orientationMode);
+  }
+
+  /// 切换系统状态栏和导航栏的隐藏（沉浸式全屏）状态；默认应保持系统栏可见。
+  @override
+  Future<void> setFullScreen(bool enabled) {
+    return SystemChrome.setEnabledSystemUIMode(
+      enabled ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+    );
   }
 
   /// 更新宿主窗口常亮标志。

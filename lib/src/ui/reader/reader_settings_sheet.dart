@@ -317,6 +317,13 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
+        value: _draft.fullScreen,
+        title: const Text('全屏模式'),
+        subtitle: const Text('隐藏系统状态栏和导航栏，默认关闭'),
+        onChanged: (bool value) => _update(_draft.copyWith(fullScreen: value)),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
         value: _draft.showHeaderFooter,
         title: const Text('显示页眉页脚'),
         onChanged: (bool value) => _update(_draft.copyWith(showHeaderFooter: value)),

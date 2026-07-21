@@ -133,6 +133,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           useSystemBrightness: _viewModel.state.config.useSystemBrightness,
           readerBrightness: _viewModel.state.config.readerBrightness,
           orientationMode: _viewModel.state.config.orientationMode,
+          fullScreen: _viewModel.state.config.fullScreen,
         ),
       );
       unawaited(_refreshSystemInfo());
@@ -182,10 +183,12 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
             useSystemBrightness: config.useSystemBrightness,
             readerBrightness: config.readerBrightness,
             orientationMode: config.orientationMode,
+            fullScreen: config.fullScreen,
           ),
         );
         _startSystemInfoTimer();
       case UpdateReaderSystemEffect(config: final ReaderDisplayConfig config):
+        unawaited(_platformService.setFullScreen(config.fullScreen));
         unawaited(_platformService.setKeepScreenOn(config.keepScreenOn));
         unawaited(
           _platformService.setBrightness(
@@ -254,6 +257,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         useSystemBrightness: _viewModel.state.config.useSystemBrightness,
         readerBrightness: _viewModel.state.config.readerBrightness,
         orientationMode: _viewModel.state.config.orientationMode,
+        fullScreen: _viewModel.state.config.fullScreen,
       );
       return;
     }

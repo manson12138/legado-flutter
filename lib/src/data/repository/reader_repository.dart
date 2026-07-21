@@ -257,6 +257,7 @@ final class ReaderRepository
             maximum: 1,
           ),
           orientationMode: _orientationMode(decoded['orientationMode']),
+          fullScreen: decoded['fullScreen'] is bool ? decoded['fullScreen'] as bool : false,
         );
       } on FormatException {
         return const ReaderDisplayConfig();
@@ -310,6 +311,7 @@ final class ReaderRepository
         'useSystemBrightness': config.useSystemBrightness,
         'readerBrightness': config.readerBrightness,
         'orientationMode': config.orientationMode.name,
+        'fullScreen': config.fullScreen,
       });
       return _cacheDao.upsert(Cache(key: _configKey(bookUrl), value: value));
     });

@@ -965,7 +965,8 @@ final class ReaderViewModel {
     if (previous.keepScreenOn != config.keepScreenOn ||
         previous.useSystemBrightness != config.useSystemBrightness ||
         previous.readerBrightness != config.readerBrightness ||
-        previous.orientationMode != config.orientationMode) {
+        previous.orientationMode != config.orientationMode ||
+        previous.fullScreen != config.fullScreen) {
       _effectController.add(UpdateReaderSystemEffect(config));
     }
     if (previous.useReplaceRules != config.useReplaceRules) {

@@ -183,6 +183,7 @@ final class ReaderDisplayConfig {
     this.useSystemBrightness = true,
     this.readerBrightness = 0.5,
     this.orientationMode = ReaderOrientationMode.portrait,
+    this.fullScreen = false,
   });
 
   /// 正文字号，单位为逻辑像素。
@@ -299,6 +300,9 @@ final class ReaderDisplayConfig {
   /// 阅读器方向锁定策略。
   final ReaderOrientationMode orientationMode;
 
+  /// 是否隐藏系统状态栏和导航栏进入沉浸式全屏阅读；默认关闭，由用户在设置中主动开启。
+  final bool fullScreen;
+
   /// 复制显示配置并只覆盖用户本次修改的字段。
   ReaderDisplayConfig copyWith({
     double? fontSize,
@@ -339,6 +343,7 @@ final class ReaderDisplayConfig {
     bool? useSystemBrightness,
     double? readerBrightness,
     ReaderOrientationMode? orientationMode,
+    bool? fullScreen,
   }) {
     return ReaderDisplayConfig(
       fontSize: fontSize ?? this.fontSize,
@@ -379,6 +384,7 @@ final class ReaderDisplayConfig {
       useSystemBrightness: useSystemBrightness ?? this.useSystemBrightness,
       readerBrightness: readerBrightness ?? this.readerBrightness,
       orientationMode: orientationMode ?? this.orientationMode,
+      fullScreen: fullScreen ?? this.fullScreen,
     );
   }
 }
