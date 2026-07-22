@@ -12,6 +12,9 @@ abstract final class AppRoute {
   /// 跨书离线下载任务和缓存管理页面。
   static const String downloadManagement = '/downloads';
 
+  /// 设置中的离线正文清除入口，复用下载管理的离线内容 PageView 页面。
+  static const String offlineContentManagement = '/offline-content';
+
   /// “我的”页面中的“关于”页面。
   static const String about = '/settings/about';
 

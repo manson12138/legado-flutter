@@ -76,6 +76,16 @@ final class AppRouter {
             return DownloadManagementRoute(dependencies: dependencies);
           },
         );
+      case AppRoute.offlineContentManagement:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return DownloadManagementRoute(
+              dependencies: dependencies,
+              initialPage: 2,
+            );
+          },
+        );
       case AppRoute.about:
         return MaterialPageRoute<void>(
           settings: settings,

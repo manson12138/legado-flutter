@@ -3,20 +3,31 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
+import '../../domain/model/book_search.dart';
 import '../../domain/model/download_task.dart';
+import '../../domain/model/search_book.dart';
 import '../../model/reader/download_coordinator.dart';
+import '../book_info/book_info_contract.dart';
 import '../components/app_scaffold.dart';
 import '../theme/app_tokens.dart';
 
 /// 连接跨书下载任务流、书架事实和独立下载管理页面。
 final class DownloadManagementRoute extends StatelessWidget {
   /// 创建下载管理路由。
-  const DownloadManagementRoute({required this.dependencies, super.key});
+  const DownloadManagementRoute({
+    required this.dependencies,
+    this.initialPage = 0,
+    super.key,
+  });
 
   /// 应用组合根依赖，提供书架流和 App 级下载协调器。
   final AppDependencies dependencies;
+
+  /// 初始展示的 PageView 页面：0 为进行中、1 为已完成、2 为离线内容管理。
+  final int initialPage;
 
   /// 合并实时书架与下载任务流后构建管理页面。
   @override
@@ -36,6 +47,7 @@ final class DownloadManagementRoute extends StatelessWidget {
               coordinator: dependencies.downloadCoordinator,
               books: bookSnapshot.data ?? const <Book>[],
               tasks: taskSnapshot.data ?? const <DownloadTask>[],
+              initialPage: initialPage,
               onBack: () => Navigator.of(context).pop(),
             );
           },
@@ -52,6 +64,7 @@ final class _DownloadManagementScreen extends StatefulWidget {
     required this.coordinator,
     required this.books,
     required this.tasks,
+    required this.initialPage,
     required this.onBack,
   });
 
@@ -63,6 +76,9 @@ final class _DownloadManagementScreen extends StatefulWidget {
 
   /// 全部书籍实时下载任务。
   final List<DownloadTask> tasks;
+
+  /// 路由指定的首次展示页面。
+  final int initialPage;
 
   /// 返回上一页的导航回调。
   final VoidCallback onBack;
@@ -86,7 +102,32 @@ final class _DownloadManagementScreenState
   /// 正在加载目录的书籍主键集合。
   final Set<String> _loadingChapterBookUrls = <String>{};
 
-  /// 构建全局摘要、串行策略说明和按书分组任务列表。
+  /// 当前管理页展示的下载并发数；初始化期间采用与调度器一致的默认值。
+  int _maximumConcurrency = DownloadCoordinator.defaultMaximumConcurrency;
+
+  /// 下载管理三页的控制器，支持顶部切换和左右滑动。
+  late final PageController _pageController;
+
+  /// 当前展示页索引，用于同步顶部页面切换按钮。
+  int _pageIndex = 0;
+
+  /// 首帧后读取已持久化的下载并发设置，避免在构建期触发数据库访问。
+  @override
+  void initState() {
+    super.initState();
+    _pageIndex = widget.initialPage.clamp(0, 2).toInt();
+    _pageController = PageController(initialPage: _pageIndex);
+    unawaited(_loadMaximumConcurrency());
+  }
+
+  /// 释放 PageView 控制器，避免退出下载管理后持有页面滚动资源。
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  /// 构建全局摘要、并发策略说明和按书分组任务列表。
   @override
   Widget build(BuildContext context) {
     /// 按书籍主键分组的任务。
@@ -135,6 +176,26 @@ final class _DownloadManagementScreenState
     final bool hasFailedTasks = widget.tasks.any(
       (DownloadTask task) => task.status == DownloadTaskStatus.failed,
     );
+    /// 仍有等待、下载中、暂停或失败任务的书籍，作为默认下载管理页内容。
+    final List<String> activeBookUrls = orderedBookUrls
+        .where((String bookUrl) => (groupedTasks[bookUrl] ?? const <DownloadTask>[])
+            .any((DownloadTask task) => task.status != DownloadTaskStatus.success))
+        .toList(growable: false);
+    /// 全部任务都成功的书籍；点击后直接进入书籍详情，不再显示下载操作按钮。
+    final List<String> completedBookUrls = orderedBookUrls
+        .where((String bookUrl) {
+          final List<DownloadTask> tasks =
+              groupedTasks[bookUrl] ?? const <DownloadTask>[];
+          return tasks.isNotEmpty &&
+              tasks.every((DownloadTask task) =>
+                  task.status == DownloadTaskStatus.success);
+        })
+        .toList(growable: false);
+    /// 存在已下载正文的书籍，供离线内容管理页清除缓存和对应任务记录。
+    final List<String> offlineContentBookUrls = orderedBookUrls
+        .where((String bookUrl) => (groupedTasks[bookUrl] ?? const <DownloadTask>[])
+            .any((DownloadTask task) => task.status == DownloadTaskStatus.success))
+        .toList(growable: false);
     return AppScaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -176,6 +237,36 @@ final class _DownloadManagementScreenState
       body: Column(
         children: <Widget>[
           _DownloadSummaryCard(tasks: widget.tasks),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              SpacingToken.medium,
+              0,
+              SpacingToken.medium,
+              SpacingToken.small,
+            ),
+            child: Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text('同时下载请求数'),
+                ),
+                DropdownButton<int>(
+                  value: _maximumConcurrency,
+                  items: List<DropdownMenuItem<int>>.generate(
+                    DownloadCoordinator.maximumConcurrencyLimit,
+                    (int index) => DropdownMenuItem<int>(
+                      value: index + 1,
+                      child: Text('${index + 1} 个'),
+                    ),
+                  ),
+                  onChanged: (int? value) {
+                    if (value != null) {
+                      unawaited(_updateMaximumConcurrency(value));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
           const Padding(
             padding: EdgeInsets.fromLTRB(
               SpacingToken.medium,
@@ -184,28 +275,48 @@ final class _DownloadManagementScreenState
               SpacingToken.small,
             ),
             child: Text(
-              '当前固定为全局串行下载：同一时间只请求一个章节，两次真实书源请求至少间隔 1.5 秒；单次请求 45 秒超时，失败 5 次后跳过并继续后续章节。',
+              '默认 5 个；单次请求 45 秒超时，失败 5 次后跳过并继续后续章节。并发数调整只影响后续领取的任务。',
             ),
           ),
           const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: SpacingToken.medium,
+              vertical: SpacingToken.xSmall,
+            ),
+            child: Row(
+              children: <Widget>[
+                _buildPageButton(0, '下载中'),
+                _buildPageButton(1, '已完成'),
+                _buildPageButton(2, '离线内容'),
+              ],
+            ),
+          ),
           Expanded(
-            child: orderedBookUrls.isEmpty
-                ? const Center(child: Text('还没有离线下载任务'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(
-                      top: SpacingToken.small,
-                      bottom: SpacingToken.large,
-                    ),
-                    itemCount: orderedBookUrls.length,
-                    itemBuilder: (BuildContext context, int index) {
-                      /// 当前分组书籍主键。
-                      final String bookUrl = orderedBookUrls[index];
-                      /// 当前书籍全部下载任务。
-                      final List<DownloadTask> tasks =
-                          groupedTasks[bookUrl] ?? const <DownloadTask>[];
-                      return _buildBookGroup(bookUrl, tasks);
-                    },
-                  ),
+            child: PageView(
+              controller: _pageController,
+              onPageChanged: (int index) {
+                setState(() {
+                  _pageIndex = index;
+                });
+              },
+              children: <Widget>[
+                _buildBookList(
+                  bookUrls: activeBookUrls,
+                  groupedTasks: groupedTasks,
+                ),
+                _buildBookList(
+                  bookUrls: completedBookUrls,
+                  groupedTasks: groupedTasks,
+                  completed: true,
+                ),
+                _buildBookList(
+                  bookUrls: offlineContentBookUrls,
+                  groupedTasks: groupedTasks,
+                  offlineContentManagement: true,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -229,8 +340,88 @@ final class _DownloadManagementScreenState
     return groups;
   }
 
-  /// 构建一本书的汇总卡片和按需展开章节任务。
-  Widget _buildBookGroup(String bookUrl, List<DownloadTask> tasks) {
+  /// 读取持久化并发数后更新页面；页面已销毁时不再写入局部状态。
+  /// 构建 PageView 顶部切换按钮，并保持手势翻页与按钮状态一致。
+  Widget _buildPageButton(int index, String label) {
+    return Expanded(
+      child: TextButton(
+        onPressed: () {
+          _pageController.animateToPage(
+            index,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+          );
+        },
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: _pageIndex == index ? FontWeight.w700 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 按页面职责构建书籍列表：进行中可展开，已完成直接进入详情，离线内容页仅负责清除正文。
+  Widget _buildBookList({
+    required List<String> bookUrls,
+    required Map<String, List<DownloadTask>> groupedTasks,
+    bool completed = false,
+    bool offlineContentManagement = false,
+  }) {
+    if (bookUrls.isEmpty) {
+      final String message = offlineContentManagement
+          ? '还没有可清除的离线内容'
+          : completed
+          ? '还没有已完成下载的书籍'
+          : '还没有进行中的下载任务';
+      return Center(child: Text(message));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.only(
+        top: SpacingToken.small,
+        bottom: SpacingToken.large,
+      ),
+      itemCount: bookUrls.length,
+      itemBuilder: (BuildContext context, int index) {
+        final String bookUrl = bookUrls[index];
+        final List<DownloadTask> tasks =
+            groupedTasks[bookUrl] ?? const <DownloadTask>[];
+        if (offlineContentManagement) {
+          return _buildOfflineContentBookGroup(bookUrl, tasks);
+        }
+        return _buildBookGroup(bookUrl, tasks, completed: completed);
+      },
+    );
+  }
+
+  Future<void> _loadMaximumConcurrency() async {
+    final int value = await widget.coordinator.loadMaximumConcurrency();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _maximumConcurrency = value;
+    });
+  }
+
+  /// 保存用户选择的并发数，并立即让调度器补领可用任务槽位。
+  Future<void> _updateMaximumConcurrency(int value) async {
+    await widget.coordinator.setMaximumConcurrency(value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _maximumConcurrency = widget.coordinator.maximumConcurrency;
+    });
+  }
+
+  /// 构建一本书的汇总卡片和按需展开的活跃章节任务。
+  Widget _buildBookGroup(
+    String bookUrl,
+    List<DownloadTask> tasks, {
+    bool completed = false,
+  }) {
     /// 当前主键对应的书架书籍。
     final Book? book = _findBook(bookUrl);
     /// 当前书籍是否展开章节任务。
@@ -249,6 +440,21 @@ final class _DownloadManagementScreenState
     final bool hasFailed = tasks.any(
       (DownloadTask task) => task.status == DownloadTaskStatus.failed,
     );
+    if (completed) {
+      return Card(
+        margin: const EdgeInsets.symmetric(
+          horizontal: SpacingToken.medium,
+          vertical: SpacingToken.xSmall,
+        ),
+        child: ListTile(
+          leading: const Icon(Icons.check_circle_outline),
+          title: Text(book?.name ?? '已移除书籍'),
+          subtitle: Text(_bookSummary(book, tasks)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: book == null ? null : () => _openBookInfo(book),
+        ),
+      );
+    }
     return Card(
       margin: const EdgeInsets.symmetric(
         horizontal: SpacingToken.medium,
@@ -271,63 +477,79 @@ final class _DownloadManagementScreenState
               overflow: TextOverflow.ellipsis,
             ),
             onTap: () => _toggleBook(bookUrl),
-            trailing: PopupMenuButton<_DownloadBookAction>(
-              tooltip: '本书下载操作',
-              onSelected: (_DownloadBookAction action) {
-                switch (action) {
-                  case _DownloadBookAction.pause:
-                    _runAction(
-                      () => widget.coordinator.pauseBook(bookUrl),
-                      '本书下载已暂停',
-                    );
-                  case _DownloadBookAction.resume:
-                    _runAction(
-                      () => widget.coordinator.resumeBook(bookUrl),
-                      '本书下载已恢复',
-                    );
-                  case _DownloadBookAction.retryFailed:
-                    _runAction(
-                      () => widget.coordinator.retryBookFailed(bookUrl),
-                      '本书失败任务已重新排队',
-                    );
-                  case _DownloadBookAction.addRange:
-                    _showEnqueueRange(
-                      bookUrl,
-                      book?.name ?? '本书',
-                    );
-                  case _DownloadBookAction.delete:
-                    _confirmDeleteBook(bookUrl, book?.name ?? '本书');
-                }
-              },
-              itemBuilder: (BuildContext context) {
-                return <PopupMenuEntry<_DownloadBookAction>>[
-                  PopupMenuItem<_DownloadBookAction>(
-                    value: _DownloadBookAction.addRange,
-                    enabled: book != null,
-                    child: const Text('添加章节范围'),
-                  ),
-                  PopupMenuItem<_DownloadBookAction>(
-                    value: _DownloadBookAction.pause,
-                    enabled: hasActive,
-                    child: const Text('暂停本书'),
-                  ),
-                  PopupMenuItem<_DownloadBookAction>(
-                    value: _DownloadBookAction.resume,
-                    enabled: hasPaused,
-                    child: const Text('恢复本书'),
-                  ),
-                  PopupMenuItem<_DownloadBookAction>(
-                    value: _DownloadBookAction.retryFailed,
-                    enabled: hasFailed,
-                    child: const Text('重试失败章节'),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem<_DownloadBookAction>(
-                    value: _DownloadBookAction.delete,
-                    child: Text('删除本书离线内容'),
-                  ),
-                ];
-              },
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                IconButton(
+                  onPressed: book == null ? null : () => _openBookInfo(book),
+                  icon: const Icon(Icons.info_outline),
+                  tooltip: '书籍详情',
+                ),
+                PopupMenuButton<_DownloadBookAction>(
+                  tooltip: '本书下载操作',
+                  onSelected: (_DownloadBookAction action) {
+                    switch (action) {
+                      case _DownloadBookAction.pause:
+                        _runAction(
+                          () => widget.coordinator.pauseBook(bookUrl),
+                          '本书下载已暂停',
+                        );
+                      case _DownloadBookAction.resume:
+                        _runAction(
+                          () => widget.coordinator.resumeBook(bookUrl),
+                          '本书下载已恢复',
+                        );
+                      case _DownloadBookAction.retryFailed:
+                        _runAction(
+                          () => widget.coordinator.retryBookFailed(bookUrl),
+                          '本书失败任务已重新排队',
+                        );
+                      case _DownloadBookAction.addRange:
+                        _showEnqueueRange(
+                          bookUrl,
+                          book?.name ?? '本书',
+                        );
+                      case _DownloadBookAction.delete:
+                        _confirmDeleteBook(bookUrl, book?.name ?? '本书');
+                      case _DownloadBookAction.removeTasksOnly:
+                        _confirmRemoveBookTasks(bookUrl, book?.name ?? '本书');
+                    }
+                  },
+                  itemBuilder: (BuildContext context) {
+                    return <PopupMenuEntry<_DownloadBookAction>>[
+                      PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.addRange,
+                        enabled: book != null,
+                        child: const Text('添加章节范围'),
+                      ),
+                      PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.pause,
+                        enabled: hasActive,
+                        child: const Text('暂停本书'),
+                      ),
+                      PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.resume,
+                        enabled: hasPaused,
+                        child: const Text('恢复本书'),
+                      ),
+                      PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.retryFailed,
+                        enabled: hasFailed,
+                        child: const Text('重试失败章节'),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.removeTasksOnly,
+                        child: Text('仅删除下载任务'),
+                      ),
+                      const PopupMenuItem<_DownloadBookAction>(
+                        value: _DownloadBookAction.delete,
+                        child: Text('删除本书离线内容'),
+                      ),
+                    ];
+                  },
+                ),
+              ],
             ),
           ),
           if (expanded) const Divider(height: 1),
@@ -337,7 +559,32 @@ final class _DownloadManagementScreenState
     );
   }
 
-  /// 构建一本书展开后的章节任务列表或目录加载状态。
+  /// 构建离线内容管理书籍项；清除操作会删除正文缓存及其成功下载任务，不影响书架书籍本身。
+  Widget _buildOfflineContentBookGroup(
+    String bookUrl,
+    List<DownloadTask> tasks,
+  ) {
+    final Book? book = _findBook(bookUrl);
+    return Card(
+      margin: const EdgeInsets.symmetric(
+        horizontal: SpacingToken.medium,
+        vertical: SpacingToken.xSmall,
+      ),
+      child: ListTile(
+        leading: const Icon(Icons.offline_pin_outlined),
+        title: Text(book?.name ?? '已移除书籍'),
+        subtitle: Text(_bookSummary(book, tasks)),
+        onTap: book == null ? null : () => _openBookInfo(book),
+        trailing: IconButton(
+          onPressed: () => _confirmDeleteBook(bookUrl, book?.name ?? '本书'),
+          icon: const Icon(Icons.delete_outline),
+          tooltip: '清除离线内容',
+        ),
+      ),
+    );
+  }
+
+  /// 构建一本书展开后的固定高度活跃任务列表；已完成任务不再渲染，避免大范围下载时创建大量 Widget。
   Widget _buildChapterTasks(String bookUrl, List<DownloadTask> tasks) {
     if (_loadingChapterBookUrls.contains(bookUrl)) {
       return const Padding(
@@ -348,28 +595,50 @@ final class _DownloadManagementScreenState
     /// 已加载的当前书目录。
     final List<BookChapter> chapters =
         _chaptersByBookUrl[bookUrl] ?? const <BookChapter>[];
-    return Column(
-      children: tasks.map((DownloadTask task) {
-        return _DownloadChapterTaskTile(
-          task: task,
-          title: _chapterTitle(chapters, task.chapterIndex),
-          onPause: () => _runAction(
-            () => widget.coordinator.pauseTask(
-              task.bookUrl,
-              task.chapterIndex,
-            ),
-            '章节下载已暂停',
-          ),
-          onResume: () => _runAction(
-            () => widget.coordinator.resumeTask(
-              task.bookUrl,
-              task.chapterIndex,
-            ),
-            '章节已重新排队',
-          ),
-          onDelete: () => _confirmDeleteTask(task, chapters),
-        );
-      }).toList(growable: false),
+    return _ActiveDownloadTaskList(
+      tasks: tasks,
+      chapters: chapters,
+      onPause: (DownloadTask task) => _runAction(
+        () => widget.coordinator.pauseTask(task.bookUrl, task.chapterIndex),
+        '章节下载已暂停',
+      ),
+      onResume: (DownloadTask task) => _runAction(
+        () => widget.coordinator.resumeTask(task.bookUrl, task.chapterIndex),
+        '章节已重新排队',
+      ),
+      onDelete: (DownloadTask task) => _confirmDeleteTask(task, chapters),
+    );
+  }
+
+  /// 从下载管理直接进入既有书籍详情页，并复用书架到详情页的候选转换语义。
+  void _openBookInfo(Book book) {
+    /// 详情路由所需的单来源候选书籍。
+    final SearchBook searchBook = SearchBook(
+      bookUrl: book.bookUrl,
+      origin: book.origin,
+      originName: book.originName,
+      name: book.name,
+      author: book.author,
+      type: book.type,
+      kind: book.kind,
+      coverUrl: book.coverUrl,
+      intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      tocUrl: book.tocUrl,
+      time: book.lastCheckTime,
+      variable: book.variable,
+      originOrder: book.originOrder,
+    );
+    Navigator.of(context).pushNamed(
+      AppRoute.bookInfo,
+      arguments: BookInfoRouteArguments(
+        group: BookSearchResultGroup(
+          key: '${book.name.length}:${book.name}${book.author}',
+          books: <SearchBook>[searchBook],
+        ),
+        selectedBook: searchBook,
+      ),
     );
   }
 
@@ -464,16 +733,6 @@ final class _DownloadManagementScreenState
       return '${(count / 10000).toStringAsFixed(1)} 万字符';
     }
     return '$count 字符';
-  }
-
-  /// 按章节索引查找标题，目录缺失时回退为章节号。
-  String _chapterTitle(List<BookChapter> chapters, int chapterIndex) {
-    for (final BookChapter chapter in chapters) {
-      if (chapter.index == chapterIndex) {
-        return chapter.title;
-      }
-    }
-    return '第 ${chapterIndex + 1} 章';
   }
 
   /// 加载目录并弹出起止章节范围，确认后加入全局串行下载队列。
@@ -653,6 +912,37 @@ final class _DownloadManagementScreenState
     );
   }
 
+  /// 二次确认后仅删除任务记录；已下载正文保持离线可读。
+  Future<void> _confirmRemoveBookTasks(String bookUrl, String bookName) async {
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('仅删除下载任务'),
+              content: Text('确定删除《$bookName》的下载任务吗？已下载的离线正文会保留。'),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('删除任务'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+    if (!confirmed) {
+      return;
+    }
+    await _runAction(
+      () => widget.coordinator.removeBookTasks(bookUrl),
+      '下载任务已删除，离线正文已保留',
+    );
+  }
+
   /// 二次确认后删除单章离线正文和任务。
   Future<void> _confirmDeleteTask(
     DownloadTask task,
@@ -691,6 +981,16 @@ final class _DownloadManagementScreenState
       ),
       '章节离线内容已删除',
     );
+  }
+
+  /// 为删除确认对话框解析章节标题；目录尚未命中时使用稳定章节号回退。
+  String _chapterTitle(List<BookChapter> chapters, int chapterIndex) {
+    for (final BookChapter chapter in chapters) {
+      if (chapter.index == chapterIndex) {
+        return chapter.title;
+      }
+    }
+    return '第 ${chapterIndex + 1} 章';
   }
 
   /// 执行下载管理动作并展示成功或失败消息。
@@ -877,6 +1177,151 @@ final class _DownloadChapterTaskTile extends StatelessWidget {
   }
 }
 
+/// 仅虚拟化展示未完成下载任务的固定高度列表；新章节开始下载时自动回到顶部展示。
+final class _ActiveDownloadTaskList extends StatefulWidget {
+  /// 创建当前书籍的活跃下载任务窗口。
+  const _ActiveDownloadTaskList({
+    required this.tasks,
+    required this.chapters,
+    required this.onPause,
+    required this.onResume,
+    required this.onDelete,
+  });
+
+  /// 当前书籍全部持久化任务；成功任务仅用于统计，不在此列表中渲染。
+  final List<DownloadTask> tasks;
+
+  /// 已按需加载的目录，用于把任务章节索引显示为章节标题。
+  final List<BookChapter> chapters;
+
+  /// 暂停单章任务的页面回调。
+  final ValueChanged<DownloadTask> onPause;
+
+  /// 恢复或重试单章任务的页面回调。
+  final ValueChanged<DownloadTask> onResume;
+
+  /// 删除单章离线正文和任务的页面回调。
+  final ValueChanged<DownloadTask> onDelete;
+
+  /// 创建内部懒加载列表的滚动状态。
+  @override
+  State<_ActiveDownloadTaskList> createState() =>
+      _ActiveDownloadTaskListState();
+}
+
+/// 保存内部滚动位置，并在下载状态转换为运行中时把新活跃任务带回可见区域。
+final class _ActiveDownloadTaskListState
+    extends State<_ActiveDownloadTaskList> {
+  /// 每行固定高度，5.5 行窗口既限制首次构建量，也保留下一行的滚动提示。
+  static const double _taskRowExtent = 72;
+
+  /// 内部任务窗口的滚动控制器，不影响下载管理页面的外层滚动位置。
+  final ScrollController _scrollController = ScrollController();
+
+  /// 销毁内部滚动控制器，避免展开/收起书籍后保留无效监听资源。
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 当任一任务刚变为下载中时自动显示列表顶部；列表排序会把所有下载中任务排在最前。
+  @override
+  void didUpdateWidget(covariant _ActiveDownloadTaskList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final Set<String> previousRunningKeys = oldWidget.tasks
+        .where((DownloadTask task) => task.status == DownloadTaskStatus.running)
+        .map(_taskKey)
+        .toSet();
+    final bool hasNewRunningTask = widget.tasks.any(
+      (DownloadTask task) =>
+          task.status == DownloadTaskStatus.running &&
+          !previousRunningKeys.contains(_taskKey(task)),
+    );
+    if (hasNewRunningTask) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
+  }
+
+  /// 构建固定 5.5 行的活跃任务窗口；成功任务保留持久化事实但不参与 Widget 构建。
+  @override
+  Widget build(BuildContext context) {
+    final List<DownloadTask> visibleTasks = widget.tasks
+        .where((DownloadTask task) => task.status != DownloadTaskStatus.success)
+        .toList(growable: false)
+      ..sort(_compareVisibleTasks);
+    if (visibleTasks.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(SpacingToken.medium),
+        child: Text('当前书籍的任务均已下载完成'),
+      );
+    }
+    return SizedBox(
+      height: _taskRowExtent * 5.5,
+      child: ListView.builder(
+        controller: _scrollController,
+        itemExtent: _taskRowExtent,
+        cacheExtent: _taskRowExtent * 2,
+        itemCount: visibleTasks.length,
+        itemBuilder: (BuildContext context, int index) {
+          final DownloadTask task = visibleTasks[index];
+          return _DownloadChapterTaskTile(
+            task: task,
+            title: _chapterTitle(task.chapterIndex),
+            onPause: () => widget.onPause(task),
+            onResume: () => widget.onResume(task),
+            onDelete: () => widget.onDelete(task),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 将下载中任务置顶，其余未完成任务按等待、暂停、失败和章节顺序稳定排列。
+  int _compareVisibleTasks(DownloadTask left, DownloadTask right) {
+    final int statusComparison =
+        _statusPriority(left.status).compareTo(_statusPriority(right.status));
+    if (statusComparison != 0) {
+      return statusComparison;
+    }
+    return left.chapterIndex.compareTo(right.chapterIndex);
+  }
+
+  /// 生成活跃状态的显示优先级；数值越小越靠近列表顶部。
+  int _statusPriority(DownloadTaskStatus status) {
+    return switch (status) {
+      DownloadTaskStatus.running => 0,
+      DownloadTaskStatus.waiting => 1,
+      DownloadTaskStatus.paused => 2,
+      DownloadTaskStatus.failed => 3,
+      DownloadTaskStatus.success => 4,
+    };
+  }
+
+  /// 从已加载目录读取章节标题；目录暂未命中时使用稳定章节号回退。
+  String _chapterTitle(int chapterIndex) {
+    for (final BookChapter chapter in widget.chapters) {
+      if (chapter.index == chapterIndex) {
+        return chapter.title;
+      }
+    }
+    return '第 ${chapterIndex + 1} 章';
+  }
+
+  /// 为跨流更新中的任务生成书籍内稳定键，供运行状态转换比对。
+  String _taskKey(DownloadTask task) {
+    return '${task.bookUrl}\n${task.chapterIndex}';
+  }
+}
+
 /// 一本书可执行的下载管理动作。
 enum _DownloadBookAction {
   /// 选择起止章节范围加入串行队列。
@@ -893,4 +1338,7 @@ enum _DownloadBookAction {
 
   /// 删除本书全部离线正文和任务。
   delete,
+
+  /// 仅删除本书任务记录并保留已经写入缓存的正文。
+  removeTasksOnly,
 }

@@ -18,6 +18,7 @@ import '../../domain/usecase/save_book_chapters_use_case.dart';
 import '../../help/error/app_result.dart';
 import '../../help/logging/app_logger.dart';
 import '../../model/web_book/book_detail_service.dart';
+import '../../model/reader/download_coordinator.dart';
 import 'book_info_contract.dart';
 
 /// 创建详情请求取消令牌的函数类型。
@@ -38,6 +39,7 @@ final class BookInfoViewModel {
     required CreateBookshelfGroupUseCase createBookshelfGroup,
     required ReplaceBooksGroupUseCase replaceBooksGroup,
     required SaveBookChaptersUseCase saveBookChapters,
+    required DownloadCoordinator downloadCoordinator,
     required BookInfoCancellationTokenFactory cancellationTokenFactory,
     required AppLogger logger,
   }) : _detailService = detailService,
@@ -50,6 +52,7 @@ final class BookInfoViewModel {
        _createBookshelfGroup = createBookshelfGroup,
        _replaceBooksGroup = replaceBooksGroup,
        _saveBookChapters = saveBookChapters,
+       _downloadCoordinator = downloadCoordinator,
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger,
        _state = BookInfoUiState(group: arguments.group, selectedBook: arguments.selectedBook) {
@@ -77,6 +80,8 @@ final class BookInfoViewModel {
   final ReplaceBooksGroupUseCase _replaceBooksGroup;
   /// 已在书架时替换目录的 UseCase。
   final SaveBookChaptersUseCase _saveBookChapters;
+  /// App 级下载协调器，用于清除当前书籍的离线正文和任务。
+  final DownloadCoordinator _downloadCoordinator;
   /// 网络取消令牌工厂。
   final BookInfoCancellationTokenFactory _cancellationTokenFactory;
   /// 【搜书诊断日志】项目统一日志接口，用于记录详情页 MVI 和持久化阶段。
@@ -176,12 +181,35 @@ final class BookInfoViewModel {
         _toggleCanUpdate();
       case BookInfoMenuAction.deleteBook:
         _requestDeleteBook();
+      case BookInfoMenuAction.clearOfflineContent:
+        _clearOfflineContent();
       case BookInfoMenuAction.fullSourceChange:
         _openFullSourceChange();
       case BookInfoMenuAction.readRecord:
         _effectController.add(const ShowBookInfoMessageEffect('阅读记录将在后续批次接入'));
       case BookInfoMenuAction.featureMatrix:
         _effectController.add(const ShowBookInfoMessageEffect('P2/P3 后续能力已在详情页能力面板中说明'));
+    }
+  }
+
+  /// 清除已入书架书籍的离线正文和对应任务，不影响书籍、目录及阅读进度。
+  Future<void> _clearOfflineContent() async {
+    final Book? book = _state.book;
+    if (book == null || !_state.inBookshelf) {
+      _effectController.add(const ShowBookInfoMessageEffect('请先把书籍加入书架'));
+      return;
+    }
+    try {
+      await _downloadCoordinator.deleteBookDownloads(book.bookUrl);
+      _effectController.add(const ShowBookInfoMessageEffect('离线内容已清除'));
+    } catch (error, stackTrace) {
+      _logger.error(
+        tag: bookDetailLogTag,
+        message: '清除详情页离线内容失败 bookId=${appLogDiagnosticId(book.bookUrl)}',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _effectController.add(const ShowBookInfoMessageEffect('清除离线内容失败'));
     }
   }
 

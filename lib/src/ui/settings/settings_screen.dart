@@ -18,6 +18,7 @@ final class SettingsScreen extends StatelessWidget {
     required this.onOpenLanguageManagement,
     required this.onOpenBookSources,
     required this.onOpenDownloadManagement,
+    required this.onOpenOfflineContentManagement,
     required this.allowSearchSourceInteraction,
     required this.onChangeSearchSourceInteraction,
     required this.onOpenLogManagement,
@@ -52,6 +53,9 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 打开跨书离线下载管理页的回调。
   final VoidCallback onOpenDownloadManagement;
+
+  /// 打开离线内容管理页并清除不再需要的已下载正文。
+  final VoidCallback onOpenOfflineContentManagement;
 
   /// 搜索时是否允许书源脚本申请登录或验证交互；默认关闭。
   final bool allowSearchSourceInteraction;
@@ -141,6 +145,12 @@ final class SettingsScreen extends StatelessWidget {
                     title: '下载管理',
                     subtitle: '串行下载、暂停恢复和离线内容管理',
                     onTap: onOpenDownloadManagement,
+                  ),
+                  _SettingsItem(
+                    icon: Icons.inventory_2_outlined,
+                    title: '离线内容管理',
+                    subtitle: '查看并清除已下载的离线正文',
+                    onTap: onOpenOfflineContentManagement,
                   ),
                   _SearchSourceInteractionSwitch(
                     initialValue: allowSearchSourceInteraction,

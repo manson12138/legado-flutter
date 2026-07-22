@@ -130,6 +130,10 @@ final class _BookInfoMoreMenu extends StatelessWidget {
           _showFeatureMatrix(context, state, onIntent);
           return;
         }
+        if (action == BookInfoMenuAction.clearOfflineContent) {
+          _confirmClearOfflineContent(context, onIntent);
+          return;
+        }
         onIntent(BookInfoMenuActionIntent(action));
       },
       itemBuilder: (BuildContext context) {
@@ -223,6 +227,15 @@ final class _BookInfoMoreMenu extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
             ),
           ),
+          PopupMenuItem<BookInfoMenuAction>(
+            value: BookInfoMenuAction.clearOfflineContent,
+            enabled: inBookshelf,
+            child: const ListTile(
+              leading: Icon(Icons.delete_sweep_outlined),
+              title: Text('清除离线内容'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
           const PopupMenuItem<BookInfoMenuAction>(
             value: BookInfoMenuAction.readRecord,
             child: ListTile(
@@ -251,6 +264,36 @@ final class _BookInfoMoreMenu extends StatelessWidget {
         ];
       },
     );
+  }
+}
+
+/// 确认清除离线正文，避免用户在详情页误触后同时删除对应下载任务。
+Future<void> _confirmClearOfflineContent(
+  BuildContext context,
+  ValueChanged<BookInfoIntent> onIntent,
+) async {
+  final bool confirmed = await showDialog<bool>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: const Text('清除离线内容'),
+            content: const Text('确定清除本书已下载的离线正文吗？书籍和阅读进度会保留。'),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('清除'),
+              ),
+            ],
+          );
+        },
+      ) ??
+      false;
+  if (confirmed) {
+    onIntent(const BookInfoMenuActionIntent(BookInfoMenuAction.clearOfflineContent));
   }
 }
 

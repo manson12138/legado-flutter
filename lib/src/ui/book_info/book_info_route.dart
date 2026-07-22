@@ -54,6 +54,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       createBookshelfGroup: widget.dependencies.createBookshelfGroup,
       replaceBooksGroup: widget.dependencies.replaceBooksGroup,
       saveBookChapters: widget.dependencies.saveBookChapters,
+      downloadCoordinator: widget.dependencies.downloadCoordinator,
       cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
       logger: widget.dependencies.logger,
     );

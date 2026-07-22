@@ -8,6 +8,7 @@ import 'reader_content_image.dart';
 import 'reader_menu_overlay.dart';
 import 'reader_page_layout.dart';
 import 'reader_selection_region.dart';
+import 'reader_tap_region.dart';
 
 /// 只消费 ReaderUiState、布局控制器并发送 Intent 的无状态小说阅读页面。
 final class ReaderScreen extends StatelessWidget {
@@ -363,10 +364,9 @@ final class _ReaderContentList extends StatelessWidget {
         }
         return false;
       },
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTapUp: (TapUpDetails details) {
-          _handleTap(details.localPosition.dx, MediaQuery.sizeOf(context).width);
+      child: ReaderTapRegion(
+        onTapUp: (Offset position) {
+          _handleTap(position.dx, MediaQuery.sizeOf(context).width);
         },
         child: ListView.builder(
         controller: scrollController,

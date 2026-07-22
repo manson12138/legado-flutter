@@ -4,7 +4,7 @@
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-07-21。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-07-22。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -40,6 +40,7 @@
 | iOS Bundle Identifier | `io.legado.flutter` |
 | iOS Deployment Target | `16.0` |
 | 独立数据库 | `legado_flutter.db`，当前 Schema v7 |
+| 覆盖安装与版本基线 | [`../../VERSION.md`](../../VERSION.md)：晚间打包时对照 applicationId、签名、`versionCode` / `versionName`、SQLite Schema 与其他持久化数据，判断能否覆盖安装并保留数据 |
 | 原 Android 参考实现 | 位于**同级兄弟仓库** `legado-with-MD3`（不在本仓库内）的 `app/src/main/java/io/legado/app/`；本索引第 6 节“Android 对照”列的路径均相对该兄弟仓库 |
 | 重写文档主目录 | `docs/flutter-rewrite/` |
 
@@ -138,13 +139,13 @@ lib/main.dart
 | `/settings` | `ui/settings/settings_route.dart` / `settings_screen.dart` | 当前为轻量无状态接线 | 设置入口 |
 | `/settings/logs` | `ui/log_management/log_management_route.dart` / `log_management_screen.dart` | `LogManagementViewModel` | 查看、分享、ADB 回显和删除沙盒日志 |
 | `/settings/about` | `ui/about/about_route.dart` / `about_screen.dart` | `AboutViewModel` | 连点应用图标 2 秒内 5 次解锁“内容过滤管理”（成人内容屏蔽开关 + 远程更新词库） |
-| `/downloads` | `ui/download_management/download_management_route.dart` | `DownloadCoordinator` + `DownloadGateway` 全局任务流 | 设置或阅读器进入；跨书范围入队、暂停恢复、失败重试和离线正文删除 |
+| `/downloads` | `ui/download_management/download_management_route.dart` | `DownloadCoordinator` + `DownloadGateway` 全局任务流 | 设置或阅读器进入；PageView 区分下载中、已完成与离线内容；跨书范围入队、暂停恢复、失败重试、仅删任务、离线正文删除与书籍详情入口 |
 | `/book-sources` | `ui/book_source/book_source_route.dart` / `book_source_screen.dart` | `BookSourceManagementViewModel` | 书源管理、导入、扫码和编辑 |
 | `/search` | `ui/search/search_route.dart` / `search_screen.dart` | `SearchViewModel` | 多书源搜索和搜索历史 |
 | `/book-info` | `ui/book_info/book_info_route.dart` / `book_info_screen.dart` | `BookInfoViewModel` | 必须传 `BookInfoRouteArguments` |
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` | `BookshelfViewModel` | 实时书架、分组、排序、批量操作 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
-| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart` |
+| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart`，正文短按由不参与手势竞技场的 `reader_tap_region.dart` 识别，避免与长按选词冲突 |
 | `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
@@ -172,7 +173,7 @@ Route 管理生命周期、插件、导航、对话框和 Effect；Screen 保持
 | 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository`、`ReaderSearchState`、`ReaderDisplayConfig`；安全资源协议在 `domain/model/reader_content_markup.dart`，图片视图在 `ui/reader/reader_content_image.dart`；原生选区与标注 Span 在 `ui/reader/reader_selection_region.dart`，标注模型/持久化在 `domain/model/book_content_process.dart`、`data/dao/book_content_process_dao.dart` | `ui/book/read/`、`model/ReadBook.kt`、`help/book/ContentProcessor.kt`、`data/entities/BookContentProcess.kt` | [`m08/README.md`](./m08/README.md)、[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md)、[`CORE_READING_FLOW_GAP_PRIORITY.md`](./CORE_READING_FLOW_GAP_PRIORITY.md) |
 | 整书换源 | `ui/change_book_source/` | `ChangeSourceCoordinator`、`ChangeBookSourceUseCase`、`BookRepository.changeBookSource` | `ui/book/changesource/`、`ChangeSourceSearchUseCase.kt`、`ChangeBookSourceUseCase.kt` | [`m11/README.md`](./m11/README.md) |
 | 单章换源 | `ui/change_chapter_source/`（阅读器内 `ReaderChangeChapterSourceSheet`） | `ChangeChapterSourceCoordinator`、`chapter_title_matcher.dart`、`ReadBookCoordinator.invalidateChapter` | `ui/book/read/sheet/ChangeChapterSourceSheet.kt`、`BookHelp.getDurChapter`、`BookHelp.saveText` | [`m11/chapter_change_source/README.md`](./m11/chapter_change_source/README.md) |
-| 离线下载 | `ui/reader/reader_download_sheet.dart`（当前书入口）、`ui/download_management/download_management_route.dart`（`/downloads` 跨书管理） | `DownloadCoordinator`（App 级固定串行）、`DownloadTaskDao`/`DownloadRepository`、`download_tasks` 表、`platform/download_background_service.dart`；Android `DownloadForegroundService.kt`，iOS `AppDelegate.swift` 有限后台窗口 | `ui/book/read/sheet/DownloadSheet.kt`、`CacheBook`/`CacheBookModel`、`CacheBookService`、`BookCacheManageScreen` | [`m11/offline_download/README.md`](./m11/offline_download/README.md) |
+| 离线下载 | `ui/reader/reader_download_sheet.dart`（当前书入口）、`ui/download_management/download_management_route.dart`（`/downloads` 跨书 PageView 管理）、`/offline-content`（设置中的离线正文管理入口） | `DownloadCoordinator`（App 级全局可配置并发，默认 5、上限 8；支持仅删除任务或清除正文与任务）、`DownloadTaskDao`/`DownloadRepository`、`download_tasks` 表、`platform/download_background_service.dart`；Android `DownloadForegroundService.kt`，iOS `AppDelegate.swift` 有限后台窗口 | `ui/book/read/sheet/DownloadSheet.kt`、`CacheBook`/`CacheBookModel`、`CacheBookService`、`BookCacheManageScreen` | [`m11/offline_download/README.md`](./m11/offline_download/README.md) |
 | 本地书导入 | `ui/local_book_import/` | `LocalBookImportCoordinator`、`LocalBookStorage`、各格式 Parser | `model/localBook/` 和原文件导入入口 | [`m08_1/README.md`](./m08_1/README.md) |
 | PDF 阅读 | `ui/reader/pdf_reader_route.dart` | `PdfLocalBookParser`、`pdfx` | `model/localBook/PdfFile.kt` | [`m08_1/README.md`](./m08_1/README.md) |
 | 阅读系统栏和常亮 | `platform/reader_platform_service.dart` | Android `MainActivity.kt`、iOS `AppDelegate.swift` | 原阅读 Activity/窗口逻辑 | [`m09/04_m10_handoff.md`](./m09/04_m10_handoff.md) |
@@ -278,7 +279,7 @@ BookInfo / Bookshelf / Reader Intent
 
 ```text
 ReaderDownloadSheet / /downloads
-  -> DownloadCoordinator（App 级单例、固定单 worker、1.5 秒最小请求间隔、45 秒硬超时、失败 5 次跳章）
+  -> DownloadCoordinator（App 级单例、全局持久化 1～8 worker、默认 5、45 秒硬超时、失败 5 次跳章）
   -> DownloadGateway / DownloadRepository / DownloadTaskDao
   -> download_tasks + download_book_states（任务、批次、来源归因、自动换源锁定和一次性评分）
   -> ChangeSourceCoordinator（自动换源专用单搜索 worker；3@98% → 5@95% → 8@90% → 12@85% → 20@80% → 30@70%，累计最多 78 个来源、全局最多 3 分钟；失败提示手动换源）

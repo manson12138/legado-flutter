@@ -202,6 +202,9 @@ enum BookInfoMenuAction {
   /// 删除或移除当前书籍。
   deleteBook,
 
+  /// 清除当前书籍已下载的离线正文和对应下载任务，不移出书架。
+  clearOfflineContent,
+
   /// 打开已入架网络书的整书换源页。
   fullSourceChange,
 

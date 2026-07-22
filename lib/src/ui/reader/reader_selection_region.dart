@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart' show SelectedContent;
 import 'package:flutter/services.dart';
 
 import '../../domain/model/book_content_process.dart';
+import 'reader_tap_region.dart';
 
 /// 为连续和分页阅读正文提供 Flutter 原生拖动选区及自定义业务菜单。
 final class ReaderSelectionRegion extends StatefulWidget {
@@ -72,6 +73,9 @@ final class _ReaderSelectionRegionState extends State<ReaderSelectionRegion> {
       ),
       onSelectionChanged: (SelectedContent? content) {
         _selectedText = content?.plainText ?? '';
+        ReaderTapRegionSelectionScope.maybeOf(context)?.onSelectionChanged(
+          _selectedText.isNotEmpty,
+        );
       },
       contextMenuBuilder: (
         BuildContext menuContext,

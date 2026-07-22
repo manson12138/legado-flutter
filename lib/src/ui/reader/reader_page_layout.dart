@@ -10,6 +10,7 @@ import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
 import 'reader_selection_region.dart';
+import 'reader_tap_region.dart';
 
 /// 标记分页行使用章节标题、正文或仅占据垂直空间。
 enum ReaderPageLineKind {
@@ -985,17 +986,24 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         }
         _restorePage(widget.state);
         if (_usesCoverPaging) {
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: (TapUpDetails details) {
-              _handleTap(details.localPosition.dx, constraints.maxWidth);
+          return ReaderTapRegion(
+            onTapUp: (Offset position) {
+              _handleTap(position.dx, constraints.maxWidth);
             },
-            onHorizontalDragStart: (DragStartDetails details) {
-              _handleHorizontalDragStart(constraints.maxWidth);
-            },
-            onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-            onHorizontalDragEnd: _handleHorizontalDragEnd,
-            child: _buildCoverPager(content, textStyle, titleStyle, contentWidth),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (DragStartDetails details) {
+                _handleHorizontalDragStart(constraints.maxWidth);
+              },
+              onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+              onHorizontalDragEnd: _handleHorizontalDragEnd,
+              child: _buildCoverPager(
+                content,
+                textStyle,
+                titleStyle,
+                contentWidth,
+              ),
+            ),
           );
         }
         return NotificationListener<OverscrollNotification>(
@@ -1007,10 +1015,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             }
             return false;
           },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: (TapUpDetails details) {
-              _handleTap(details.localPosition.dx, constraints.maxWidth);
+          child: ReaderTapRegion(
+            onTapUp: (Offset position) {
+              _handleTap(position.dx, constraints.maxWidth);
             },
             child: PageView.builder(
               controller: _pageController,

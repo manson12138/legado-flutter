@@ -155,7 +155,7 @@ final class _ReaderDownloadSheetBodyState extends State<ReaderDownloadSheetBody>
           Padding(
             padding: const EdgeInsets.all(SpacingToken.medium),
             child: Text(
-              '全局固定串行下载，章节请求间隔至少 1.5 秒；单次请求 45 秒超时，失败 5 次后跳过并继续后续章节。Android 使用前台服务；iOS 后台时间由系统决定。',
+              '全局同时下载请求数可在下载管理中设置，默认 5 个；单次请求 45 秒超时，失败 5 次后跳过并继续后续章节。Android 使用前台服务；iOS 后台时间由系统决定。',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),

@@ -97,6 +97,11 @@ final class _SettingsRouteState extends State<SettingsRoute> {
                       AppRoute.downloadManagement,
                     );
                   },
+                  onOpenOfflineContentManagement: () {
+                    Navigator.of(context).pushNamed(
+                      AppRoute.offlineContentManagement,
+                    );
+                  },
                   onOpenLogManagement: () {
                     Navigator.of(context).pushNamed(AppRoute.logManagement);
                   },

@@ -323,6 +323,7 @@ final class AppDependencies {
       cancellationTokenFactory: () => DioHttpCancellationToken(),
       logger: logger,
       backgroundService: const MethodChannelDownloadBackgroundService(),
+      cacheDao: cacheDao,
     );
 
     return AppDependencies(

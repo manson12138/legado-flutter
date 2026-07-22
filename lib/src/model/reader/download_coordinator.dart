@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import '../../api/http/http_contract.dart';
 import '../../api/js/script_context.dart';
+import '../../data/dao/cache_dao.dart';
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/gateway/chapter_gateway.dart';
@@ -10,6 +11,7 @@ import '../../domain/gateway/download_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
+import '../../domain/model/cache.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/download_task.dart';
@@ -43,6 +45,7 @@ final class DownloadCoordinator {
     required HttpCancellationToken Function() cancellationTokenFactory,
     required AppLogger logger,
     required DownloadBackgroundService backgroundService,
+    required CacheDao cacheDao,
     this.maxRetryCount = 5,
     this.minimumRequestInterval = const Duration(milliseconds: 1500),
     this.chapterRequestTimeout = const Duration(seconds: 45),
@@ -55,12 +58,20 @@ final class DownloadCoordinator {
        _automaticSourceCoordinator = automaticSourceCoordinator,
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger,
-       _backgroundService = backgroundService {
+       _backgroundService = backgroundService,
+       _cacheDao = cacheDao {
     unawaited(_recoverAndStart());
   }
 
-  /// 全局同时运行的最大章节下载数；固定为一，禁止多章节并发访问书源。
-  static const int maxConcurrency = 1;
+  /// Android `CacheBook.maxDownloadConcurrency` 对齐的下载并发安全上限。
+  static const int maximumConcurrencyLimit = 8;
+
+  /// 用户未保存设置时使用的全局章节下载并发数。
+  static const int defaultMaximumConcurrency = 5;
+
+  /// 持久化全局章节下载并发数的缓存键。
+  static const String _maximumConcurrencySettingKey =
+      'setting_download_maximum_concurrency';
 
   /// 单章最大自动重试次数，超过后转为失败状态并等待用户手动重试。
   final int maxRetryCount;
@@ -129,6 +140,15 @@ final class DownloadCoordinator {
   /// Android 前台服务与 iOS 有限后台任务的统一平台边界。
   final DownloadBackgroundService _backgroundService;
 
+  /// 全局下载并发设置持久化访问；复用既有 `caches` 表，不改变下载任务 Schema。
+  final CacheDao _cacheDao;
+
+  /// 当前有效的全局章节下载并发数；配置尚未读出时安全地采用默认值。
+  int _maximumConcurrency = defaultMaximumConcurrency;
+
+  /// 同一次进程生命周期内唯一的配置读取任务，避免多个界面并发读取时产生竞态。
+  Future<int>? _maximumConcurrencyLoad;
+
   /// 当前正在运行的章节任务数。
   int _runningCount = 0;
 
@@ -158,6 +178,43 @@ final class DownloadCoordinator {
   /// 当前进程已经恢复的锁定候选预览，避免每章重复请求详情和目录。
   final Map<String, ChangeSourceCandidatePreview> _lockedPreviews =
       <String, ChangeSourceCandidatePreview>{};
+
+  /// 当前有效的全局章节下载并发数。
+  int get maximumConcurrency => _maximumConcurrency;
+
+  /// 读取并修正持久化的下载并发设置；缺失或非法值均回退到默认的 5 个请求。
+  Future<int> loadMaximumConcurrency() {
+    return _maximumConcurrencyLoad ??= _loadMaximumConcurrency();
+  }
+
+  /// 保存全局下载并发设置；调整仅影响后续领取的任务，不会取消正在执行的请求。
+  Future<void> setMaximumConcurrency(int value) async {
+    /// 防止异常调用突破 Android 对齐的安全上限或写入零并发导致队列停滞。
+    final int normalized = value.clamp(1, maximumConcurrencyLimit).toInt();
+    await loadMaximumConcurrency();
+    await _cacheDao.upsert(
+      Cache(key: _maximumConcurrencySettingKey, value: normalized.toString()),
+    );
+    _maximumConcurrency = normalized;
+    _kick();
+  }
+
+  /// 从通用缓存恢复并发设置，并把损坏数据回写为可用的默认值。
+  Future<int> _loadMaximumConcurrency() async {
+    final String? rawValue =
+        (await _cacheDao.get(_maximumConcurrencySettingKey))?.value;
+    final int? parsed = int.tryParse(rawValue ?? '');
+    final int normalized = parsed == null
+        ? defaultMaximumConcurrency
+        : parsed.clamp(1, maximumConcurrencyLimit).toInt();
+    _maximumConcurrency = normalized;
+    if (rawValue != normalized.toString()) {
+      await _cacheDao.upsert(
+        Cache(key: _maximumConcurrencySettingKey, value: normalized.toString()),
+      );
+    }
+    return normalized;
+  }
 
   /// 观察一本书的下载任务，供面板展示实时状态。
   Stream<List<DownloadTask>> watchTasks(String bookUrl) {
@@ -448,9 +505,30 @@ final class DownloadCoordinator {
     await _refreshBackgroundService();
   }
 
+  /// 仅删除一本书的下载任务并取消仍在执行的请求；已经写入离线缓存的正文保持不变。
+  Future<void> removeBookTasks(String bookUrl) async {
+    for (final MapEntry<String, HttpCancellationToken> entry
+        in _activeTokens.entries) {
+      if (entry.key.startsWith('$bookUrl\n')) {
+        _removedTaskKeys.add(entry.key);
+        entry.value.cancel('用户仅删除本书下载任务');
+      }
+    }
+    for (final MapEntry<String, BookSearchRun> entry
+        in _activeSearchRuns.entries) {
+      if (entry.key.startsWith('$bookUrl\n')) {
+        _removedTaskKeys.add(entry.key);
+        entry.value.cancel();
+      }
+    }
+    await _downloadGateway.clearBook(bookUrl);
+    await _refreshBackgroundService();
+  }
+
   /// 应用启动后把残留“运行中”任务重置为“等待”，随后开始调度。
   Future<void> _recoverAndStart() async {
     try {
+      await loadMaximumConcurrency();
       await _downloadGateway.resetRunningToWaiting(DateTime.now().millisecondsSinceEpoch);
     } on Object catch (error, stackTrace) {
       _logger.warning(
@@ -479,7 +557,7 @@ final class DownloadCoordinator {
     try {
       do {
         _pumpAgain = false;
-        while (_runningCount < maxConcurrency) {
+        while (_runningCount < _maximumConcurrency) {
           /// 本轮领取到的下一个任务；队列为空时为空。
           final DownloadTask? task = await _claimNextTask();
           if (task == null) {
