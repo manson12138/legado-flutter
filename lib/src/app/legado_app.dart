@@ -29,7 +29,7 @@ final class LegadoApp extends StatefulWidget {
 }
 
 /// 保存当前会话主题模式，并把修改能力向“我的”页面传递。
-final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver {
+final class _LegadoAppState extends State<LegadoApp> {
   /// 写死的管理员账号；该账号进入主界面后不执行 App 准入或版本检查。
   static const String _administratorUsername = 'admin';
 
@@ -48,21 +48,12 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     widget.dependencies.authenticationGateway.session.addListener(
       _onAuthenticationSessionChanged,
     );
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       unawaited(_restoreAuthenticationSession());
     });
-  }
-
-  /// 回到前台后检查安全会话的刷新时间；仓储会抑制并发恢复任务。
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_restoreAuthenticationSession());
-    }
   }
 
   /// 修改当前会话主题，并触发整个应用重新应用颜色方案。
@@ -78,7 +69,6 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
   /// 释放主题监听器，避免应用组合根销毁后保留监听资源。
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     widget.dependencies.authenticationGateway.session.removeListener(
       _onAuthenticationSessionChanged,
     );
