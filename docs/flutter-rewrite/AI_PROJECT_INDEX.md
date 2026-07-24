@@ -4,7 +4,7 @@
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-07-22。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-07-24。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -93,12 +93,12 @@ lib/main.dart
 
 | 职责 | 文件 | 重点 |
 |---|---|---|
-| 进程入口与全局错误兜底 | `lib/main.dart` | 初始化顺序、日志后备实现、`runZonedGuarded` |
+| 进程入口与全局错误兜底 | `lib/main.dart` | 初始化顺序、日志后备实现、`runZonedGuarded`；完成依赖装配后立即挂载根 Widget，不阻塞首帧 |
 | 应用组合根 | `lib/src/app/app_dependencies.dart` | DAO、Repository、HTTP、JS、协调器和 UseCase 的唯一集中装配处 |
 | 内置书源启动导入 | `lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
 | 路由常量 | `lib/src/app/app_route.dart` | 应用内稳定路由名 |
 | 路由与参数校验 | `lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
-| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器和错误边界 |
+| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器、错误边界和启动加载/重试门；内置书源导入完成后再恢复下载、准入轮询与认证会话 |
 | 全局错误边界 | `lib/src/app/app_error_boundary.dart` | Flutter 框架与平台调度错误 |
 | 导航观察 | `lib/src/app/app_navigation_observer.dart` | 页面切换诊断日志 |
 
@@ -424,6 +424,7 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 | iOS 能力与平台差异 | [`m10/01_ios_capability_inventory.md`](./m10/01_ios_capability_inventory.md) |
 | iOS 签名与真机步骤 | [`m10/02_ios_signing_and_device_run.md`](./m10/02_ios_signing_and_device_run.md) |
 | iOS 样本与验收矩阵 | [`m10/03_ios_compatibility_report.md`](./m10/03_ios_compatibility_report.md)、[`m10/04_ios_acceptance_matrix.md`](./m10/04_ios_acceptance_matrix.md) |
+| iOS 启动白屏与数据库锁等待分析 | [`m10/05_ios_startup_white_screen_database_lock_analysis.md`](./m10/05_ios_startup_white_screen_database_lock_analysis.md)：启动期内置书源导入与离线下载恢复的 SQLite 竞争、修复范围与用户验收重点 |
 | M11 当前 Feature 与门禁记录 | [`m11/README.md`](./m11/README.md) |
 | App 后端 API 接入范围、HMAC 决策、P0 启动/过滤基础设施与后续实施顺序；2026-07-23 App API 文档的登录、日志、版本和更新契约差异 | [`m11/backend_api_integration/01_implementation_plan.md`](./m11/backend_api_integration/01_implementation_plan.md)、[`05_app_api_20260723_gap_analysis.md`](./m11/backend_api_integration/05_app_api_20260723_gap_analysis.md) |
 | App 用户注册登录、RSA-OAEP 密码传输、邀请码、权限读取、内存会话与导出 API 契约缺口；安全持久化 Token、启动/前台自动恢复与双 Token 迁移设计 | [`m11/backend_api_integration/02_authentication_and_api_gap_plan.md`](./m11/backend_api_integration/02_authentication_and_api_gap_plan.md)、[`04_authentication_rsa_oaep_upgrade_design.md`](./m11/backend_api_integration/04_authentication_rsa_oaep_upgrade_design.md)、[`06_persistent_auth_session_design.md`](./m11/backend_api_integration/06_persistent_auth_session_design.md)、[`07_dual_token_session_migration_design.md`](./m11/backend_api_integration/07_dual_token_session_migration_design.md) |

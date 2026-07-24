@@ -1,0 +1,49 @@
+# iOS 启动白屏与 SQLite 锁等待分析
+
+状态：`IMPLEMENTED / 等待用户真机验证`。本记录基于 2026-07-24 的真机控制台日志和静态源码梳理；未运行构建、测试、分析或应用。
+
+## 现象与排除项
+
+- Dart VM 已启动，应用日志初始化和 SQLite Schema 创建均已完成；这不是 Flutter 引擎、签名或 iOS 宿主启动失败。
+- `fopen failed`、PointerUI、键盘帧通知和 `FlutterView` 焦点缓存提示均为 iOS/模拟器运行时噪声，日志中没有表明它们阻塞 Dart UI。
+- `runApp` 位于 `await dependencies.defaultBookSourceBootstrapper.importIfEmpty()` 之后。因此内置书源导入未结束前，Flutter 尚未挂载任何页面，用户看到的是白屏。
+
+## 已确认的启动竞争
+
+```text
+AppDependencies.create()
+  -> DownloadCoordinator 构造函数
+     -> unawaited(_recoverAndStart())
+        -> caches / download_tasks 的读写与调度扫描
+
+main()
+  -> await DefaultBookSourceBootstrapper.importIfEmpty()
+     -> BookSourceRepository.importSourceJson()
+        -> LegadoDatabase.transaction()
+           -> 成人内容开关查询、逐条书源冲突检查与写入
+  -> runApp()
+```
+
+`sqflite` 在事务执行期间要求事务内所有数据库操作使用传入的 `Transaction`。下载恢复流程从独立数据库连接发起查询，和内置书源导入长事务重叠，恰好对应日志中事务开始后出现的 `download_tasks`、`caches` 查询，以及连续的 10 秒数据库锁等待警告。
+
+这类等待会延长内置导入完成时间；由于当前 UI 尚未挂载，最终表现为启动白屏。即使事务最终提交，用户也没有可见的启动反馈。
+
+## 已实施改动
+
+1. `DownloadCoordinator` 不再在构造函数中自行启动，改为幂等 `start()` 入口。
+2. `LegadoApp` 首帧后先导入内置书源；成功后才恢复下载、启动 App 准入轮询及认证会话恢复。
+3. `main.dart` 不再等待书源导入才调用 `runApp`。根页面在导入期间显示“正在准备书源数据”，导入失败显示错误与重试入口。
+4. 保持内置书源的导入语义、成人内容过滤、事务原子性和数据表结构不变；未变更 Schema、依赖或 iOS 原生宿主。
+
+## 验收重点（由用户执行）
+
+1. 新安装或清空本应用数据后启动，首屏应立即出现启动页面而非白屏。
+2. 控制台不再出现启动期“database has been locked for 10 seconds”警告。
+3. 内置书源完成导入后，书源列表可见；下载任务仍能将残留 `running` 状态恢复为 `waiting` 并继续调度。
+4. 导入失败时，界面必须显示失败与重试入口，不能停留在无限加载态。
+
+## 不包含
+
+- 不处理日志中的 iOS 系统噪声提示。
+- 不改变书源 JSON、SQLite Schema、下载业务规则或 iOS 平台通道。
+- 不宣称 M10 或 iOS 真机验收已通过。

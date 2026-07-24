@@ -52,7 +52,6 @@ void main() {
         remoteAppConfig: remoteAppConfig,
       );
       fileLogger.info(message: '应用日志系统初始化完成');
-      await dependencies.defaultBookSourceBootstrapper.importIfEmpty();
       runApp(LegadoApp(dependencies: dependencies));
     },
     (Object error, StackTrace stackTrace) {

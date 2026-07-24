@@ -37,14 +37,17 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
   /// 标记安全会话是否正在从持久化存储恢复，期间不展示业务路由。
   final ValueNotifier<bool> _isRestoringAuthentication = ValueNotifier<bool>(true);
 
+  /// 启动期书源导入和下载恢复的可见状态，确保耗时初始化不再暴露为系统白屏。
+  final ValueNotifier<_AppStartupState> _startupState =
+      ValueNotifier<_AppStartupState>(const _AppStartupLoading());
+
   /// 首帧后启动前台准入轮询，避免在 build 中发起网络请求。
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      widget.dependencies.appAccessCoordinator.start();
-      unawaited(_restoreAuthenticationSession());
+      unawaited(_initializeStartup());
     });
   }
 
@@ -73,6 +76,7 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
     widget.dependencies.appAccessCoordinator.dispose();
     _themeModeNotifier.dispose();
     _isRestoringAuthentication.dispose();
+    _startupState.dispose();
     super.dispose();
   }
 
@@ -103,11 +107,15 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
         /// 底部会自动露出该页面自身的背景色，不需要逐页手动同步导航栏颜色。
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: _systemOverlayStyleFor(Theme.of(context).brightness),
-          child: _AppAccessOverlay(
-            coordinator: widget.dependencies.appAccessCoordinator,
-            dependencies: widget.dependencies,
-            isRestoringAuthentication: _isRestoringAuthentication,
-            child: AppErrorBoundary(child: child),
+          child: _AppStartupOverlay(
+            startupState: _startupState,
+            onRetry: _retryStartup,
+            child: _AppAccessOverlay(
+              coordinator: widget.dependencies.appAccessCoordinator,
+              dependencies: widget.dependencies,
+              isRestoringAuthentication: _isRestoringAuthentication,
+              child: AppErrorBoundary(child: child),
+            ),
           ),
         );
       },
@@ -128,6 +136,38 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
     );
   }
 
+  /// 在首帧渲染后串行执行启动数据库工作，再启用依赖同一连接的后台服务。
+  Future<void> _initializeStartup() async {
+    if (_startupState.value is _AppStartupLoading) {
+      try {
+        await widget.dependencies.defaultBookSourceBootstrapper.importIfEmpty();
+        if (mounted) {
+          _startupState.value = const _AppStartupReady();
+        }
+      } on Object catch (error) {
+        if (mounted) {
+          _startupState.value = _AppStartupFailed(error.toString());
+        }
+        return;
+      }
+    }
+    await widget.dependencies.downloadCoordinator.start();
+    if (!mounted) {
+      return;
+    }
+    widget.dependencies.appAccessCoordinator.start();
+    unawaited(_restoreAuthenticationSession());
+  }
+
+  /// 将失败的启动导入重新置为加载态，并复用同一条受控初始化链路。
+  void _retryStartup() {
+    if (_startupState.value is _AppStartupLoading) {
+      return;
+    }
+    _startupState.value = const _AppStartupLoading();
+    unawaited(_initializeStartup());
+  }
+
   /// 恢复或刷新持久化安全会话，并在完成前保持认证门覆盖业务页面。
   Future<void> _restoreAuthenticationSession() async {
     if (!_isRestoringAuthentication.value) {
@@ -141,6 +181,114 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
       }
     }
   }
+}
+
+/// 根页面启动期的不可变可见状态，避免业务路由在基础数据尚未完成准备时暴露出来。
+sealed class _AppStartupState {
+  /// 创建启动状态。
+  const _AppStartupState();
+}
+
+/// 表示内置书源正在导入的启动状态。
+final class _AppStartupLoading extends _AppStartupState {
+  /// 创建加载状态。
+  const _AppStartupLoading();
+}
+
+/// 表示启动基础数据已经可安全使用的状态。
+final class _AppStartupReady extends _AppStartupState {
+  /// 创建就绪状态。
+  const _AppStartupReady();
+}
+
+/// 表示启动基础数据导入失败，并保留可显示的错误摘要。
+final class _AppStartupFailed extends _AppStartupState {
+  /// 创建失败状态。
+  const _AppStartupFailed(this.message);
+
+  /// 不包含敏感业务数据的启动错误摘要。
+  final String message;
+}
+
+/// 在首帧之后覆盖业务路由，显示启动进度或可重试的导入失败反馈。
+final class _AppStartupOverlay extends StatelessWidget {
+  /// 创建启动可见状态覆盖层。
+  const _AppStartupOverlay({
+    required this.startupState,
+    required this.onRetry,
+    required this.child,
+  });
+
+  /// 应用根维护的启动状态通知器。
+  final ValueListenable<_AppStartupState> startupState;
+
+  /// 导入失败后重新执行启动流程的回调。
+  final VoidCallback onRetry;
+
+  /// 启动完成后显示的认证和业务路由树。
+  final Widget child;
+
+  /// 根据当前启动状态选择加载页、错误页或已准备好的业务路由。
+  @override
+  Widget build(BuildContext context) =>
+      ValueListenableBuilder<_AppStartupState>(
+        valueListenable: startupState,
+        builder: (BuildContext context, _AppStartupState state, Widget? child) {
+          if (state is _AppStartupReady) {
+            return child ?? const SizedBox.shrink();
+          }
+          if (state is _AppStartupFailed) {
+            return _buildFailedPage(context, state);
+          }
+          return _buildLoadingPage(context);
+        },
+        child: child,
+      );
+
+  /// 构建不依赖业务路由的轻量启动加载页面。
+  Widget _buildLoadingPage(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surface,
+    child: const SafeArea(
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('正在准备书源数据…'),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  /// 构建启动导入失败后的明确反馈与重试入口。
+  Widget _buildFailedPage(BuildContext context, _AppStartupFailed state) => Material(
+    color: Theme.of(context).colorScheme.surface,
+    child: SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                Icons.error_outline,
+                size: 52,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(height: 20),
+              Text('启动准备失败', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12),
+              Text(state.message, textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              FilledButton(onPressed: onRetry, child: const Text('重试')),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// 覆盖业务页面展示服务端准入阻断和升级提示的应用级 UI。

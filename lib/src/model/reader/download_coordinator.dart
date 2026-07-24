@@ -33,7 +33,7 @@ import 'chapter_title_matcher.dart';
 /// Android 通过数据同步前台服务提升后台运行可靠性；iOS 只使用系统授予的有限后台窗口。
 /// 任一平台进程被系统终止后，残留“运行中”任务会在下次打开应用时恢复为等待并续传。
 final class DownloadCoordinator {
-  /// 创建离线下载队列调度器并立即恢复上次残留任务。
+/// 创建离线下载队列调度器；由应用启动流程在数据库初始化完成后显式恢复残留任务。
   DownloadCoordinator({
     required DownloadGateway downloadGateway,
     required ChapterGateway chapterGateway,
@@ -59,9 +59,7 @@ final class DownloadCoordinator {
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger,
        _backgroundService = backgroundService,
-       _cacheDao = cacheDao {
-    unawaited(_recoverAndStart());
-  }
+       _cacheDao = cacheDao;
 
   /// Android `CacheBook.maxDownloadConcurrency` 对齐的下载并发安全上限。
   static const int maximumConcurrencyLimit = 8;
@@ -148,6 +146,16 @@ final class DownloadCoordinator {
 
   /// 同一次进程生命周期内唯一的配置读取任务，避免多个界面并发读取时产生竞态。
   Future<int>? _maximumConcurrencyLoad;
+
+  /// 应用启动期唯一的下载恢复任务，避免重试启动流程重复创建调度扫描。
+  Future<void>? _startFuture;
+
+  /// 在内置书源导入等启动数据库任务完成后恢复残留下载并开始调度。
+  ///
+  /// 调用方可重复调用；同一进程中始终复用首次恢复任务，避免和启动事务竞争 SQLite 连接。
+  Future<void> start() {
+    return _startFuture ??= _recoverAndStart();
+  }
 
   /// 当前正在运行的章节任务数。
   int _runningCount = 0;
