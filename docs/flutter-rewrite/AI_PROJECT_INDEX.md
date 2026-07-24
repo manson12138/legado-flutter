@@ -98,7 +98,7 @@ lib/main.dart
 | 内置书源启动导入 | `lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
 | 路由常量 | `lib/src/app/app_route.dart` | 应用内稳定路由名 |
 | 路由与参数校验 | `lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
-| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器、错误边界和启动加载/重试门；内置书源导入完成后再恢复下载、准入轮询与认证会话 |
+| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器、错误边界和认证门；启动阶段只恢复认证会话，登录成功后异步导入内置书源、恢复下载并启动准入轮询 |
 | 全局错误边界 | `lib/src/app/app_error_boundary.dart` | Flutter 框架与平台调度错误 |
 | 导航观察 | `lib/src/app/app_navigation_observer.dart` | 页面切换诊断日志 |
 
