@@ -6,6 +6,10 @@ abstract final class DatabaseTables {
   static const String bookSources = 'book_sources';
   /// 章节表，对应 Android `chapters`。
   static const String chapters = 'chapters';
+  /// 阅读历史书籍快照表；成员资格与书架 `books` 完全独立。
+  static const String readingHistoryBooks = 'reading_history_books';
+  /// 阅读历史目录快照表；供未加入书架的书继续恢复阅读。
+  static const String readingHistoryChapters = 'reading_history_chapters';
   /// 书架分组表，对应 Android `book_groups`。
   static const String bookGroups = 'book_groups';
   /// 搜索结果缓存表，对应 Android `searchBooks`。

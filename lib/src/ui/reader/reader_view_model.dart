@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import '../../domain/gateway/bookmark_gateway.dart';
 import '../../domain/gateway/book_content_process_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
+import '../../domain/gateway/reading_history_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/gateway/replace_rule_gateway.dart';
 import '../../domain/model/book.dart';
@@ -14,6 +15,8 @@ import '../../domain/model/reader_content.dart';
 import '../../domain/model/reading_progress.dart';
 import '../../domain/model/replace_rule.dart';
 import '../../domain/usecase/load_book_chapters_use_case.dart';
+import '../../domain/usecase/add_book_to_bookshelf_use_case.dart';
+import '../../domain/usecase/record_reading_history_use_case.dart';
 import '../../domain/usecase/restore_reading_progress_use_case.dart';
 import '../../domain/usecase/save_reading_progress_use_case.dart';
 import '../../domain/usecase/save_book_content_process_use_case.dart';
@@ -28,7 +31,11 @@ final class ReaderViewModel {
   ReaderViewModel({
     required this.bookUrl,
     this.initialChapterIndex,
+    this.initialBook,
+    this.initialChapters = const <BookChapter>[],
+    this.entry = 'bookshelf',
     required BookshelfGateway bookshelfGateway,
+    required ReadingHistoryGateway readingHistoryGateway,
     required LoadBookChaptersUseCase loadBookChapters,
     required RestoreReadingProgressUseCase restoreReadingProgress,
     required SaveReadingProgressUseCase saveReadingProgress,
@@ -38,8 +45,15 @@ final class ReaderViewModel {
     required ReaderCacheGateway cacheGateway,
     required ReadBookCoordinator coordinator,
     required SaveBookContentProcessUseCase saveBookContentProcess,
+    required RecordReadingHistoryUseCase recordReadingHistory,
+    required AddBookToBookshelfUseCase addBookToBookshelf,
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
     required AppLogger logger,
   }) : _bookshelfGateway = bookshelfGateway,
+       _readingHistoryGateway = readingHistoryGateway,
        _loadBookChapters = loadBookChapters,
        _restoreReadingProgress = restoreReadingProgress,
        _saveReadingProgress = saveReadingProgress,
@@ -49,6 +63,9 @@ final class ReaderViewModel {
        _cacheGateway = cacheGateway,
        _coordinator = coordinator,
        _saveBookContentProcess = saveBookContentProcess,
+       _recordReadingHistory = recordReadingHistory,
+       _addBookToBookshelf = addBookToBookshelf,
+       _analyticsRecorder = analyticsRecorder,
        _logger = logger;
 
   /// 路由提供的稳定书籍 URL。
@@ -57,8 +74,20 @@ final class ReaderViewModel {
   /// 详情目录入口指定的初始章节索引；为空时恢复稳定锚点或旧进度。
   final int? initialChapterIndex;
 
+  /// 详情页直接阅读时提供的未入架书籍快照。
+  final Book? initialBook;
+
+  /// 详情页直接阅读时提供的未入架目录快照。
+  final List<BookChapter> initialChapters;
+
+  /// 阅读入口的受控匿名埋点枚举。
+  final String entry;
+
   /// 书架书读取边界。
   final BookshelfGateway _bookshelfGateway;
+
+  /// 与书架独立的阅读历史数据边界。
+  final ReadingHistoryGateway _readingHistoryGateway;
 
   /// 持久目录读取 UseCase。
   final LoadBookChaptersUseCase _loadBookChapters;
@@ -86,6 +115,18 @@ final class ReaderViewModel {
 
   /// 从稳定正文选区创建用户标注的业务动作。
   final SaveBookContentProcessUseCase _saveBookContentProcess;
+
+  /// 首次成功打开后记录历史快照的业务动作。
+  final RecordReadingHistoryUseCase _recordReadingHistory;
+
+  /// 阅读器悬浮按钮显式加入书架的业务动作。
+  final AddBookToBookshelfUseCase _addBookToBookshelf;
+
+  /// 用户同意后记录严格白名单匿名事件的回调。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
 
   /// 【搜书诊断日志】项目统一日志接口，用于记录阅读入口和章节状态。
   final AppLogger _logger;
@@ -119,6 +160,18 @@ final class ReaderViewModel {
 
   /// 是否已释放页面资源。
   bool _disposed = false;
+
+  /// 首次打开结果是否已经记录，避免重试和切章重复产生 reader_opened。
+  bool _initialOpenReported = false;
+
+  /// 独立阅读历史书籍与目录快照是否已成功写入。
+  bool _historySnapshotRecorded = false;
+
+  /// 串行化首次可读结果的历史与埋点旁路，避免快速切章重复写入。
+  bool _recordingSuccessfulOpen = false;
+
+  /// 首次打开失败是否已经记录，避免页面重建重复产生失败事件。
+  bool _initialFailureReported = false;
 
   /// 是否正在切换相邻章节，防止滚动边界重复通知创建并发切章。
   bool _changingRelativeChapter = false;
@@ -160,6 +213,10 @@ final class ReaderViewModel {
         unawaited(_refreshChapters(scope));
       case ToggleReaderMenuIntent():
         _emit(_state.copyWith(menuVisible: !_state.menuVisible));
+      case HideReaderMenuIntent():
+        if (_state.menuVisible) {
+          _emit(_state.copyWith(menuVisible: false));
+        }
       case ShowReaderSheetIntent(sheet: final ReaderSheet sheet):
         _emit(_state.copyWith(activeSheet: sheet));
         if (sheet is ReaderReplaceInfoSheet) {
@@ -173,6 +230,8 @@ final class ReaderViewModel {
         _emit(_state.copyWith(batteryLevel: batteryLevel, clearBattery: batteryLevel == null));
       case AddReaderBookmarkIntent():
         unawaited(_addBookmark());
+      case AddReaderBookToBookshelfIntent():
+        unawaited(_addCurrentBookToBookshelf());
       case DeleteReaderBookmarkIntent(bookmark: final Bookmark bookmark):
         unawaited(_deleteBookmark(bookmark));
       case SaveReaderBookmarkNoteIntent(
@@ -253,35 +312,77 @@ final class ReaderViewModel {
       return;
     }
     try {
-      /// 当前书架书。
-      final Book? book = await _bookshelfGateway.getBook(bookUrl);
+      /// 当前精确 URL 对应的书架书；成员资格只由此查询决定。
+      final Book? shelfBook = await _bookshelfGateway.getBook(bookUrl);
+      /// 详情路由提供且主键匹配的书籍快照。
+      final Book? routeBook =
+          initialBook?.bookUrl == bookUrl ? initialBook : null;
+      /// 书架不存在时读取持久阅读历史快照。
+      final Book? historyBook = shelfBook == null && routeBook == null
+          ? await _readingHistoryGateway.getHistoryBook(bookUrl)
+          : null;
+      /// 阅读器实际使用的书籍事实。
+      final Book? book = shelfBook ?? routeBook ?? historyBook;
       if (book == null) {
         _logger.warning(
           tag: bookReaderEntryLogTag,
-          message: '阅读器初始化终止 bookId=$bookId reason=bookNotInBookshelf',
+          message: '阅读器初始化终止 bookId=$bookId reason=bookNotFound',
         );
-        _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '书籍已不在书架中'));
+        _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '书籍不存在或阅读历史已失效'));
+        await _recordReaderOpenFailure(book: null, failureKind: 'unknown');
         return;
       }
-      /// 持久目录读取结果。
-      final AppResult<List<BookChapter>> chaptersResult = await _loadBookChapters.execute(bookUrl);
-      if (chaptersResult is AppFailure<List<BookChapter>>) {
-        _logger.error(
-          tag: bookReaderEntryLogTag,
-          message: '阅读器目录读取失败 bookId=$bookId',
-          error: chaptersResult.error,
-        );
-        _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: chaptersResult.error.message));
-        return;
+      /// 根据书架、详情路由或历史来源读取完整目录。
+      final List<BookChapter> chapters;
+      if (shelfBook != null) {
+        final AppResult<List<BookChapter>> chaptersResult =
+            await _loadBookChapters.execute(bookUrl);
+        if (chaptersResult is AppFailure<List<BookChapter>>) {
+          _logger.error(
+            tag: bookReaderEntryLogTag,
+            message: '阅读器目录读取失败 bookId=$bookId',
+            error: chaptersResult.error,
+          );
+          _emit(
+            _state.copyWith(
+              book: book,
+              isInBookshelf: true,
+              loadState: ReaderLoadState.error,
+              errorMessage: chaptersResult.error.message,
+            ),
+          );
+          await _recordReaderOpenFailure(
+            book: book,
+            failureKind: 'decode',
+          );
+          return;
+        }
+        chapters =
+            (chaptersResult as AppSuccess<List<BookChapter>>).value;
+      } else if (routeBook != null &&
+          initialChapters.isNotEmpty &&
+          initialChapters.every(
+            (BookChapter chapter) => chapter.bookUrl == bookUrl,
+          )) {
+        chapters = List<BookChapter>.unmodifiable(initialChapters);
+      } else {
+        chapters =
+            await _readingHistoryGateway.getHistoryChapters(bookUrl);
       }
-      /// 已确认成功的目录。
-      final List<BookChapter> chapters = (chaptersResult as AppSuccess<List<BookChapter>>).value;
       if (chapters.isEmpty) {
         _logger.warning(
           tag: bookReaderEntryLogTag,
           message: '阅读器初始化终止 bookId=$bookId reason=emptyToc',
         );
-        _emit(_state.copyWith(book: book, loadState: ReaderLoadState.error, errorMessage: '书籍目录为空，请先在详情页刷新目录'));
+        _emit(
+          _state.copyWith(
+            book: book,
+            isInBookshelf: shelfBook != null,
+            loadState: ReaderLoadState.error,
+            errorMessage: '书籍目录为空，请先在详情页刷新目录',
+          ),
+        );
+        await _recordReaderOpenFailure(book: book, failureKind: 'decode');
         return;
       }
       /// 目录中是否至少存在一个可阅读章节。
@@ -294,7 +395,15 @@ final class ReaderViewModel {
           message: '阅读器初始化终止 bookId=$bookId reason=noReadableChapter '
               'chapterCount=${chapters.length}',
         );
-        _emit(_state.copyWith(book: book, loadState: ReaderLoadState.error, errorMessage: '目录中没有可阅读章节'));
+        _emit(
+          _state.copyWith(
+            book: book,
+            isInBookshelf: shelfBook != null,
+            loadState: ReaderLoadState.error,
+            errorMessage: '目录中没有可阅读章节',
+          ),
+        );
+        await _recordReaderOpenFailure(book: book, failureKind: 'decode');
         return;
       }
       /// 单书显示配置。
@@ -340,6 +449,7 @@ final class ReaderViewModel {
             context: stableAnchor?.context ?? '',
           ),
           config: config,
+          isInBookshelf: shelfBook != null,
           loadState: ReaderLoadState.loading,
           clearError: true,
         ),
@@ -348,6 +458,12 @@ final class ReaderViewModel {
       _subscribeContentProcesses(book.bookUrl, chapterIndex);
       _effectController.add(EnterReaderSystemEffect(config));
       await _loadCurrentChapter();
+      if (_state.loadState != ReaderLoadState.ready) {
+        await _recordReaderOpenFailure(
+          book: book,
+          failureKind: 'unknown',
+        );
+      }
       _logger.info(
         tag: bookReaderEntryLogTag,
         message: '阅读器初始化完成 bookId=$bookId chapterIndex=${_state.currentChapterIndex} '
@@ -361,6 +477,172 @@ final class ReaderViewModel {
         stackTrace: stackTrace,
       );
       _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '初始化阅读器失败'));
+      await _recordReaderOpenFailure(
+        book: _state.book,
+        failureKind: 'unknown',
+      );
+    }
+  }
+
+  /// 首章可读后记录历史快照和匿名 reader_opened 事件。
+  Future<void> _recordSuccessfulReaderOpen(int elapsedMilliseconds) async {
+    if ((_initialOpenReported && _historySnapshotRecorded) ||
+        _recordingSuccessfulOpen) {
+      return;
+    }
+    final Book? book = _state.book;
+    final BookChapter? chapter = _state.currentChapter;
+    final ReaderPositionAnchor? anchor = _state.anchor;
+    if (book == null || chapter == null || anchor == null) {
+      return;
+    }
+    _recordingSuccessfulOpen = true;
+    try {
+      if (!_historySnapshotRecorded) {
+        final int now = DateTime.now().millisecondsSinceEpoch;
+        final Book historyBook = book.copyWithProgress(
+          chapterIndex: _state.currentChapterIndex,
+          chapterPos: anchor.characterOffset,
+          readTime: now,
+          chapterTitle: chapter.title,
+        );
+        final AppResult<void> historyResult =
+            await _recordReadingHistory.execute(
+              historyBook,
+              _state.chapters,
+            );
+        if (historyResult is AppFailure<void>) {
+          _logger.error(
+            tag: bookReaderEntryLogTag,
+            message:
+                '阅读历史保存失败 bookId=${appLogDiagnosticId(book.bookUrl)}',
+            error: historyResult.error,
+          );
+          _effectController.add(
+            const ShowReaderMessageEffect('阅读已打开，但历史记录保存失败'),
+          );
+        } else {
+          _historySnapshotRecorded = true;
+        }
+      }
+      if (_initialOpenReported) {
+        return;
+      }
+      _initialOpenReported = true;
+      try {
+        await _analyticsRecorder(
+          'reader_opened',
+          props: <String, Object?>{
+            'entry': _normalizedEntry,
+            'contentKind':
+                book.origin == 'loc_book' ? 'local' : 'network',
+            'durationBucket': _durationBucket(elapsedMilliseconds),
+          },
+        );
+      } on Object {
+        // 匿名埋点是旁路能力，缓存或网络异常不能把可读章节改成加载失败。
+      }
+    } finally {
+      _recordingSuccessfulOpen = false;
+    }
+  }
+
+  /// 首次打开失败后记录不含书籍标识和正文的匿名失败分类。
+  Future<void> _recordReaderOpenFailure({
+    required Book? book,
+    required String failureKind,
+  }) async {
+    if (_initialFailureReported || _initialOpenReported) {
+      return;
+    }
+    _initialFailureReported = true;
+    try {
+      await _analyticsRecorder(
+        'reader_open_failed',
+        props: <String, Object?>{
+          'failureKind': failureKind,
+          'contentKind': book?.origin == 'loc_book' ? 'local' : 'network',
+        },
+      );
+    } on Object {
+      // 失败埋点同样不得覆盖阅读器原本已经形成的错误状态。
+    }
+  }
+
+  /// 把路由入口收窄为后端白名单允许的三种枚举。
+  String get _normalizedEntry {
+    return <String>{'bookshelf', 'detail', 'history'}.contains(entry)
+        ? entry
+        : 'bookshelf';
+  }
+
+  /// 将精确耗时转换为 API 固定分桶，不上传毫秒值。
+  String _durationBucket(int elapsedMilliseconds) {
+    if (elapsedMilliseconds < 1000) {
+      return 'lt_1s';
+    }
+    if (elapsedMilliseconds < 3000) {
+      return '1_3s';
+    }
+    if (elapsedMilliseconds < 10000) {
+      return '3_10s';
+    }
+    if (elapsedMilliseconds < 30000) {
+      return '10_30s';
+    }
+    return 'gte_30s';
+  }
+
+  /// 将当前书籍和目录显式加入书架，成功后隐藏悬浮按钮。
+  Future<void> _addCurrentBookToBookshelf() async {
+    if (_state.isInBookshelf || _state.addingToBookshelf) {
+      return;
+    }
+    final Book? book = _state.book;
+    if (book == null || _state.chapters.isEmpty) {
+      _effectController.add(
+        const ShowReaderMessageEffect('书籍或目录尚未准备完成'),
+      );
+      return;
+    }
+    /// 加入书架时使用当前可见章节和字符位置，避免写回入口时的旧进度。
+    final BookChapter? chapter = _state.currentChapter;
+    final ReaderPositionAnchor? anchor = _state.anchor;
+    final Book shelfBook = chapter == null || anchor == null
+        ? book
+        : book.copyWithProgress(
+            chapterIndex: _state.currentChapterIndex,
+            chapterPos: anchor.characterOffset,
+            readTime: DateTime.now().millisecondsSinceEpoch,
+            chapterTitle: chapter.title,
+          );
+    _emit(_state.copyWith(addingToBookshelf: true));
+    final AppResult<void> result =
+        await _addBookToBookshelf.addAsNew(shelfBook, _state.chapters);
+    switch (result) {
+      case AppSuccess<void>():
+        _emit(
+          _state.copyWith(
+            isInBookshelf: true,
+            addingToBookshelf: false,
+          ),
+        );
+        _effectController.add(
+          const ShowReaderMessageEffect('已加入书架'),
+        );
+      case AppFailure<void>(error: final error):
+        final Book? existing = await _bookshelfGateway.getBook(book.bookUrl);
+        if (existing != null) {
+          _emit(
+            _state.copyWith(
+              isInBookshelf: true,
+              addingToBookshelf: false,
+            ),
+          );
+          return;
+        }
+        _emit(_state.copyWith(addingToBookshelf: false));
+        _effectController.add(ShowReaderMessageEffect(error.message));
     }
   }
 
@@ -527,6 +809,7 @@ final class ReaderViewModel {
           config: _state.config,
         ),
       );
+      await _recordSuccessfulReaderOpen(stopwatch.elapsedMilliseconds);
     } on ReadBookException catch (error) {
       if (generation == _loadGeneration) {
         _logger.error(
@@ -1002,6 +1285,23 @@ final class ReaderViewModel {
       ),
     );
     await _cacheGateway.savePositionAnchor(bookUrl, anchor);
+    try {
+      await _readingHistoryGateway.updateHistoryProgress(
+        bookUrl: book.bookUrl,
+        chapterIndex: _state.currentChapterIndex,
+        chapterPos: anchor.characterOffset,
+        readTime: now,
+        chapterTitle: chapter.title,
+      );
+    } on Object catch (error, stackTrace) {
+      _logger.error(
+        tag: bookReaderEntryLogTag,
+        message:
+            '阅读历史进度保存失败 bookId=${appLogDiagnosticId(bookUrl)}',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     if (result is AppFailure<bool>) {
       _logger.error(
         tag: bookReaderEntryLogTag,

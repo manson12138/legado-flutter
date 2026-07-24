@@ -12,8 +12,10 @@ import '../ui/bookshelf/bookshelf_route.dart';
 import '../ui/reader/book_reader_route.dart';
 import '../ui/local_book_import/local_book_import_route.dart';
 import '../ui/log_management/log_management_route.dart';
+import '../ui/crash_report_management/crash_report_management_route.dart';
 import '../ui/about/about_route.dart';
 import '../ui/settings/settings_route.dart';
+import '../ui/authentication/authentication_route.dart';
 import '../ui/download_management/download_management_route.dart';
 import '../help/logging/app_logger.dart';
 import 'app_dependencies.dart';
@@ -91,6 +93,20 @@ final class AppRouter {
           settings: settings,
           builder: (BuildContext context) {
             return AboutRoute(dependencies: dependencies);
+          },
+        );
+      case AppRoute.crashReportManagement:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return CrashReportManagementRoute(dependencies: dependencies);
+          },
+        );
+      case AppRoute.authentication:
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return AuthenticationRoute(dependencies: dependencies);
           },
         );
       case AppRoute.bookSourceManagement:
@@ -184,6 +200,9 @@ final class AppRouter {
                 bookUrl: normalizedReaderArguments.bookUrl,
                 initialChapterIndex: normalizedReaderArguments.initialChapterIndex,
                 initialMessage: normalizedReaderArguments.initialMessage,
+                initialBook: normalizedReaderArguments.initialBook,
+                initialChapters: normalizedReaderArguments.initialChapters,
+                entry: normalizedReaderArguments.entry,
               );
             },
           );

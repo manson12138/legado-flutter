@@ -173,7 +173,7 @@ final class BookSearchCoordinator {
             if (recordSourceOutcomes) {
               unawaited(
                 _sourceGateway
-                    .recordSourceOutcome(source.bookSourceUrl, delta: 1)
+                    .recordSourceOutcome(source.bookSourceUrl, delta: 1, eventType: 'search')
                     .catchError((Object _) {}),
               );
             }
@@ -223,6 +223,18 @@ final class BookSearchCoordinator {
                 ),
               ),
             );
+            /// 搜索失败累加服务端成功率聚合；取消不算失败。
+            if (recordSourceOutcomes) {
+              unawaited(
+                _sourceGateway
+                    .recordSourceOutcome(
+                      source.bookSourceUrl,
+                      delta: -1,
+                      eventType: 'search',
+                    )
+                    .catchError((Object _) {}),
+              );
+            }
           } else {
             /// 【搜书诊断日志】取消导致的异常不计入失败，只记录任务退出。
             _logger.info(

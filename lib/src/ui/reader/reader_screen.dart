@@ -59,6 +59,30 @@ final class ReaderScreen extends StatelessWidget {
               onIntent: onIntent,
             ),
           ),
+          if (state.menuVisible && !state.isInBookshelf)
+            Positioned(
+              right: SpacingToken.large,
+              bottom: 176,
+              child: SafeArea(
+                top: false,
+                left: false,
+                child: FloatingActionButton.small(
+                  heroTag: 'reader-add-to-bookshelf',
+                  tooltip: '加入书架',
+                  onPressed: state.addingToBookshelf
+                      ? null
+                      : () => onIntent(
+                            const AddReaderBookToBookshelfIntent(),
+                          ),
+                  child: state.addingToBookshelf
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.bookmark_add_outlined),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -341,6 +365,11 @@ final class _ReaderContentList extends StatelessWidget {
       onNotification: (ScrollNotification notification) {
         if (notification.metrics.axis != Axis.vertical || content.text.isEmpty) {
           return false;
+        }
+        if (notification is ScrollStartNotification &&
+            notification.dragDetails != null &&
+            state.menuVisible) {
+          onIntent(const HideReaderMenuIntent());
         }
         /// 当前可滚动范围比例，仅用于把布局位置换算为字符锚点，不持久化像素。
         final double progress = notification.metrics.maxScrollExtent <= 0

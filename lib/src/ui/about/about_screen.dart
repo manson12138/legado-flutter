@@ -60,7 +60,7 @@ final class AboutScreen extends StatelessWidget {
           const SizedBox(height: SpacingToken.xSmall),
           Center(
             child: Text(
-              '1.0.0+5',
+              '1.0.0+6',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),

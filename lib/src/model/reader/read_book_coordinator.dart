@@ -327,6 +327,8 @@ final class ReadBookCoordinator {
     }
     /// 是否命中持久正文缓存。
     final bool fromCache = rawContent != null;
+    /// 本次确实发起正文请求的网络书源；缓存和本地书保持为空。
+    BookSource? requestedSource;
     _logger.debug(
       tag: bookReaderContentLogTag,
       message: '章节持久缓存查询完成 chapterId=$chapterId hit=$fromCache forceRefresh=$forceRefresh',
@@ -354,6 +356,7 @@ final class ReadBookCoordinator {
         );
         throw const ReadBookException('原书源已不存在');
       }
+      requestedSource = source;
       /// 普通规则或 JavaScript 混合链路解析后的正文页。
       final ParsedContentPage parsed;
       try {
@@ -365,19 +368,20 @@ final class ReadBookCoordinator {
           cancellationToken: token,
         );
       } catch (error) {
-        /// 只在真正发生网络请求的分支里计分，缓存命中不算；失败扣一分。
-        unawaited(
-          _sourceGateway
-              .recordSourceOutcome(source.bookSourceUrl, delta: -1)
-              .catchError((Object _) {}),
-        );
+        if (!token.isCancelled) {
+          /// 只在真正发生网络请求且并非取消的分支计一次最终失败。
+          unawaited(
+            _sourceGateway
+                .recordSourceOutcome(
+                  source.bookSourceUrl,
+                  delta: -1,
+                  eventType: 'content',
+                )
+                .catchError((Object _) {}),
+          );
+        }
         rethrow;
       }
-      unawaited(
-        _sourceGateway
-            .recordSourceOutcome(source.bookSourceUrl, delta: 1)
-            .catchError((Object _) {}),
-      );
       _logger.info(
         tag: bookReaderContentLogTag,
         message: '章节网络正文取得 chapterId=$chapterId contentLength=${parsed.content.length}',
@@ -389,8 +393,30 @@ final class ReadBookCoordinator {
     }
     if (!fromCache) {
       if (rawContent.trim().isEmpty) {
+        if (requestedSource != null) {
+          unawaited(
+            _sourceGateway
+                .recordSourceOutcome(
+                  requestedSource.bookSourceUrl,
+                  delta: -1,
+                  eventType: 'content',
+                )
+                .catchError((Object _) {}),
+          );
+        }
         _logger.warning(tag: bookReaderContentLogTag, message: '章节正文为空 chapterId=$chapterId');
         throw const ReadBookException('章节正文为空');
+      }
+      if (requestedSource != null) {
+        unawaited(
+          _sourceGateway
+              .recordSourceOutcome(
+                requestedSource.bookSourceUrl,
+                delta: 1,
+                eventType: 'content',
+              )
+              .catchError((Object _) {}),
+        );
       }
       /// 网络书和本地书都缓存七天；重新导入会生成新的稳定内容身份。
       await _cacheGateway.saveChapterContent(

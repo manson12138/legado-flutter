@@ -735,8 +735,21 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
             Expanded(
               child: _BookInfoActionCard(
                 icon: state.inBookshelf ? Icons.check_circle_outline : Icons.library_add_outlined,
-                label: state.inBookshelf ? '已在书架' : state.addingToShelf ? '正在加入' : '加入书架',
-                enabled: state.inBookshelf || canAddToShelf,
+                label: state.inBookshelf ? '已添加到书架' : state.addingToShelf ? '正在加入' : '加入书架',
+                state: state.inBookshelf
+                    ? _BookInfoActionCardState.selected
+                    : state.addingToShelf
+                        ? _BookInfoActionCardState.working
+                        : canAddToShelf
+                            ? _BookInfoActionCardState.available
+                            : _BookInfoActionCardState.pending,
+                detail: state.inBookshelf
+                    ? '已保存到书架'
+                    : state.addingToShelf
+                        ? '正在保存书籍和目录'
+                        : canAddToShelf
+                            ? '保存书籍和目录'
+                            : _addToShelfHint(state),
                 onTap: state.inBookshelf ? null : () => onIntent(const AddBookToShelfIntent()),
               ),
             ),
@@ -745,7 +758,8 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
               child: _BookInfoActionCard(
                 icon: Icons.format_list_bulleted,
                 label: '查看目录',
-                enabled: canRead,
+                state: canRead ? _BookInfoActionCardState.available : _BookInfoActionCardState.pending,
+                detail: canRead ? '${state.chapters.length} 章可查看' : _tocActionHint(state),
                 onTap: () => _showFullChapterList(context, state, onIntent),
               ),
             ),
@@ -762,8 +776,18 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
                     : state.group.books.length > 1 || state.inBookshelf
                         ? '书源 / 换源'
                         : '书源',
-                enabled: state.group.books.length > 1 || (state.inBookshelf && state.book != null && state.book?.origin != 'loc_book'),
-                loading: state.switchingSource,
+                state: state.switchingSource
+                    ? _BookInfoActionCardState.working
+                    : state.group.books.length > 1 || (state.inBookshelf && state.book != null && state.book?.origin != 'loc_book')
+                        ? _BookInfoActionCardState.available
+                        : _BookInfoActionCardState.pending,
+                detail: state.switchingSource
+                    ? '正在加载新书源'
+                    : state.group.books.length > 1
+                        ? '${state.group.books.length} 个来源可选'
+                        : state.inBookshelf
+                            ? '当前没有可替换书源'
+                            : '加入书架后可全书换源',
                 onTap: state.group.books.length > 1
                     ? () => _showSourceChoices(context, state, onIntent)
                     : () => onIntent(const OpenBookInfoFullSourceChangeIntent()),
@@ -774,7 +798,8 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
               child: _BookInfoActionCard(
                 icon: Icons.timeline,
                 label: '阅读记录',
-                enabled: true,
+                state: _BookInfoActionCardState.available,
+                detail: '查看阅读轨迹',
                 onTap: () => onIntent(const BookInfoMenuActionIntent(BookInfoMenuAction.readRecord)),
               ),
             ),
@@ -787,7 +812,12 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
               child: _BookInfoActionCard(
                 icon: Icons.folder_copy_outlined,
                 label: _groupActionLabel(state),
-                enabled: state.inBookshelf && state.book != null,
+                state: state.inBookshelf && state.book != null
+                    ? _BookInfoActionCardState.available
+                    : _BookInfoActionCardState.pending,
+                detail: state.inBookshelf && state.book != null
+                    ? '管理书架分组'
+                    : '加入书架后可管理分组',
                 onTap: () => _showGroupChoices(context, state, onIntent),
               ),
             ),
@@ -796,7 +826,8 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
               child: _BookInfoActionCard(
                 icon: Icons.extension_outlined,
                 label: '后续能力',
-                enabled: true,
+                state: _BookInfoActionCardState.available,
+                detail: '查看功能规划',
                 onTap: () => _showFeatureMatrix(context, state, onIntent),
               ),
             ),
@@ -805,6 +836,28 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 生成“加入书架”尚不可执行时的原因文案。
+String _addToShelfHint(BookInfoUiState state) {
+  if (state.loadingToc) {
+    return '正在加载目录';
+  }
+  if (state.tocError != null) {
+    return '目录加载失败后可重试';
+  }
+  return '获取目录后可加入';
+}
+
+/// 生成“查看目录”尚不可执行时的原因文案。
+String _tocActionHint(BookInfoUiState state) {
+  if (state.loadingToc) {
+    return '正在加载目录';
+  }
+  if (state.tocError != null) {
+    return '目录加载失败后可重试';
+  }
+  return '暂无可阅读章节';
 }
 
 /// 生成分组操作卡文案。
@@ -1209,15 +1262,30 @@ final class _BookInfoFeatureTile extends StatelessWidget {
   }
 }
 
+/// 详情页主操作卡的可执行性视觉状态。
+enum _BookInfoActionCardState {
+  /// 可立即执行操作。
+  available,
+
+  /// 正在执行，暂时阻止重复提交。
+  working,
+
+  /// 等待目录或其他前置数据，保留原因提示而不灰化为系统禁用。
+  pending,
+
+  /// 已完成或当前书籍已有的状态。
+  selected,
+}
+
 /// 详情页主操作按钮卡片。
 final class _BookInfoActionCard extends StatelessWidget {
   /// 创建操作卡。
   const _BookInfoActionCard({
     required this.icon,
     required this.label,
-    required this.enabled,
+    required this.state,
+    required this.detail,
     required this.onTap,
-    this.loading = false,
   });
 
   /// 操作图标。
@@ -1226,47 +1294,78 @@ final class _BookInfoActionCard extends StatelessWidget {
   /// 操作文案。
   final String label;
 
-  /// 是否允许点击。
-  final bool enabled;
+  /// 当前操作卡的可执行性和视觉状态。
+  final _BookInfoActionCardState state;
+
+  /// 向用户说明当前状态或操作结果的辅助文案。
+  final String detail;
 
   /// 点击回调；为空时只展示状态。
   final VoidCallback? onTap;
 
-  /// 是否正在后台执行该操作；为 true 时用小转圈替换图标并禁用点击，不影响卡片本身继续显示。
-  final bool loading;
-
-  /// 构建稳定高度的操作卡，避免状态文案切换时布局跳动。
+  /// 构建稳定高度的操作卡，避免状态文案切换时布局跳动和误判为禁用。
   @override
   Widget build(BuildContext context) {
     /// 当前主题颜色。
     final ColorScheme colors = Theme.of(context).colorScheme;
-    /// 实际点击回调；加载中禁止重复触发。
-    final VoidCallback? action = enabled && !loading ? onTap : null;
+    /// 当前是否允许触发操作。
+    final bool canActivate = state == _BookInfoActionCardState.available;
+    /// 实际点击回调；进行中、等待中和已完成状态不触发重复操作。
+    final VoidCallback? action = canActivate ? onTap : null;
+    /// 当前卡片背景色。
+    final Color backgroundColor = switch (state) {
+      _BookInfoActionCardState.available ||
+      _BookInfoActionCardState.working ||
+      _BookInfoActionCardState.pending => colors.surfaceContainerLow,
+      _BookInfoActionCardState.selected => colors.surfaceContainer,
+    };
+    /// 当前卡片边框色；等待状态使用边框而非灰化来表达前置条件。
+    final Color borderColor = switch (state) {
+      _BookInfoActionCardState.available => colors.primary.withValues(alpha: 0.72),
+      _BookInfoActionCardState.working => colors.primary.withValues(alpha: 0.52),
+      _BookInfoActionCardState.pending => colors.outlineVariant.withValues(alpha: 0.78),
+      _BookInfoActionCardState.selected => colors.outlineVariant.withValues(alpha: 0.9),
+    };
+    /// 当前图标颜色。
+    final Color iconColor = switch (state) {
+      _BookInfoActionCardState.available || _BookInfoActionCardState.working => colors.primary,
+      _BookInfoActionCardState.pending || _BookInfoActionCardState.selected => colors.onSurfaceVariant,
+    };
+    /// 当前主文案颜色。
+    final Color labelColor = switch (state) {
+      _BookInfoActionCardState.available => colors.primary,
+      _BookInfoActionCardState.working => colors.onSurface,
+      _BookInfoActionCardState.pending || _BookInfoActionCardState.selected => colors.onSurfaceVariant,
+    };
     return Semantics(
       button: action != null,
-      enabled: enabled,
-      label: label,
+      enabled: canActivate,
+      label: '$label，$detail',
       child: Material(
-        color: enabled ? colors.surfaceContainerLow : colors.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(RadiusToken.medium),
+        color: backgroundColor,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(color: borderColor),
+          borderRadius: BorderRadius.circular(RadiusToken.medium),
+        ),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: action,
           borderRadius: BorderRadius.circular(RadiusToken.medium),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: LayoutToken.minimumTouchTarget),
+            constraints: const BoxConstraints(minHeight: 88),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: SpacingToken.small, vertical: SpacingToken.mediumSmall),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  if (loading)
+                  if (state == _BookInfoActionCardState.working)
                     SizedBox(
                       width: 24,
                       height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2.4, color: colors.primary),
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: iconColor),
                     )
                   else
-                    Icon(icon, color: enabled ? colors.primary : colors.onSurfaceVariant),
+                    Icon(icon, color: iconColor),
                   const SizedBox(height: SpacingToken.xSmall),
                   Text(
                     label,
@@ -1274,8 +1373,23 @@ final class _BookInfoActionCard extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: enabled ? colors.onSurface : colors.onSurfaceVariant,
+                          color: labelColor,
                         ),
+                  ),
+                  const SizedBox(height: 2),
+                  SizedBox(
+                    height: 16,
+                    child: Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: state == _BookInfoActionCardState.available
+                                ? colors.onSurfaceVariant
+                                : colors.onSurfaceVariant.withValues(alpha: 0.8),
+                          ),
+                    ),
                   ),
                 ],
               ),

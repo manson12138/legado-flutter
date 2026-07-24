@@ -1,46 +1,41 @@
 import 'package:flutter/material.dart';
 
-import '../../domain/model/book.dart';
+import '../../domain/model/app_account.dart';
 import '../components/app_scaffold.dart';
-import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 
-/// 展示本地用户信息、阅读历史和应用管理入口的无状态“我的”页面。
+/// 展示本地用户信息和应用管理入口的无状态“我的”页面。
 final class SettingsScreen extends StatelessWidget {
   /// 创建“我的”页面纯 UI。
   const SettingsScreen({
-    required this.recentBooks,
+    required this.appSession,
     required this.themeMode,
     required this.onBack,
-    required this.onOpenBook,
-    required this.onOpenAllHistory,
     required this.onOpenThemeManagement,
     required this.onOpenLanguageManagement,
     required this.onOpenBookSources,
+    required this.onOpenAuthentication,
     required this.onOpenDownloadManagement,
     required this.onOpenOfflineContentManagement,
     required this.allowSearchSourceInteraction,
     required this.onChangeSearchSourceInteraction,
+    required this.analyticsEnabled,
+    required this.onChangeAnalyticsEnabled,
     required this.onOpenLogManagement,
+    required this.onOpenCrashReportManagement,
     required this.onOpenAbout,
     this.showBackButton = true,
     super.key,
   });
 
-  /// 按最近阅读时间倒序排列的本地书籍。
-  final List<Book> recentBooks;
+  /// 当前仅驻留内存的 App 账号会话；为空表示未登录。
+  final AppAuthenticationSession? appSession;
 
   /// 当前应用主题模式。
   final ThemeMode themeMode;
 
   /// 返回上一页的导航回调。
   final VoidCallback onBack;
-
-  /// 打开指定历史书籍继续阅读的回调。
-  final ValueChanged<Book> onOpenBook;
-
-  /// 打开完整阅读历史的回调。
-  final VoidCallback onOpenAllHistory;
 
   /// 打开主题管理的回调。
   final VoidCallback onOpenThemeManagement;
@@ -50,6 +45,9 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 打开书源管理的回调。
   final VoidCallback onOpenBookSources;
+
+  /// 打开 App 用户注册登录页面的回调。
+  final VoidCallback onOpenAuthentication;
 
   /// 打开跨书离线下载管理页的回调。
   final VoidCallback onOpenDownloadManagement;
@@ -63,8 +61,17 @@ final class SettingsScreen extends StatelessWidget {
   /// 用户切换搜索期书源登录与验证交互权限时的回调。
   final ValueChanged<bool> onChangeSearchSourceInteraction;
 
+  /// 用户是否已同意上传非敏感分析事件。
+  final bool analyticsEnabled;
+
+  /// 保存用户分析同意状态的回调。
+  final ValueChanged<bool> onChangeAnalyticsEnabled;
+
   /// 打开日志管理页的导航回调。
   final VoidCallback onOpenLogManagement;
+
+  /// 打开独立崩溃报告管理页的导航回调。
+  final VoidCallback onOpenCrashReportManagement;
 
   /// 打开关于信息的回调。
   final VoidCallback onOpenAbout;
@@ -72,7 +79,7 @@ final class SettingsScreen extends StatelessWidget {
   /// 顶部栏是否展示返回按钮。
   final bool showBackButton;
 
-  /// 构建本地资料、阅读历史和紧凑分组列表。
+  /// 构建本地资料和紧凑分组列表。
   @override
   Widget build(BuildContext context) {
     return AppScaffold(
@@ -102,16 +109,6 @@ final class SettingsScreen extends StatelessWidget {
             ),
             children: <Widget>[
               _buildProfileHeader(context),
-              const SizedBox(height: SpacingToken.large),
-              _SectionTitle(
-                title: '最近阅读',
-                actionLabel: recentBooks.isEmpty ? null : '全部',
-                onAction: recentBooks.isEmpty ? null : onOpenAllHistory,
-              ),
-              _RecentReadingList(
-                books: recentBooks.take(3).toList(growable: false),
-                onOpenBook: onOpenBook,
-              ),
               const SizedBox(height: SpacingToken.large),
               const _SectionTitle(title: '外观与语言'),
               _SettingsGroup(
@@ -156,6 +153,10 @@ final class SettingsScreen extends StatelessWidget {
                     initialValue: allowSearchSourceInteraction,
                     onChanged: onChangeSearchSourceInteraction,
                   ),
+                  _AnalyticsConsentSwitch(
+                    initialValue: analyticsEnabled,
+                    onChanged: onChangeAnalyticsEnabled,
+                  ),
                   _SettingsItem(
                     icon: Icons.description_outlined,
                     title: '日志管理',
@@ -163,9 +164,15 @@ final class SettingsScreen extends StatelessWidget {
                     onTap: onOpenLogManagement,
                   ),
                   _SettingsItem(
+                    icon: Icons.bug_report_outlined,
+                    title: '崩溃日志',
+                    subtitle: '查看、上传或删除已脱敏的崩溃报告',
+                    onTap: onOpenCrashReportManagement,
+                  ),
+                  _SettingsItem(
                     icon: Icons.info_outline,
                     title: '关于',
-                    subtitle: 'Legado Flutter 1.0.0+5',
+                    subtitle: 'Legado Flutter 1.0.0+6',
                     onTap: onOpenAbout,
                   ),
                 ],
@@ -179,6 +186,7 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 构建低装饰的本地用户资料区，不暗示尚未实现的云端账户能力。
   Widget _buildProfileHeader(BuildContext context) {
+    final AppAuthenticationSession? session = appSession;
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: SpacingToken.small,
@@ -197,14 +205,19 @@ final class SettingsScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text('本地读者', style: Theme.of(context).textTheme.titleMedium),
+                Text(session?.account.username ?? '本地读者', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: SpacingToken.xSmall),
                 Text(
-                  '阅读数据保存在本机',
+                  session == null ? '阅读数据保存在本机' : 'App 账号已登录，重启后需重新登录',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
+          ),
+          IconButton(
+            onPressed: onOpenAuthentication,
+            icon: const Icon(Icons.manage_accounts_outlined),
+            tooltip: session == null ? '登录或注册 App 账号' : '管理 App 账号',
           ),
         ],
       ),
@@ -219,6 +232,49 @@ final class SettingsScreen extends StatelessWidget {
       ThemeMode.dark => '深色',
     };
   }
+}
+
+/// 展示默认关闭的分析同意开关，避免未经明确同意采集或持久化事件。
+final class _AnalyticsConsentSwitch extends StatefulWidget {
+  /// 创建分析同意开关。
+  const _AnalyticsConsentSwitch({required this.initialValue, required this.onChanged});
+
+  /// 路由读取到的持久化同意状态。
+  final bool initialValue;
+
+  /// 保存用户新选择的回调。
+  final ValueChanged<bool> onChanged;
+
+  /// 创建本地即时状态。
+  @override
+  State<_AnalyticsConsentSwitch> createState() => _AnalyticsConsentSwitchState();
+}
+
+/// 管理分析同意开关的即时视觉状态。
+final class _AnalyticsConsentSwitchState extends State<_AnalyticsConsentSwitch> {
+  /// 当前开关值。
+  late bool _value;
+
+  /// 使用路由读取的初始值。
+  @override
+  void initState() { super.initState(); _value = widget.initialValue; }
+
+  /// 持久化值异步到达时同步显示状态。
+  @override
+  void didUpdateWidget(covariant _AnalyticsConsentSwitch oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialValue != widget.initialValue) { _value = widget.initialValue; }
+  }
+
+  /// 构建分析同意开关。
+  @override
+  Widget build(BuildContext context) => SwitchListTile(
+    secondary: const Icon(Icons.insights_outlined, size: 20),
+    title: const Text('允许匿名使用分析'),
+    subtitle: const Text('默认关闭；仅上传非敏感事件，用于改进书源质量和功能稳定性'),
+    value: _value,
+    onChanged: (bool value) { setState(() { _value = value; }); widget.onChanged(value); },
+  );
 }
 
 /// 展示并立即反馈搜索期书源登录与验证交互开关。
@@ -307,55 +363,6 @@ final class _SectionTitle extends StatelessWidget {
             TextButton(onPressed: onAction, child: Text(actionLabel ?? '')),
         ],
       ),
-    );
-  }
-}
-
-/// 展示最多三条最近阅读记录。
-final class _RecentReadingList extends StatelessWidget {
-  /// 创建最近阅读列表。
-  const _RecentReadingList({required this.books, required this.onOpenBook});
-
-  /// 当前需要展示的最近阅读书籍。
-  final List<Book> books;
-
-  /// 点击书籍继续阅读的回调。
-  final ValueChanged<Book> onOpenBook;
-
-  /// 构建空状态或紧凑阅读记录。
-  @override
-  Widget build(BuildContext context) {
-    if (books.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: SpacingToken.small,
-          vertical: SpacingToken.medium,
-        ),
-        child: Text('还没有阅读记录'),
-      );
-    }
-    return _SettingsGroup(
-      children: books.map((Book book) {
-        /// 当前历史项优先展示用户封面，其次展示书源封面。
-        final String? coverUrl = book.customCoverUrl?.trim().isNotEmpty == true
-            ? book.customCoverUrl
-            : book.coverUrl;
-        return ListTile(
-          leading: SizedBox(
-            width: 28,
-            height: 40,
-            child: BookCover(coverUrl: coverUrl, semanticLabel: '${book.name}封面'),
-          ),
-          title: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text(
-            book.durChapterTitle ?? '上次阅读位置',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: const Icon(Icons.chevron_right, size: 18),
-          onTap: () => onOpenBook(book),
-        );
-      }).toList(growable: false),
     );
   }
 }

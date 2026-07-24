@@ -1,7 +1,7 @@
 name: legado_flutter
 description: "Legado Android 与 iOS 共用的 Flutter 重写工程。"
 publish_to: 'none'
-version: 1.0.0+5
+version: 1.0.0+6
 
 environment:
   sdk: '>=3.11.3 <4.0.0'
@@ -17,6 +17,8 @@ dependencies:
     sdk: flutter
   # P1-01 使用 OpenCC 的 Android/iOS 原生实现完成完整简繁转换，避免维护不完整字符表。
   flutter_open_chinese_convert: ^0.9.0
+  # App 登录 Token 仅保存在 Android Keystore / iOS Keychain，绝不写入数据库或普通偏好。
+  flutter_secure_storage: ^10.0.0
   html: ^0.15.6
   json_path: ^0.9.0
   jsf: ^1.1.0
@@ -27,6 +29,8 @@ dependencies:
   share_plus: ^12.0.1
   # Flutter 3.41.5 当前内置 Dart 3.11.3，固定到仍兼容该 SDK 的版本。
   sqflite: 2.4.2
+  # 仅用于服务端下发 Android 升级地址的系统浏览器跳转；不下载或安装 APK。
+  url_launcher: ^6.3.2
   # M10 使用 Flutter 官方 WKWebView/Android WebView 适配，统一登录、页面脚本和 Cookie 同步。
   webview_flutter: ^4.14.1
   xpath_selector: ^3.0.2

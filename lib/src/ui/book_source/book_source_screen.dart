@@ -5,6 +5,7 @@ import '../components/app_scaffold.dart';
 import '../components/app_state_views.dart';
 import '../theme/app_tokens.dart';
 import 'book_source_contract.dart';
+import '../../app/remote_book_source_sync_service.dart';
 
 /// 只渲染书源管理状态并发送 Intent 的无业务逻辑页面。
 final class BookSourceManagementScreen extends StatelessWidget {
@@ -12,6 +13,10 @@ final class BookSourceManagementScreen extends StatelessWidget {
   const BookSourceManagementScreen({
     required this.state,
     required this.onIntent,
+    required this.onRemoteSync,
+    required this.showRemoteSync,
+    required this.remoteSyncing,
+    required this.remoteSyncProgress,
     this.showBackButton = true,
     super.key,
   });
@@ -21,6 +26,18 @@ final class BookSourceManagementScreen extends StatelessWidget {
 
   /// 页面所有操作的统一 Intent 入口。
   final ValueChanged<BookSourceManagementIntent> onIntent;
+
+  /// 使用当前 App 登录会话下载服务端书源的路由回调。
+  final VoidCallback onRemoteSync;
+
+  /// 仅在当前 App 账号拥有书源同步权限时展示同步入口。
+  final bool showRemoteSync;
+
+  /// 服务器书源同步是否运行中。
+  final bool remoteSyncing;
+
+  /// 当前可安全展示的同步阶段与批次计数。
+  final RemoteBookSourceSyncProgress? remoteSyncProgress;
 
   /// 非选择模式下是否展示返回按钮。
   final bool showBackButton;
@@ -65,6 +82,18 @@ final class BookSourceManagementScreen extends StatelessWidget {
                   ),
                 ]
               : <Widget>[
+                  if (showRemoteSync)
+                    IconButton(
+                      tooltip: '同步服务器书源',
+                      onPressed: state.busy || remoteSyncing ? null : onRemoteSync,
+                      icon: remoteSyncing
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cloud_download_outlined),
+                    ),
                   IconButton(
                     tooltip: '导入文件',
                     onPressed: state.busy
@@ -109,6 +138,8 @@ final class BookSourceManagementScreen extends StatelessWidget {
         body: Column(
           children: <Widget>[
             if (state.busy) const LinearProgressIndicator(),
+            if (remoteSyncing && remoteSyncProgress != null)
+              _RemoteSyncStatus(progress: remoteSyncProgress!),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 SpacingToken.medium,
@@ -403,6 +434,55 @@ final class _BookSourceCard extends StatelessWidget {
 }
 
 /// 选择模式底部批量操作栏。
+/// 展示服务器书源同步的当前阶段和安全分页计数。
+final class _RemoteSyncStatus extends StatelessWidget {
+  /// 创建服务器书源同步状态条。
+  const _RemoteSyncStatus({required this.progress});
+
+  /// 当前同步进度。
+  final RemoteBookSourceSyncProgress progress;
+
+  /// 构建不包含书源内容的同步反馈。
+  @override
+  Widget build(BuildContext context) {
+    final String message = switch (progress.stage) {
+      RemoteBookSourceSyncStage.checkingSession => '正在校验服务器书源同步会话…',
+      RemoteBookSourceSyncStage.fetchingBatch => progress.totalCount == null
+          ? '正在获取第 ${progress.batchNumber ?? 1} 批书源…'
+          : '正在获取第 ${progress.batchNumber ?? 1} 批：已处理 ${progress.processedCount}/${progress.totalCount}',
+      RemoteBookSourceSyncStage.importingBatch => '正在导入第 ${progress.batchNumber ?? 1} 批：已处理 ${progress.processedCount}/${progress.totalCount ?? progress.processedCount}',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SpacingToken.medium,
+        SpacingToken.small,
+        SpacingToken.medium,
+        0,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(SpacingToken.small),
+          child: Row(
+            children: <Widget>[
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: SpacingToken.small),
+              Expanded(child: Text(message)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 final class _SelectionActions extends StatelessWidget {
   /// 创建批量操作栏。
   const _SelectionActions({required this.state, required this.onIntent});

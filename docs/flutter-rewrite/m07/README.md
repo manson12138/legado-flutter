@@ -7,11 +7,14 @@
 - 欢迎页新增“打开书架”入口，稳定路由为 `/bookshelf`。
 - Bookshelf UiState、Intent、Effect、ViewModel、Route 和纯 Screen；列表与网格共享同一业务状态。
 - 书架直接观察 `BookshelfGateway.watchBookshelf()`，M6 加入书架或后续阅读进度写入会触发数据库流重建页面。
+- 书架路由内部新增“书架 / 历史”双页 `PageView`；历史使用独立
+  `reading_history_books`/`reading_history_chapters` 快照，不把阅读过的未入架书写进 `books`。
 - `BookshelfBookItem` 独立承载显示字段，未修改 `Book` 实体语义；未读数使用 Android 公式 `totalChapterNum - durChapterIndex - 1`，最小为 0。
 - 列表和响应式网格均使用 `bookUrl` 作为稳定 key；支持书名、作者、来源和分类搜索。
 - 支持最近阅读、最新更新、书名、手动顺序、最近活动和作者六种 Android 对齐排序字段，支持正序/倒序，并以 `bookUrl` 稳定次级排序。
 - 固定提供全部、未分组、未读和阅读中系统分组；观察数据库用户分组并按分组 order、groupId 稳定排序。
 - 长按进入选择模式，点击切换选择，全选只作用于当前可见项；返回优先关闭对话框和退出选择模式。
+- 选择模式下系统返回会消费本次返回并退出选择；滑向历史页或切换主导航使书架不可见时也会自动退出。
 - 支持批量创建用户分组、移动到已有分组、清除用户分组；写入通过 UseCase/Repository 完成。
 - 批量删除先展示明确影响范围，再由单一事务删除书籍；章节依赖 SQLite 外键级联，不由 UI 重复删除。
 - `BookshelfRefreshCoordinator` 使用最多 3 个 worker、每书独立取消令牌和 60 秒超时；单书失败不终止其他任务。
@@ -54,5 +57,7 @@ AI 未运行数据库、网络请求、UI、format、analyze、test 或 build。
 10. 只选部分书籍刷新，确认未选书籍不进入更新集合；JavaScript 书源当前应显示明确 M4 门禁错误。
 11. 选择书籍并删除，确认先显示影响范围；删除后书籍立即消失，章节表不存在该 `bookUrl` 的孤立目录，本地原文件未删除。
 12. 点击详情图标确认进入 M6 详情；点击书籍确认进入 `/reader` 并由 M8 打开该书保存进度对应章节。
+13. 滑到“历史”页，确认读过但未加入书架的书只出现在历史；从历史进入阅读器后能恢复目录与位置。
+14. 长按进入选择后分别按返回、滑到历史、切换主导航，确认选择状态都被清除且返回不会直接退出页面。
 
 用户提供上述运行结果前，M7 保持 `IN_PROGRESS`。

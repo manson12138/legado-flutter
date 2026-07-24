@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../domain/model/book.dart';
+import '../../domain/model/book_chapter.dart';
 import '../components/app_state_views.dart';
 import 'pdf_reader_route.dart';
 import 'reader_route.dart';
@@ -14,6 +15,9 @@ final class BookReaderRoute extends StatelessWidget {
     required this.bookUrl,
     this.initialChapterIndex,
     this.initialMessage,
+    this.initialBook,
+    this.initialChapters = const <BookChapter>[],
+    this.entry = 'bookshelf',
     super.key,
   });
 
@@ -29,11 +33,20 @@ final class BookReaderRoute extends StatelessWidget {
   /// 路由替换后需要展示的一次性提示。
   final String? initialMessage;
 
+  /// 详情页直接阅读时传入的未入架书籍快照。
+  final Book? initialBook;
+
+  /// 详情页直接阅读时传入的未入架目录快照。
+  final List<BookChapter> initialChapters;
+
+  /// 阅读入口，用于匿名埋点的受控枚举值。
+  final String entry;
+
   /// 异步读取书籍并选择正确阅读内容模型。
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Book?>(
-      future: dependencies.bookshelfGateway.getBook(bookUrl),
+      future: _loadBook(),
       builder: (BuildContext context, AsyncSnapshot<Book?> snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -41,18 +54,38 @@ final class BookReaderRoute extends StatelessWidget {
         /// 数据库读取到的目标书籍。
         final Book? book = snapshot.data;
         if (book == null) {
-          return const AppFatalErrorView(message: '目标书籍已不在书架中');
+          return const AppFatalErrorView(message: '目标书籍不存在或阅读历史已失效');
         }
         if (book.origin == 'loc_book' && book.originName.toLowerCase().endsWith('.pdf')) {
-          return PdfReaderRoute(dependencies: dependencies, book: book);
+          return PdfReaderRoute(
+            dependencies: dependencies,
+            book: book,
+            entry: entry,
+          );
         }
         return ReaderRoute(
           dependencies: dependencies,
           bookUrl: bookUrl,
           initialChapterIndex: initialChapterIndex,
           initialMessage: initialMessage,
+          initialBook: initialBook,
+          initialChapters: initialChapters,
+          entry: entry,
         );
       },
     );
+  }
+
+  /// 依次从书架、详情路由快照和阅读历史读取书籍事实。
+  Future<Book?> _loadBook() async {
+    final Book? shelfBook = await dependencies.bookshelfGateway.getBook(bookUrl);
+    if (shelfBook != null) {
+      return shelfBook;
+    }
+    final Book? routeBook = initialBook;
+    if (routeBook != null && routeBook.bookUrl == bookUrl) {
+      return routeBook;
+    }
+    return dependencies.readingHistoryGateway.getHistoryBook(bookUrl);
   }
 }

@@ -100,6 +100,10 @@ final class BookInfoViewModel {
   HttpCancellationToken? _token;
   /// 请求世代，换源和销毁后拒绝旧结果。
   int _generation = 0;
+  /// 当前详情页自动回退已经尝试过的候选唯一标识，防止目录失败后重复请求同一来源。
+  final Set<String> _autoFallbackAttemptedCandidates = <String>{};
+  /// 是否正在为当前搜索结果组执行目录失败后的自动回退。
+  bool _autoFallbackActive = false;
   /// 是否正在为目录进入阅读器执行持久化，防止重复点击产生并发写入。
   bool _openingReader = false;
 
@@ -115,9 +119,11 @@ final class BookInfoViewModel {
     switch (intent) {
       case RetryBookInfoIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户重试详情');
+        _resetAutoSourceFallback();
         _loadDetails();
       case RetryBookTocIntent():
         _logger.info(tag: bookTocLogTag, message: '用户重试目录');
+        _resetAutoSourceFallback();
         _loadToc(runPreUpdateJavaScript: true);
       case AddBookToShelfIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户点击加入书架');
@@ -162,6 +168,7 @@ final class BookInfoViewModel {
     switch (action) {
       case BookInfoMenuAction.refresh:
         _logger.info(tag: bookDetailLogTag, message: '用户从菜单刷新详情');
+        _resetAutoSourceFallback();
         _loadDetails(runPreUpdateJavaScript: true);
       case BookInfoMenuAction.share:
         _shareCurrentBook();
@@ -240,6 +247,7 @@ final class BookInfoViewModel {
     bool silent = false,
     bool runPreUpdateJavaScript = false,
   }) async {
+    _autoFallbackAttemptedCandidates.add(_candidateKey(_state.selectedBook));
     _cancelRequest();
     _generation += 1;
     /// 本次详情请求世代。
@@ -341,6 +349,14 @@ final class BookInfoViewModel {
       );
     } catch (error, stackTrace) {
       if (generation == _generation) {
+        unawaited(
+          _bookSourceGateway
+              .recordSourceOutcome(_state.selectedBook.origin, delta: -1, eventType: 'detail')
+              .catchError((Object _) {}),
+        );
+        if (!silent && _tryAutoFallback()) {
+          return;
+        }
         if (silent) {
           _logger.warning(
             tag: bookDetailLogTag,
@@ -394,6 +410,8 @@ final class BookInfoViewModel {
     if (!silent) {
       _emit(_state.copyWith(loadingToc: true, clearTocError: true));
     }
+    /// 是否已经完成远端目录解析；后续本地保存失败不能反向记为书源失败。
+    bool tocResolved = false;
     try {
       /// 完整目录。
       final List<BookChapter> chapters = await _detailService.loadToc(
@@ -408,10 +426,11 @@ final class BookInfoViewModel {
         );
         return;
       }
-      /// 目录加载成功累加书源成功率。
+      tocResolved = true;
+      /// 目录最终解析成功后只累计一次书源成功率。
       unawaited(
         _bookSourceGateway
-            .recordSourceOutcome(snapshot.source.bookSourceUrl, delta: 1)
+            .recordSourceOutcome(snapshot.source.bookSourceUrl, delta: 1, eventType: 'toc')
             .catchError((Object _) {}),
       );
       /// 带目录统计的书籍。
@@ -440,19 +459,34 @@ final class BookInfoViewModel {
           chapters: chapters,
         ),
       );
+      if (_autoFallbackActive) {
+        _autoFallbackActive = false;
+        _effectController.add(const ShowBookInfoMessageEffect('已自动切换到可用书源'));
+      }
       _logger.info(
         tag: bookTocLogTag,
         message: '详情页目录加载完成 generation=$generation bookId=$bookId '
             'chapterCount=${chapters.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
     } catch (error, stackTrace) {
-      /// 目录加载失败扣减书源成功率；持久化失败（书架已有书）也算在同一次网络请求上。
-      unawaited(
-        _bookSourceGateway
-            .recordSourceOutcome(snapshot.source.bookSourceUrl, delta: -1)
-            .catchError((Object _) {}),
-      );
+      if (!tocResolved &&
+          generation == _generation &&
+          !token.isCancelled) {
+        /// 仅最终目录请求/解析失败计入书源失败；取消和本地持久化异常不计。
+        unawaited(
+          _bookSourceGateway
+              .recordSourceOutcome(
+                snapshot.source.bookSourceUrl,
+                delta: -1,
+                eventType: 'toc',
+              )
+              .catchError((Object _) {}),
+        );
+      }
       if (generation == _generation) {
+        if (!silent && _tryAutoFallback()) {
+          return;
+        }
         if (silent) {
           _logger.warning(
             tag: bookTocLogTag,
@@ -481,7 +515,7 @@ final class BookInfoViewModel {
     }
   }
 
-  /// 确保当前书籍和目录已经持久化，然后请求路由进入阅读器指定章节。
+  /// 使用当前书籍与目录快照进入阅读器，不隐式加入书架。
   Future<void> _openChapterInReader(int chapterIndex) async {
     if (_openingReader) {
       _logger.debug(tag: bookDetailLogTag, message: '忽略重复目录阅读入口 chapterIndex=$chapterIndex');
@@ -514,33 +548,13 @@ final class BookInfoViewModel {
       return;
     }
     _openingReader = true;
-    /// 目录阅读入口对应书籍不可逆标识。
-    final String bookId = appLogDiagnosticId(book.bookUrl);
     try {
-      if (!_state.inBookshelf) {
-        _emit(_state.copyWith(addingToShelf: true));
-        _logger.info(
-          tag: bookDetailLogTag,
-          message: '目录阅读入口写入书架开始 bookId=$bookId chapterCount=${_state.chapters.length}',
-        );
-        /// 非书架书进入阅读器前必须完成冲突感知的加入动作。
-        final AppResult<AddBookToBookshelfResult> result =
-            await _addBookToBookshelf.execute(book, _state.chapters);
-        /// 是否可以在本轮立即继续进入阅读器。
-        final bool canOpenReader = _handleAddResult(
-          result,
-          pendingChapterIndex: chapterIndex,
-        );
-        if (!canOpenReader) {
-          return;
-        }
-        _logger.info(
-          tag: bookDetailLogTag,
-          message: '目录阅读入口写入书架成功 bookId=$bookId chapterIndex=$chapterIndex',
-        );
-      }
       _effectController.add(
-        OpenBookInfoReaderEffect(bookUrl: book.bookUrl, chapterIndex: chapterIndex),
+        OpenBookInfoReaderEffect(
+          book: book,
+          chapters: _state.chapters,
+          chapterIndex: chapterIndex,
+        ),
       );
     } finally {
       _openingReader = false;
@@ -653,7 +667,7 @@ final class BookInfoViewModel {
           ),
         );
         _effectController.add(const ShowBookInfoMessageEffect('已替换书源并保留阅读数据'));
-        _continueAfterShelfConflict(conflict, changeResult.book.bookUrl);
+        _continueAfterShelfConflict(conflict);
     }
   }
 
@@ -677,22 +691,23 @@ final class BookInfoViewModel {
       case AppSuccess<void>():
         _emit(_state.copyWith(addingToShelf: false, inBookshelf: true));
         _effectController.add(const ShowBookInfoMessageEffect('已作为另一来源加入书架'));
-        _continueAfterShelfConflict(conflict, conflict.incomingBook.bookUrl);
+        _continueAfterShelfConflict(conflict);
     }
   }
 
   /// 冲突解决后恢复用户原先从目录进入阅读器的动作。
-  void _continueAfterShelfConflict(
-    BookInfoShelfConflictDialog conflict,
-    String bookUrl,
-  ) {
+  void _continueAfterShelfConflict(BookInfoShelfConflictDialog conflict) {
     /// 冲突出现前用户选择的章节位置。
     final int? chapterIndex = conflict.pendingChapterIndex;
     if (chapterIndex == null) {
       return;
     }
     _effectController.add(
-      OpenBookInfoReaderEffect(bookUrl: bookUrl, chapterIndex: chapterIndex),
+      OpenBookInfoReaderEffect(
+        book: conflict.incomingBook,
+        chapters: conflict.incomingChapters,
+        chapterIndex: chapterIndex,
+      ),
     );
   }
 
@@ -702,6 +717,7 @@ final class BookInfoViewModel {
       _logger.debug(tag: bookDetailLogTag, message: '忽略重复详情换源');
       return;
     }
+    _resetAutoSourceFallback();
     /// 【搜书诊断日志】记录详情换源前后的不可逆标识。
     _logger.info(
       tag: bookDetailLogTag,
@@ -712,6 +728,47 @@ final class BookInfoViewModel {
     _emit(_state.copyWith(selectedBook: book, inBookshelf: false));
     _loadDetails();
   }
+
+  /// 在未加入书架时按搜索候选顺序串行切换到下一个尚未尝试的来源。
+  bool _tryAutoFallback() {
+    if (_state.inBookshelf) {
+      return false;
+    }
+    SearchBook? next;
+    for (final SearchBook candidate in _state.group.books) {
+      if (!_autoFallbackAttemptedCandidates.contains(_candidateKey(candidate))) {
+        next = candidate;
+        break;
+      }
+    }
+    if (next == null) {
+      _autoFallbackActive = false;
+      return false;
+    }
+    _autoFallbackActive = true;
+    _snapshot = null;
+    _emit(
+      _state.copyWith(
+        selectedBook: next,
+        switchingSource: true,
+        loadingInfo: _state.book == null,
+        loadingToc: false,
+        clearInfoError: true,
+        clearTocError: true,
+      ),
+    );
+    _loadDetails();
+    return true;
+  }
+
+  /// 重新开始用户主动请求时清空失败记录，使当前来源及同组候选可再次参与回退。
+  void _resetAutoSourceFallback() {
+    _autoFallbackAttemptedCandidates.clear();
+    _autoFallbackActive = false;
+  }
+
+  /// 生成同组候选的稳定唯一标识，书源和详情 URL 都相同才视为同一候选。
+  String _candidateKey(SearchBook candidate) => '${candidate.origin}\u0000${candidate.bookUrl}';
 
   /// 对已在书架中的网络书请求独立全书源换源页面。
   void _openFullSourceChange() {

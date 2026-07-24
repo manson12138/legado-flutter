@@ -1,3 +1,6 @@
+import '../domain/model/book.dart';
+import '../domain/model/book_chapter.dart';
+
 /// 集中声明应用内稳定路由名称，避免页面散落硬编码字符串。
 abstract final class AppRoute {
   /// M1 欢迎页，也是当前应用启动路由。
@@ -9,6 +12,9 @@ abstract final class AppRoute {
   /// 设置中的沙盒日志管理页面。
   static const String logManagement = '/settings/logs';
 
+  /// 设置中的独立崩溃报告管理页面。
+  static const String crashReportManagement = '/settings/crash-reports';
+
   /// 跨书离线下载任务和缓存管理页面。
   static const String downloadManagement = '/downloads';
 
@@ -17,6 +23,9 @@ abstract final class AppRoute {
 
   /// “我的”页面中的“关于”页面。
   static const String about = '/settings/about';
+
+  /// 设置中的 App 用户注册、登录和邀请码页面。
+  static const String authentication = '/settings/authentication';
 
   /// M5 书源管理页面。
   static const String bookSourceManagement = '/book-sources';
@@ -56,6 +65,9 @@ final class ReaderRouteArguments {
     required this.bookUrl,
     this.initialChapterIndex,
     this.initialMessage,
+    this.initialBook,
+    this.initialChapters = const <BookChapter>[],
+    this.entry = 'bookshelf',
   });
 
   /// 阅读器需要读取的本地稳定书籍 URL。
@@ -66,4 +78,13 @@ final class ReaderRouteArguments {
 
   /// 路由替换后需要由新阅读页面展示的一次性提示。
   final String? initialMessage;
+
+  /// 尚未加入书架时由详情页传入的书籍快照。
+  final Book? initialBook;
+
+  /// 尚未加入书架时由详情页传入的完整目录快照。
+  final List<BookChapter> initialChapters;
+
+  /// 匿名埋点允许的阅读入口：bookshelf、detail 或 history。
+  final String entry;
 }

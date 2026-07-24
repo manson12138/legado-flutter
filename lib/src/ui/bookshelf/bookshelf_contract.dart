@@ -266,6 +266,12 @@ final class CancelBookshelfRefreshIntent extends BookshelfIntent {
   const CancelBookshelfRefreshIntent();
 }
 
+/// 收起已经结束的刷新进度和失败摘要，不影响已写入的书籍更新结果。
+final class DismissBookshelfRefreshResultIntent extends BookshelfIntent {
+  /// 创建关闭刷新结果的 Intent。
+  const DismissBookshelfRefreshResultIntent();
+}
+
 /// 请求删除选中书籍。
 final class RequestDeleteBookshelfBooksIntent extends BookshelfIntent {
   /// 创建删除请求 Intent。

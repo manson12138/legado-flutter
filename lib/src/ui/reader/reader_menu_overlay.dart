@@ -448,43 +448,63 @@ final class _ReaderBottomBar extends StatelessWidget {
                 ),
               ],
             ),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: foregroundColor,
-                inactiveTrackColor: foregroundColor.withValues(alpha: 0.24),
-                thumbColor: foregroundColor,
-                overlayColor: foregroundColor.withValues(alpha: 0.12),
-              ),
-              child: Slider(
-                value: sliderValue.clamp(0, _sliderMax).toDouble(),
-                min: 0,
-                max: _sliderMax,
-                onChanged: chapterCount <= 1
-                    ? null
-                    : (double value) => onDraftChapterChanged(value),
-                onChangeEnd: chapterCount <= 1
-                    ? null
-                    : (double value) {
-                        onDraftChapterChanged(null);
-                        final int? readableIndex = _nearestReadableIndex(value.round());
-                        if (readableIndex != null &&
-                            readableIndex != state.currentChapterIndex) {
-                          onIntent(OpenReaderChapterIntent(readableIndex));
-                        }
-                      },
-              ),
+            Row(
+              children: <Widget>[
+                IconButton(
+                  onPressed: state.canGoPrevious
+                      ? () => onIntent(const OpenPreviousChapterIntent())
+                      : null,
+                  icon: const Icon(Icons.skip_previous),
+                  tooltip: '上一章',
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: foregroundColor,
+                      inactiveTrackColor:
+                          foregroundColor.withValues(alpha: 0.24),
+                      thumbColor: foregroundColor,
+                      overlayColor:
+                          foregroundColor.withValues(alpha: 0.12),
+                    ),
+                    child: Slider(
+                      value:
+                          sliderValue.clamp(0, _sliderMax).toDouble(),
+                      min: 0,
+                      max: _sliderMax,
+                      onChanged: chapterCount <= 1
+                          ? null
+                          : (double value) =>
+                                onDraftChapterChanged(value),
+                      onChangeEnd: chapterCount <= 1
+                          ? null
+                          : (double value) {
+                              onDraftChapterChanged(null);
+                              final int? readableIndex =
+                                  _nearestReadableIndex(value.round());
+                              if (readableIndex != null &&
+                                  readableIndex !=
+                                      state.currentChapterIndex) {
+                                onIntent(
+                                  OpenReaderChapterIntent(readableIndex),
+                                );
+                              }
+                            },
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: state.canGoNext
+                      ? () => onIntent(const OpenNextChapterIntent())
+                      : null,
+                  icon: const Icon(Icons.skip_next),
+                  tooltip: '下一章',
+                ),
+              ],
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: <Widget>[
-                _ReaderToolButton(
-                  icon: Icons.skip_previous,
-                  label: '上一章',
-                  enabled: state.canGoPrevious,
-                  showLabel: state.config.showMenuToolLabels,
-                  foregroundColor: foregroundColor,
-                  onPressed: () => onIntent(const OpenPreviousChapterIntent()),
-                ),
                 _ReaderToolButton(
                   icon: Icons.format_list_numbered,
                   label: '目录',
@@ -508,14 +528,6 @@ final class _ReaderBottomBar extends StatelessWidget {
                   showLabel: state.config.showMenuToolLabels,
                   foregroundColor: foregroundColor,
                   onPressed: () => onIntent(const ShowReaderSheetIntent(ReaderSettingsSheet())),
-                ),
-                _ReaderToolButton(
-                  icon: Icons.skip_next,
-                  label: '下一章',
-                  enabled: state.canGoNext,
-                  showLabel: state.config.showMenuToolLabels,
-                  foregroundColor: foregroundColor,
-                  onPressed: () => onIntent(const OpenNextChapterIntent()),
                 ),
               ],
             ),

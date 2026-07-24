@@ -13,7 +13,7 @@ M1 和 M2 都不能标记为已验收；M2 当前状态为 `IN_PROGRESS / 实现
 |---|---|---|
 | 字段映射和可空性 | [01_field_mapping.md](./01_field_mapping.md) | IN_PROGRESS（待用户检查） |
 | 不可变 Dart 领域实体 | `flutter_app/lib/src/domain/model/` | IN_PROGRESS（待用户检查） |
-| SQLite Schema v7 | `lib/src/data/local/legado_database.dart` | IN_PROGRESS（待用户检查） |
+| SQLite Schema v8 | `lib/src/data/local/legado_database.dart` | IN_PROGRESS（待用户检查） |
 | 第一批 DAO | `flutter_app/lib/src/data/dao/` | IN_PROGRESS（待用户检查） |
 | Gateway/Repository | `flutter_app/lib/src/domain/gateway/`, `flutter_app/lib/src/data/repository/` | IN_PROGRESS（待用户检查） |
 | 核心 UseCase | `flutter_app/lib/src/domain/usecase/` | IN_PROGRESS（待用户检查） |

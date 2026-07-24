@@ -993,6 +993,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onHorizontalDragStart: (DragStartDetails details) {
+                if (widget.state.menuVisible) {
+                  widget.onIntent(const HideReaderMenuIntent());
+                }
                 _handleHorizontalDragStart(constraints.maxWidth);
               },
               onHorizontalDragUpdate: _handleHorizontalDragUpdate,
@@ -1006,16 +1009,23 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             ),
           );
         }
-        return NotificationListener<OverscrollNotification>(
-          onNotification: (OverscrollNotification notification) {
-            if (notification.metrics.extentBefore <= 1 &&
-                notification.overscroll < -16 &&
-                widget.state.canGoPrevious) {
-              widget.onIntent(const OpenPreviousChapterIntent());
+        return NotificationListener<ScrollStartNotification>(
+          onNotification: (ScrollStartNotification notification) {
+            if (notification.dragDetails != null && widget.state.menuVisible) {
+              widget.onIntent(const HideReaderMenuIntent());
             }
             return false;
           },
-          child: ReaderTapRegion(
+          child: NotificationListener<OverscrollNotification>(
+            onNotification: (OverscrollNotification notification) {
+              if (notification.metrics.extentBefore <= 1 &&
+                  notification.overscroll < -16 &&
+                  widget.state.canGoPrevious) {
+                widget.onIntent(const OpenPreviousChapterIntent());
+              }
+              return false;
+            },
+            child: ReaderTapRegion(
             onTapUp: (Offset position) {
               _handleTap(position.dx, constraints.maxWidth);
             },
@@ -1045,6 +1055,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                 );
               },
             ),
+          ),
           ),
         );
       },

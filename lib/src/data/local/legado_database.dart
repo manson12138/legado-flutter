@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 7;
+  static const int schemaVersion = 8;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -104,6 +104,7 @@ final class LegadoDatabase {
         await _createSchemaV3(createdDatabase);
         await _createSchemaV5(createdDatabase);
         await _createSchemaV7(createdDatabase);
+        await _createSchemaV8(createdDatabase);
       },
       onUpgrade: (Database upgradedDatabase, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -152,6 +153,9 @@ final class LegadoDatabase {
         }
         if (oldVersion < 7) {
           await _createSchemaV7(upgradedDatabase);
+        }
+        if (oldVersion < 8) {
+          await _createSchemaV8(upgradedDatabase);
         }
       },
     );
@@ -441,6 +445,100 @@ final class LegadoDatabase {
         FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
       )
     ''');
+  }
+
+  /// 新增与书架成员资格独立的阅读历史书籍和目录快照。
+  Future<void> _createSchemaV8(Database database) async {
+    logOperation(operation: 'CREATE_SCHEMA', table: 'reading_history');
+    final Batch historyBatch = database.batch();
+    historyBatch.execute('''
+      CREATE TABLE IF NOT EXISTS reading_history_books (
+        bookUrl TEXT NOT NULL DEFAULT '',
+        tocUrl TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL DEFAULT 'loc_book',
+        originName TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        author TEXT NOT NULL DEFAULT '',
+        kind TEXT,
+        customTag TEXT,
+        coverUrl TEXT,
+        customCoverUrl TEXT,
+        intro TEXT,
+        customIntro TEXT,
+        remark TEXT,
+        charset TEXT,
+        type INTEGER NOT NULL DEFAULT 0,
+        `group` INTEGER NOT NULL DEFAULT 0,
+        latestChapterTitle TEXT,
+        latestChapterTime INTEGER NOT NULL DEFAULT 0,
+        lastCheckTime INTEGER NOT NULL DEFAULT 0,
+        lastCheckCount INTEGER NOT NULL DEFAULT 0,
+        totalChapterNum INTEGER NOT NULL DEFAULT 0,
+        durChapterTitle TEXT,
+        durChapterIndex INTEGER NOT NULL DEFAULT 0,
+        durChapterPos INTEGER NOT NULL DEFAULT 0,
+        durChapterTime INTEGER NOT NULL DEFAULT 0,
+        wordCount TEXT,
+        canUpdate INTEGER NOT NULL DEFAULT 1,
+        `order` INTEGER NOT NULL DEFAULT 0,
+        originOrder INTEGER NOT NULL DEFAULT 0,
+        variable TEXT,
+        readConfig TEXT,
+        syncTime INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (bookUrl)
+      )
+    ''');
+    historyBatch.execute(
+      'CREATE INDEX IF NOT EXISTS index_reading_history_books_read_time '
+      'ON reading_history_books (durChapterTime DESC)',
+    );
+    historyBatch.execute('''
+      CREATE TABLE IF NOT EXISTS reading_history_chapters (
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        isVolume INTEGER NOT NULL,
+        baseUrl TEXT NOT NULL,
+        bookUrl TEXT NOT NULL,
+        `index` INTEGER NOT NULL,
+        isVip INTEGER NOT NULL,
+        isPay INTEGER NOT NULL,
+        resourceUrl TEXT,
+        tag TEXT,
+        wordCount TEXT,
+        start INTEGER,
+        end INTEGER,
+        startFragmentId TEXT,
+        endFragmentId TEXT,
+        variable TEXT,
+        reviewImg TEXT,
+        PRIMARY KEY (url, bookUrl),
+        FOREIGN KEY (bookUrl) REFERENCES reading_history_books (bookUrl)
+          ON DELETE CASCADE
+      )
+    ''');
+    historyBatch.execute(
+      'CREATE INDEX IF NOT EXISTS index_reading_history_chapters_book '
+      'ON reading_history_chapters (bookUrl)',
+    );
+    historyBatch.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS '
+      'index_reading_history_chapters_book_index '
+      'ON reading_history_chapters (bookUrl, `index`)',
+    );
+    /// 升级安装把既有书架中已经真实保存过阅读时间的书籍作为初始历史快照。
+    historyBatch.execute('''
+      INSERT OR IGNORE INTO reading_history_books
+      SELECT * FROM books
+      WHERE durChapterTime > 0
+    ''');
+    /// 只复制已迁移历史书籍的目录，未读书架书仍不会进入历史。
+    historyBatch.execute('''
+      INSERT OR IGNORE INTO reading_history_chapters
+      SELECT chapters.* FROM chapters
+      INNER JOIN reading_history_books
+        ON reading_history_books.bookUrl = chapters.bookUrl
+    ''');
+    await historyBatch.commit(noResult: true);
   }
 
   /// 新增 Android 对齐的用户正文处理与标注表。

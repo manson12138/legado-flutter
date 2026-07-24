@@ -30,6 +30,8 @@
 
 ## 当前阻塞与后续矩阵
 
+- 搜索候选已按置顶、历史成功率和稳定后备顺序排列；详情页目录失败后的受控自动回退首批代码已写入，待用户验证，方案与边界见 [`02_search_source_ranking_and_detail_failover_plan.md`](./02_search_source_ranking_and_detail_failover_plan.md)。
+
 1. M4 尚未取得 Android/iOS 真实 JavaScript 书源结果；M6 已接入 QuickJS 混合规则链路，不再预先拒绝脚本书源，但同步 `java.ajax/connect/get/post`、任意 JVM 类和 WebView 书源仍会返回明确的兼容边界错误。
 2. 普通规则也尚未由用户使用真实书源验证搜索、详情、分页目录和加入书架，因此不能标记 `ANDROID_READY`。
 3. 第一批只搜索第 1 页；搜索翻页、按分组/类型筛选和单源展开分页留待后续。

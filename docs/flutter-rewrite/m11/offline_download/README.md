@@ -66,7 +66,7 @@ iOS 不允许普通阅读应用像 Android 前台 Service 一样无限期在后�
 
 ## 数据库变化
 
-- `LegadoDatabase.schemaVersion` 当前为 7。
+- 离线下载专项落地时 `LegadoDatabase.schemaVersion` 为 7；后续阅读历史专项已升至 8。
 - `download_tasks` 新增 `errorMessage TEXT` 与 `contentLength INTEGER NOT NULL DEFAULT 0`。
 - 新安装和 v1/v2 跨版本升级直接创建完整字段；已存在下载表的 v3～v5 数据库通过 v6 `ALTER TABLE` 分支升级。
 - Schema v7 为 `download_tasks` 增加批次与来源归因字段，并新增 `download_book_states` 自动换源状态表。

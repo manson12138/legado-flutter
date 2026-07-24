@@ -243,13 +243,8 @@ final class SearchViewModel {
       if (!candidates.any((SearchBook value) => value.origin == book.origin && value.bookUrl == book.bookUrl)) {
         candidates.add(book);
       }
-      /// 置顶优先，其余按成功率从高到低；排序后 primary（books.first）始终是最佳来源。
-      candidates.sort((SearchBook left, SearchBook right) {
-        if (left.pinned != right.pinned) {
-          return left.pinned ? -1 : 1;
-        }
-        return right.sourceScore.compareTo(left.sourceScore);
-      });
+      /// 排序后 primary（books.first）始终是详情页的首选来源。
+      candidates.sort(_compareSearchCandidates);
     }
     /// 不可变结果组。
     final List<BookSearchResultGroup> groups = _resultBooks.entries.map((entry) {
@@ -271,6 +266,26 @@ final class SearchViewModel {
       message: '搜索结果已合并 incomingBookCount=${books.length} '
           'previousGroupCount=$previousGroupCount currentGroupCount=${groups.length}',
     );
+  }
+
+  /// 按用户置顶、历史成功率和稳定书源顺序比较同组候选，避免并发搜索返回顺序影响首选来源。
+  int _compareSearchCandidates(SearchBook left, SearchBook right) {
+    if (left.pinned != right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+    final int scoreOrder = right.sourceScore.compareTo(left.sourceScore);
+    if (scoreOrder != 0) {
+      return scoreOrder;
+    }
+    final int sourceOrder = left.originOrder.compareTo(right.originOrder);
+    if (sourceOrder != 0) {
+      return sourceOrder;
+    }
+    final int originOrder = left.origin.compareTo(right.origin);
+    if (originOrder != 0) {
+      return originOrder;
+    }
+    return left.bookUrl.compareTo(right.bookUrl);
   }
 
   /// 切换书源选择；空集合保留“全部”语义。

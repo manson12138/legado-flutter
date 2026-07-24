@@ -4,7 +4,7 @@
 >
 > 本文档只记录静态基线和决策规则，不代表已进行编译、签名校验或真机覆盖安装验证。
 >
-> 基线日期：2026-07-22
+> 基线日期：2026-07-23
 
 ## 当前基线
 
@@ -12,11 +12,11 @@
 |---|---|---|
 | Android applicationId | `io.legado.flutter` | `android/app/build.gradle.kts` |
 | Android namespace | `io.legado.flutter` | `android/app/build.gradle.kts` |
-| 应用显示版本 `versionName` | `1.0.0` | `pubspec.yaml` 的 `version: 1.0.0+5` |
-| Android 安装版本 `versionCode` | `5` | `pubspec.yaml` 的 `version: 1.0.0+5`，由 Gradle 使用 `flutter.versionCode` |
+| 应用显示版本 `versionName` | `1.0.0` | `pubspec.yaml` 的 `version: 1.0.0+6` |
+| Android 安装版本 `versionCode` | `6` | `pubspec.yaml` 的 `version: 1.0.0+6`，由 Gradle 使用 `flutter.versionCode` |
 | iOS Bundle Identifier | `io.legado.flutter` | `ios/Runner.xcodeproj/project.pbxproj` |
 | SQLite 文件名 | `legado_flutter.db` | `lib/src/data/local/legado_database.dart` |
-| SQLite Schema 版本 | `7` | `LegadoDatabase.schemaVersion` |
+| SQLite Schema 版本 | `8` | `LegadoDatabase.schemaVersion`；新增独立阅读历史书籍/目录表 |
 | 本地书副本目录 | 与数据库目录同级的 `local_books/` | `lib/src/model/local_book/local_book_storage.dart` |
 | 当前 Android release 签名配置 | `debug` 签名配置 | `android/app/build.gradle.kts` |
 
@@ -48,7 +48,7 @@
 
 ### 3. 判定是否需要数据库升级
 
-以下任一项成立时，必须将 `LegadoDatabase.schemaVersion` 从 `7` 升至下一个整数，并在同一提交中完成迁移：
+以下任一项成立时，必须将 `LegadoDatabase.schemaVersion` 从当前版本升至下一个整数，并在同一提交中完成迁移：
 
 - [ ] 新增、删除或重命名表、列、索引、唯一约束、外键、触发器或默认值。
 - [ ] 改变既有列的类型、可空性、默认值、主键/唯一键语义，或现有数据需要转换、回填、合并、拆分。

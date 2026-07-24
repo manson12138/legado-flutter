@@ -215,6 +215,8 @@ final class ReaderUiState {
     List<ReplaceRule> replaceRules = const <ReplaceRule>[],
     List<BookContentProcess> contentProcesses = const <BookContentProcess>[],
     this.refreshingChapters = false,
+    this.isInBookshelf = false,
+    this.addingToBookshelf = false,
   }) : chapters = List<BookChapter>.unmodifiable(chapters),
        bookmarks = List<Bookmark>.unmodifiable(bookmarks),
        replaceRules = List<ReplaceRule>.unmodifiable(replaceRules),
@@ -276,6 +278,12 @@ final class ReaderUiState {
   /// 是否正在后台刷新后续或全部章节缓存。
   final bool refreshingChapters;
 
+  /// 当前精确书籍 URL 是否已存在于书架。
+  final bool isInBookshelf;
+
+  /// 阅读器加入书架事务是否正在执行。
+  final bool addingToBookshelf;
+
   /// 当前章节；目录为空或索引越界时为 null。
   BookChapter? get currentChapter {
     if (currentChapterIndex < 0 || currentChapterIndex >= chapters.length) {
@@ -322,6 +330,8 @@ final class ReaderUiState {
     List<ReplaceRule>? replaceRules,
     List<BookContentProcess>? contentProcesses,
     bool? refreshingChapters,
+    bool? isInBookshelf,
+    bool? addingToBookshelf,
     bool clearContent = false,
     bool clearError = false,
     bool clearSheet = false,
@@ -347,6 +357,8 @@ final class ReaderUiState {
       replaceRules: replaceRules ?? this.replaceRules,
       contentProcesses: contentProcesses ?? this.contentProcesses,
       refreshingChapters: refreshingChapters ?? this.refreshingChapters,
+      isInBookshelf: isInBookshelf ?? this.isInBookshelf,
+      addingToBookshelf: addingToBookshelf ?? this.addingToBookshelf,
     );
   }
 }
@@ -420,6 +432,12 @@ final class ToggleReaderMenuIntent extends ReaderIntent {
   const ToggleReaderMenuIntent();
 }
 
+/// 用户通过滚动或滑动翻页时收起已显示的阅读菜单。
+final class HideReaderMenuIntent extends ReaderIntent {
+  /// 创建仅收起菜单的 Intent，避免手势过程中错误触发菜单重新显示。
+  const HideReaderMenuIntent();
+}
+
 /// 展示目录、设置或书签面板。
 final class ShowReaderSheetIntent extends ReaderIntent {
   /// 创建面板 Intent。
@@ -469,6 +487,12 @@ final class UpdateReaderSystemInfoIntent extends ReaderIntent {
 final class AddReaderBookmarkIntent extends ReaderIntent {
   /// 创建添加书签 Intent。
   const AddReaderBookmarkIntent();
+}
+
+/// 将当前阅读书籍和目录显式加入书架。
+final class AddReaderBookToBookshelfIntent extends ReaderIntent {
+  /// 创建加入书架 Intent。
+  const AddReaderBookToBookshelfIntent();
 }
 
 /// 删除指定书签。

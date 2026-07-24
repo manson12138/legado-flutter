@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/remote_book_source_sync_service.dart';
+import '../../domain/model/app_account.dart';
 import '../../domain/model/book_source_import_result.dart';
 import '../../help/logging/app_logger.dart';
 import '../../platform/book_source_platform_bridge.dart';
@@ -48,6 +50,10 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
 
   /// 当前已交给 Navigator 展示的对话框对象。
   BookSourceDialog? _shownDialog;
+  /// 服务器书源同步是否正在运行，用于阻止重复请求并展示流程状态。
+  bool _remoteSyncing = false;
+  /// 最近一次可安全展示的服务器书源同步进度。
+  RemoteBookSourceSyncProgress? _remoteSyncProgress;
 
   /// 创建 ViewModel 并监听 Effect。
   @override
@@ -279,13 +285,86 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
         /// 当前可渲染状态。
         final BookSourceManagementUiState state = snapshot.data ?? _viewModel.state;
         _syncDialog(state.dialog);
-        return BookSourceManagementScreen(
-          state: state,
-          onIntent: _viewModel.onIntent,
-          showBackButton: !widget.embedded,
+        return ValueListenableBuilder<AppAuthenticationSession?>(
+          valueListenable: widget.dependencies.authenticationGateway.session,
+          builder: (BuildContext context, AppAuthenticationSession? session, Widget? child) {
+            /// 书源同步仅对已登录且服务端权限快照允许的账号开放。
+            final bool canSyncRemoteBookSources = session?.permissions.canSyncBookSource == true;
+            return BookSourceManagementScreen(
+              state: state,
+              onIntent: _viewModel.onIntent,
+              onRemoteSync: _requestRemoteSourceSync,
+              showRemoteSync: canSyncRemoteBookSources,
+              remoteSyncing: _remoteSyncing,
+              remoteSyncProgress: _remoteSyncProgress,
+              showBackButton: !widget.embedded,
+            );
+          },
         );
       },
     );
+  }
+
+  /// 使用当前 App 会话逐页下载并立即入库；失败后保留失败页断点。
+  Future<void> _requestRemoteSourceSync() async {
+    if (_remoteSyncing) {
+      return;
+    }
+    setState(() {
+      _remoteSyncing = true;
+      _remoteSyncProgress = const RemoteBookSourceSyncProgress(
+        stage: RemoteBookSourceSyncStage.checkingSession,
+      );
+    });
+    try {
+      final RemoteBookSourceCursorSyncResult result =
+          await widget.dependencies.remoteBookSourceSyncService.syncAndImportSources(
+        onProgress: _updateRemoteSyncProgress,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _remoteSyncing = false;
+        _remoteSyncProgress = null;
+      });
+      _showMessage('服务器书源同步完成，已导入 ${result.importedCount} 条');
+    } on FormatException catch (error) {
+      if (mounted) {
+        setState(() {
+          _remoteSyncing = false;
+          _remoteSyncProgress = null;
+        });
+      }
+      _showMessage(
+        '${error.message}；已成功导入的批次已保存，再次点击将继续同步',
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _remoteSyncing = false;
+          _remoteSyncProgress = null;
+        });
+      }
+      widget.dependencies.logger.warning(
+        tag: remoteBookSourceSyncLogTag,
+        message: 'stage=route_failed',
+        error: error,
+      );
+      _showMessage(
+        '服务器书源同步失败，请检查账号权限和网络；已成功导入的批次已保存，再次点击将继续同步',
+      );
+    }
+  }
+
+  /// 接收服务层分页进度；只刷新路由 UI，不保存远端书源内容。
+  void _updateRemoteSyncProgress(RemoteBookSourceSyncProgress progress) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _remoteSyncProgress = progress;
+    });
   }
 }
 

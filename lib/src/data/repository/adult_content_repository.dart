@@ -44,6 +44,9 @@ final class AdultContentRepository implements AdultContentGateway {
   /// 远程更新后落地的关键词覆盖缓存键。
   static const String _keywordOverrideCacheKey = 'flutter_adult_content_keywords_override';
 
+  /// 远端管理平台下发的域名黑名单覆盖层缓存键。
+  static const String _domainOverrideCacheKey = 'flutter_adult_content_domains_override';
+
   /// Flutter assets 中内置 Base64 关键词库的稳定路径。
   static const String _keywordAssetPath = 'assets/default_data/adult_keywords.txt';
 
@@ -176,6 +179,25 @@ final class AdultContentRepository implements AdultContentGateway {
     }
   }
 
+  @override
+  Future<void> replaceRemoteRules({
+    required Set<String> keywords,
+    required Set<String> domains,
+  }) async {
+    final List<String> normalizedKeywords = keywords
+        .map((String value) => value.trim())
+        .where((String value) => value.isNotEmpty)
+        .toList(growable: false);
+    final List<String> normalizedDomains = domains
+        .map((String value) => value.trim().toLowerCase())
+        .where((String value) => value.isNotEmpty)
+        .toList(growable: false);
+    await _cacheDao.upsert(Cache(key: _keywordOverrideCacheKey, value: jsonEncode(normalizedKeywords)));
+    await _cacheDao.upsert(Cache(key: _domainOverrideCacheKey, value: jsonEncode(normalizedDomains)));
+    _keywordCache = normalizedKeywords.toSet();
+    _domainCache = normalizedDomains.toSet();
+  }
+
   /// 读取当前生效关键词库；优先使用远程更新覆盖（明文 JSON），否则回退内置 Base64 assets。
   /// [executor] 用于在调用方已开启的事务内查询，避免另开主连接查询导致自锁。
   Future<Set<String>> _keywords({DatabaseExecutor? executor}) async {
@@ -204,9 +226,11 @@ final class AdultContentRepository implements AdultContentGateway {
       return _domainCache!;
     }
     try {
-      /// 内置域名黑名单原始文本，每行一个 Base64 编码域名。
-      final String raw = await _assetBundle.loadString(_domainAssetPath);
-      final Set<String> domains = _decodeBase64Lines(raw);
+      /// 远端覆盖规则优先于内置 Base64 域名黑名单。
+      final String? override = (await _cacheDao.get(_domainOverrideCacheKey))?.value;
+      final Set<String> domains = override == null
+          ? _decodeBase64Lines(await _assetBundle.loadString(_domainAssetPath))
+          : _decodeKeywordList(override).map((String value) => value.toLowerCase()).toSet();
       _domainCache = domains;
       return domains;
     } catch (error, stackTrace) {

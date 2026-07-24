@@ -369,10 +369,17 @@ final class CloseBookInfoEffect extends BookInfoEffect {
 /// 请求进入阅读器并定位到指定章节。
 final class OpenBookInfoReaderEffect extends BookInfoEffect {
   /// 创建打开阅读器 Effect。
-  const OpenBookInfoReaderEffect({required this.bookUrl, required this.chapterIndex});
+  const OpenBookInfoReaderEffect({
+    required this.book,
+    required this.chapters,
+    required this.chapterIndex,
+  });
 
-  /// 已持久化书籍的稳定 URL。
-  final String bookUrl;
+  /// 详情页已经解析完成的书籍快照；阅读成功后再写入历史。
+  final Book book;
+
+  /// 详情页已经解析完成的目录快照。
+  final List<BookChapter> chapters;
 
   /// 阅读器初始化时应优先打开的章节索引。
   final int chapterIndex;

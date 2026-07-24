@@ -37,6 +37,9 @@ const String bookReaderEntryLogTag = 'BOOK_READER_ENTRY';
 /// 【搜书诊断日志】章节缓存、网络正文、处理和预加载使用的 Logcat Tag。
 const String bookReaderContentLogTag = 'BOOK_READER_CONTENT';
 
+/// 服务器书源同步流程的统一诊断 Tag；不记录 Token、书源内容或远端地址。
+const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
+
 /// 【FLUTTER_JS_COMPAT_LOG】JavaScript 兼容诊断日志统一标识，问题解决后可按此标识完整移除。
 const String javaScriptCompatibilityDebugLogMarker = 'FLUTTER_JS_COMPAT_LOG';
 

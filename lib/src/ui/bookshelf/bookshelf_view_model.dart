@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../app/bookshelf_layout_preferences.dart';
 import '../../domain/gateway/book_group_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/model/book.dart';
@@ -21,12 +22,15 @@ final class BookshelfViewModel {
     required CreateBookshelfGroupUseCase createGroup,
     required ReplaceBooksGroupUseCase replaceBooksGroup,
     required BookshelfRefreshCoordinator refreshCoordinator,
+    required BookshelfLayoutPreferences layoutPreferences,
   }) : _bookshelfGateway = bookshelfGateway,
        _bookGroupGateway = bookGroupGateway,
        _deleteBooks = deleteBooks,
        _createGroup = createGroup,
        _replaceBooksGroup = replaceBooksGroup,
-       _refreshCoordinator = refreshCoordinator {
+       _refreshCoordinator = refreshCoordinator,
+       _layoutPreferences = layoutPreferences {
+    unawaited(_restoreLayout());
     _subscribe();
   }
 
@@ -42,6 +46,10 @@ final class BookshelfViewModel {
   final ReplaceBooksGroupUseCase _replaceBooksGroup;
   /// 受控目录刷新协调器。
   final BookshelfRefreshCoordinator _refreshCoordinator;
+  /// 书架列表/网格模式的持久化读取与写入边界。
+  final BookshelfLayoutPreferences _layoutPreferences;
+  /// 用户是否已在异步恢复完成前切换布局，避免旧值覆盖新选择。
+  bool _layoutChangedByUser = false;
   /// 当前状态。
   BookshelfUiState _state = BookshelfUiState();
   /// 状态广播流。
@@ -79,13 +87,13 @@ final class BookshelfViewModel {
         _emit(_state.copyWith(query: query));
         _rebuild();
       case ToggleBookshelfLayoutIntent():
-        _emit(
-          _state.copyWith(
-            layoutMode: _state.layoutMode == BookshelfLayoutMode.grid
+        _layoutChangedByUser = true;
+        final BookshelfLayoutMode layoutMode =
+            _state.layoutMode == BookshelfLayoutMode.grid
                 ? BookshelfLayoutMode.list
-                : BookshelfLayoutMode.grid,
-          ),
-        );
+                : BookshelfLayoutMode.grid;
+        _emit(_state.copyWith(layoutMode: layoutMode));
+        unawaited(_saveLayout(layoutMode));
       case SelectBookshelfGroupIntent(groupId: final int groupId):
         _emit(_state.copyWith(selectedGroupId: groupId, selectionMode: false, selectedBookUrls: <String>{}));
         _rebuild();
@@ -107,6 +115,8 @@ final class BookshelfViewModel {
         _refresh();
       case CancelBookshelfRefreshIntent():
         _cancelRefresh(manual: true);
+      case DismissBookshelfRefreshResultIntent():
+        _dismissRefreshResult();
       case RequestDeleteBookshelfBooksIntent():
         _requestDelete();
       case ConfirmDeleteBookshelfBooksIntent():
@@ -401,6 +411,47 @@ final class BookshelfViewModel {
       _refreshGeneration += 1;
       _emit(_state.copyWith(refreshing: false, refreshCancelled: true, updatingBookUrls: <String>{}));
     }
+  }
+
+  /// 在首个数据快照到达前恢复上次选定的书架布局。
+  Future<void> _restoreLayout() async {
+    try {
+      final BookshelfLayoutMode layoutMode =
+          await _layoutPreferences.readBookshelfLayout();
+      if (!_layoutChangedByUser) {
+        _emit(_state.copyWith(layoutMode: layoutMode));
+      }
+    } catch (error) {
+      _emit(_state.copyWith(errorMessage: '读取书架排版设置失败'));
+    }
+  }
+
+  /// 保存用户刚切换的书架布局；失败不回滚当前可见状态。
+  Future<void> _saveLayout(BookshelfLayoutMode layoutMode) async {
+    try {
+      await _layoutPreferences.saveBookshelfLayout(layoutMode);
+    } catch (error) {
+      _emit(_state.copyWith(errorMessage: '保存书架排版设置失败'));
+    }
+  }
+
+  /// 清理已完成或已取消刷新在页面上的临时展示状态，不修改任何书籍数据。
+  void _dismissRefreshResult() {
+    if (_state.refreshing) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        refreshCancelled: false,
+        refreshProgress: const BookshelfRefreshProgress(
+          total: 0,
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+        ),
+        refreshFailures: const <BookshelfRefreshFailure>[],
+      ),
+    );
   }
 
   /// 显示删除确认。

@@ -42,18 +42,56 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
   /// 四个一级目的地页面，使用 IndexedStack 保留滚动和输入状态。
   late List<Widget> _primaryPages;
 
+  /// 通知内嵌书架目的地当前是否可见，用于离开时取消选择模式。
+  final ValueNotifier<bool> _bookshelfVisibility =
+      ValueNotifier<bool>(true);
+
+  /// 防止一次主界面生命周期内重复弹出公告。
+  bool _announcementRequested = false;
+
   /// 创建 ViewModel 和仅初始化一次的一级页面。
   @override
   void initState() {
     super.initState();
     _viewModel = WelcomeViewModel();
     _primaryPages = _buildPrimaryPages();
+    WidgetsBinding.instance.addPostFrameCallback((_) { _showNextAnnouncement(); });
+  }
+
+  /// 从远端缓存和服务端读取一条未读公告，并在用户关闭后标记为已读。
+  Future<void> _showNextAnnouncement() async {
+    if (_announcementRequested) { return; }
+    _announcementRequested = true;
+    final List<Map<String, Object?>> announcements;
+    try {
+      announcements = await widget.dependencies.remoteAppConfigurationRepository.loadUnreadAnnouncements();
+    } catch (_) {
+      return;
+    }
+    if (!mounted || announcements.isEmpty) { return; }
+    final Map<String, Object?> announcement = announcements.first;
+    final String title = announcement['title'] is String ? announcement['title'] as String : '系统公告';
+    final String content = announcement['content'] is String ? announcement['content'] as String : '';
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(child: Text(content)),
+        actions: <Widget>[TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('知道了'))],
+      ),
+    );
+    final Object? id = announcement['id'];
+    if (id != null) { await widget.dependencies.remoteAppConfigurationRepository.markAnnouncementRead(id); }
   }
 
   /// 根据组合根当前配置创建四个一级页面，并保留统一的依赖注入方式。
   List<Widget> _buildPrimaryPages() {
     return <Widget>[
-      BookshelfRoute(dependencies: widget.dependencies, embedded: true),
+      BookshelfRoute(
+        dependencies: widget.dependencies,
+        embedded: true,
+        visibilityListenable: _bookshelfVisibility,
+      ),
       SearchRoute(dependencies: widget.dependencies, embedded: true),
       BookSourceManagementRoute(dependencies: widget.dependencies, embedded: true),
       SettingsRoute(
@@ -68,6 +106,7 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
   /// 释放主框架 ViewModel 的状态流。
   @override
   void dispose() {
+    _bookshelfVisibility.dispose();
     _viewModel.dispose();
     super.dispose();
   }
@@ -81,6 +120,7 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
       builder: (BuildContext context, AsyncSnapshot<WelcomeUiState> snapshot) {
         /// 当前可渲染的主框架状态。
         final WelcomeUiState state = snapshot.data ?? _viewModel.state;
+        _bookshelfVisibility.value = state.selectedIndex == 0;
         return WelcomeScreen(
           state: state,
           onIntent: _viewModel.onIntent,

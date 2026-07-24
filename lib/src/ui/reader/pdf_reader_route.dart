@@ -6,6 +6,7 @@ import 'package:pdfx/pdfx.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../domain/model/book.dart';
+import '../../domain/model/book_chapter.dart';
 import '../../domain/model/reading_progress.dart';
 import '../../help/error/app_result.dart';
 import '../../model/local_book/local_book_parser.dart';
@@ -13,13 +14,21 @@ import '../../model/local_book/local_book_parser.dart';
 /// 使用独立页面模型渲染本地 PDF，并以页码保存恢复阅读进度。
 final class PdfReaderRoute extends StatefulWidget {
   /// 创建 PDF 页面阅读路由。
-  const PdfReaderRoute({required this.dependencies, required this.book, super.key});
+  const PdfReaderRoute({
+    required this.dependencies,
+    required this.book,
+    required this.entry,
+    super.key,
+  });
 
   /// 应用组合根依赖。
   final AppDependencies dependencies;
 
   /// 已从书架读取的本地 PDF 书籍。
   final Book book;
+
+  /// 阅读入口的受控匿名枚举。
+  final String entry;
 
   /// 创建 PDF 阅读状态。
   @override
@@ -37,6 +46,12 @@ final class _PdfReaderRouteState extends State<PdfReaderRoute> with WidgetsBindi
   /// PDF 打开失败时可安全展示的错误。
   String? _errorMessage;
 
+  /// PDF 成功打开后的历史快照是否已经写入。
+  bool _historyRecorded = false;
+
+  /// PDF 首次打开结果是否已经产生匿名事件。
+  bool _analyticsReported = false;
+
   /// 创建文件路径解析任务并注册前后台观察者。
   @override
   void initState() {
@@ -48,6 +63,7 @@ final class _PdfReaderRouteState extends State<PdfReaderRoute> with WidgetsBindi
 
   /// 恢复应用内 PDF 路径并创建页面控制器。
   Future<void> _initialize() async {
+    final Stopwatch stopwatch = Stopwatch()..start();
     try {
       /// 当前安装中 PDF 应用私有副本路径。
       final String filePath = await widget.dependencies.localBookStorage.resolveBook(widget.book);
@@ -57,25 +73,132 @@ final class _PdfReaderRouteState extends State<PdfReaderRoute> with WidgetsBindi
       if (!mounted) {
         return;
       }
+      final Future<PdfDocument> document =
+          PdfDocument.openFile(filePath);
       setState(() {
         _controller = PdfControllerPinch(
-          document: PdfDocument.openFile(filePath),
+          document: document,
           initialPage: _currentPage,
         );
       });
+      await document;
+      if (mounted) {
+        await _recordSuccessfulOpen(stopwatch.elapsedMilliseconds);
+      }
     } on LocalBookException catch (error) {
       if (mounted) {
         setState(() {
           _errorMessage = error.message;
         });
       }
+      await _recordOpenFailure();
     } catch (error) {
       if (mounted) {
         setState(() {
           _errorMessage = 'PDF 无法打开，文件可能损坏或加密';
         });
       }
+      await _recordOpenFailure();
     }
+  }
+
+  /// PDF 文档真实打开后写入独立历史快照并记录匿名成功事件。
+  Future<void> _recordSuccessfulOpen(int elapsedMilliseconds) async {
+    if (!_historyRecorded) {
+      try {
+        List<BookChapter> chapters = <BookChapter>[];
+        final AppResult<List<BookChapter>> shelfResult =
+            await widget.dependencies.loadBookChapters.execute(
+              widget.book.bookUrl,
+            );
+        if (shelfResult case AppSuccess<List<BookChapter>>(
+          value: final List<BookChapter> shelfChapters,
+        )) {
+          chapters = shelfChapters;
+        }
+        if (chapters.isEmpty) {
+          chapters = await widget.dependencies.readingHistoryGateway
+              .getHistoryChapters(widget.book.bookUrl);
+        }
+        if (chapters.isNotEmpty) {
+          final Book historyBook = widget.book.copyWithProgress(
+            chapterIndex: _currentPage - 1,
+            chapterPos: 0,
+            readTime: DateTime.now().millisecondsSinceEpoch,
+            chapterTitle: '第 $_currentPage 页',
+          );
+          final AppResult<void> historyResult =
+              await widget.dependencies.recordReadingHistory.execute(
+                historyBook,
+                chapters,
+              );
+          _historyRecorded = historyResult is AppSuccess<void>;
+        }
+      } on Object {
+        // 历史旁路异常不能把已经成功打开的 PDF 改成错误页。
+      }
+    }
+    if (_analyticsReported) {
+      return;
+    }
+    _analyticsReported = true;
+    try {
+      await widget.dependencies.remoteBookSourceSyncService
+          .recordAnalyticsEvent(
+            'reader_opened',
+            props: <String, Object?>{
+              'entry': _normalizedEntry,
+              'contentKind': 'local',
+              'durationBucket': _durationBucket(elapsedMilliseconds),
+            },
+          );
+    } on Object {
+      // 匿名埋点失败不能改变已经成功打开的 PDF 状态。
+    }
+  }
+
+  /// PDF 首次打开失败时只发送受控分类，不包含路径或书名。
+  Future<void> _recordOpenFailure() async {
+    if (_analyticsReported) {
+      return;
+    }
+    _analyticsReported = true;
+    try {
+      await widget.dependencies.remoteBookSourceSyncService
+          .recordAnalyticsEvent(
+            'reader_open_failed',
+            props: const <String, Object?>{
+              'failureKind': 'decode',
+              'contentKind': 'local',
+            },
+          );
+    } on Object {
+      // 匿名埋点失败不能覆盖 PDF 原本的可见错误。
+    }
+  }
+
+  /// 把任意路由入口收窄为后端允许的阅读入口。
+  String get _normalizedEntry {
+    return <String>{'bookshelf', 'detail', 'history'}.contains(widget.entry)
+        ? widget.entry
+        : 'bookshelf';
+  }
+
+  /// 把精确耗时转换为严格匿名分桶。
+  String _durationBucket(int milliseconds) {
+    if (milliseconds < 1000) {
+      return 'lt_1s';
+    }
+    if (milliseconds < 3000) {
+      return '1_3s';
+    }
+    if (milliseconds < 10000) {
+      return '3_10s';
+    }
+    if (milliseconds < 30000) {
+      return '10_30s';
+    }
+    return 'gte_30s';
   }
 
   /// 应用进入后台时立即保存当前页码。
@@ -103,6 +226,18 @@ final class _PdfReaderRouteState extends State<PdfReaderRoute> with WidgetsBindi
     );
     /// 持久化结果；失败只在页面仍可见时提示。
     final AppResult<bool> result = await widget.dependencies.saveReadingProgress.execute(progress);
+    try {
+      await widget.dependencies.readingHistoryGateway
+          .updateHistoryProgress(
+            bookUrl: widget.book.bookUrl,
+            chapterIndex: _currentPage - 1,
+            chapterPos: 0,
+            readTime: now,
+            chapterTitle: '第 $_currentPage 页',
+          );
+    } on Object {
+      // 历史进度旁路失败不影响 PDF 页码显示与书架进度保存。
+    }
     if (result case AppFailure<bool>(error: final error)) {
       if (mounted) {
         ScaffoldMessenger.of(context)

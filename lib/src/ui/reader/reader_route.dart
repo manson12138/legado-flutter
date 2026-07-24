@@ -32,6 +32,9 @@ final class ReaderRoute extends StatefulWidget {
     required this.bookUrl,
     this.initialChapterIndex,
     this.initialMessage,
+    this.initialBook,
+    this.initialChapters = const <BookChapter>[],
+    this.entry = 'bookshelf',
     super.key,
   });
 
@@ -46,6 +49,15 @@ final class ReaderRoute extends StatefulWidget {
 
   /// 新路由首帧需要展示的一次性提示，例如整书换源结果。
   final String? initialMessage;
+
+  /// 详情页直接阅读时传入的未入架书籍快照。
+  final Book? initialBook;
+
+  /// 详情页直接阅读时传入的未入架目录快照。
+  final List<BookChapter> initialChapters;
+
+  /// 阅读入口的受控埋点枚举。
+  final String entry;
 
   /// 创建路由状态。
   @override
@@ -97,7 +109,11 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     _viewModel = ReaderViewModel(
       bookUrl: widget.bookUrl,
       initialChapterIndex: widget.initialChapterIndex,
+      initialBook: widget.initialBook,
+      initialChapters: widget.initialChapters,
+      entry: widget.entry,
       bookshelfGateway: widget.dependencies.bookshelfGateway,
+      readingHistoryGateway: widget.dependencies.readingHistoryGateway,
       loadBookChapters: widget.dependencies.loadBookChapters,
       restoreReadingProgress: widget.dependencies.restoreReadingProgress,
       saveReadingProgress: widget.dependencies.saveReadingProgress,
@@ -108,6 +124,10 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       cacheGateway: widget.dependencies.readerCacheGateway,
       coordinator: widget.dependencies.createReadBookCoordinator(),
       saveBookContentProcess: widget.dependencies.saveBookContentProcess,
+      recordReadingHistory: widget.dependencies.recordReadingHistory,
+      addBookToBookshelf: widget.dependencies.addBookToBookshelf,
+      analyticsRecorder:
+          widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);

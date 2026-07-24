@@ -35,4 +35,10 @@ abstract interface class AdultContentGateway {
 
   /// 从远程拉取最新词库并落地缓存，成功后立即生效，返回新词条数量。
   Future<int> updateFromRemote();
+
+  /// 以管理平台下发的启用关键字和域名规则替换远端覆盖层；空集合也是有效结果。
+  Future<void> replaceRemoteRules({
+    required Set<String> keywords,
+    required Set<String> domains,
+  });
 }

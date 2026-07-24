@@ -20,6 +20,7 @@ final class BookSourceRepository implements BookSourceGateway {
     this._cacheDao,
     this._importDecoder,
     this._adultContentGateway,
+    this._recordRemoteOutcome,
   );
 
   /// 用于导入事务和提交后通知的数据库入口。
@@ -32,6 +33,8 @@ final class BookSourceRepository implements BookSourceGateway {
   final BookSourceImportDecoder _importDecoder;
   /// 成人内容屏蔽边界，导入时拒绝命中的书源。
   final AdultContentGateway _adultContentGateway;
+  /// 远端书源质量事件回流回调；失败不能影响本地评分业务。
+  final Future<void> Function({required String sourceUrl, required String eventType, required bool success}) _recordRemoteOutcome;
 
   /// 观察全部书源，不向上层暴露 sqflite 流或行对象。
   @override
@@ -270,8 +273,15 @@ final class BookSourceRepository implements BookSourceGateway {
 
   /// 累加书源成功率分值，原子递增，不受并发读改写影响。
   @override
-  Future<void> recordSourceOutcome(String sourceUrl, {required int delta}) {
-    return guardDataOperation<void>(() => _bookSourceDao.adjustScore(sourceUrl, delta));
+  Future<void> recordSourceOutcome(String sourceUrl, {required int delta, String eventType = 'content'}) {
+    return guardDataOperation<void>(() async {
+      await _bookSourceDao.adjustScore(sourceUrl, delta);
+      try {
+        await _recordRemoteOutcome(sourceUrl: sourceUrl, eventType: eventType, success: delta > 0);
+      } catch (_) {
+        // 回流失败已由队列自行降级，不能改变本地评分结果。
+      }
+    });
   }
 
   /// 设置或取消书源置顶。

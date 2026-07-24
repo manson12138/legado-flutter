@@ -10,7 +10,15 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.BatteryManager
+import android.util.Base64
 import android.util.Log
+import java.security.GeneralSecurityException
+import java.security.KeyFactory
+import java.security.spec.MGF1ParameterSpec
+import java.security.spec.X509EncodedKeySpec
+import javax.crypto.Cipher
+import javax.crypto.spec.OAEPParameterSpec
+import javax.crypto.spec.PSource
 
 /**
  * Flutter Android 宿主入口。
@@ -29,6 +37,9 @@ class MainActivity : FlutterActivity() {
     /** 离线下载后台保活平台通道名称。 */
     private val downloadBackgroundChannel = "io.legado.flutter/download_background"
 
+    /** 登录与注册密码加密平台通道名称。 */
+    private val passwordEncryptionChannel = "io.legado.flutter/password_encryption"
+
     /** 当前 Activity 生命周期内是否已经申请过通知权限，避免状态刷新重复弹窗。 */
     private var notificationPermissionRequested = false
 
@@ -43,6 +54,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         registerLoggingChannel(flutterEngine)
         registerDownloadBackgroundChannel(flutterEngine)
+        registerPasswordEncryptionChannel(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             readerPlatformChannel,
@@ -150,6 +162,50 @@ class MainActivity : FlutterActivity() {
     }
 
     /** 注册日志通道，使 Android Studio Logcat 可以按业务 Tag 直接筛选。 */
+    /** 注册 RSA-OAEP-SHA256 密码加密通道；不记录明文、公钥或密文。 */
+    private fun registerPasswordEncryptionChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            passwordEncryptionChannel,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "encryptRsaOaepSha256") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            /** Dart 传入的 PEM 公钥。 */
+            val publicKeyPem = call.argument<String>("publicKeyPem")
+            /** Dart 传入且仅在本次加密期间驻留内存的明文密码。 */
+            val plaintext = call.argument<String>("plaintext")
+            if (publicKeyPem.isNullOrBlank() || plaintext.isNullOrEmpty()) {
+                result.error("PASSWORD_ENCRYPTION_FAILED", "密码加密准备失败", null)
+                return@setMethodCallHandler
+            }
+            try {
+                /** 去除 PEM 包装和空白后的 SubjectPublicKeyInfo Base64。 */
+                val encodedKey = publicKeyPem
+                    .replace("-----BEGIN PUBLIC KEY-----", "")
+                    .replace("-----END PUBLIC KEY-----", "")
+                    .replace(Regex("\\s"), "")
+                /** 服务端 PEM 中携带的 DER 公钥。 */
+                val keyBytes = Base64.decode(encodedKey, Base64.DEFAULT)
+                /** 由 X.509 SubjectPublicKeyInfo 解析得到的 RSA 公钥。 */
+                val publicKey = KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(keyBytes))
+                /** 明确固定 OAEP 主摘要和 MGF1 摘要为 SHA-256，避免 Android 默认 SHA-1。 */
+                val oaepSpec = OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT)
+                /** Android 系统密码学提供的 RSA-OAEP 加密器。 */
+                val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+                cipher.init(Cipher.ENCRYPT_MODE, publicKey, oaepSpec)
+                /** 与服务端协议一致的 UTF-8 密码密文。 */
+                val encrypted = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+                result.success(Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            } catch (_: GeneralSecurityException) {
+                result.error("PASSWORD_ENCRYPTION_FAILED", "密码加密准备失败", null)
+            } catch (_: IllegalArgumentException) {
+                result.error("PASSWORD_ENCRYPTION_FAILED", "密码加密准备失败", null)
+            }
+        }
+    }
+
     private fun registerLoggingChannel(flutterEngine: FlutterEngine) {
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

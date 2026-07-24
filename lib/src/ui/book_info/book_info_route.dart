@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
+import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
@@ -120,14 +121,18 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       case CloseBookInfoEffect():
         Navigator.of(context).maybePop();
       case OpenBookInfoReaderEffect(
-        bookUrl: final String bookUrl,
+        book: final Book book,
+        chapters: final List<BookChapter> chapters,
         chapterIndex: final int chapterIndex,
       ):
         Navigator.of(context).pushNamed(
           AppRoute.reader,
           arguments: ReaderRouteArguments(
-            bookUrl: bookUrl,
+            bookUrl: book.bookUrl,
             initialChapterIndex: chapterIndex,
+            initialBook: book,
+            initialChapters: chapters,
+            entry: 'detail',
           ),
         );
       case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):

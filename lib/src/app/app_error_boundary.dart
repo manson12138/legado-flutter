@@ -4,18 +4,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../help/logging/app_logger.dart';
+import '../help/crash_reporting/crash_report_manager.dart';
 import '../ui/components/app_state_views.dart';
 
 /// 配置 Flutter 框架错误、平台调度错误和构建失败页面的全局兜底行为。
 ///
 /// 业务可恢复错误仍需转换为 UiState 或 Effect；这里仅处理越过业务边界的未捕获错误。
-void configureGlobalErrorHandling(AppLogger logger) {
+void configureGlobalErrorHandling(AppLogger logger, CrashReportManager crashReportManager) {
   FlutterError.onError = (FlutterErrorDetails details) {
     logger.error(
       message: '未捕获的 Flutter 框架错误',
       error: details.exception,
       stackTrace: details.stack,
     );
+    crashReportManager.record(source: 'flutter_framework', error: details.exception, stackTrace: details.stack ?? StackTrace.current);
     FlutterError.presentError(details);
   };
 
@@ -25,6 +27,7 @@ void configureGlobalErrorHandling(AppLogger logger) {
       error: error,
       stackTrace: stackTrace,
     );
+    crashReportManager.record(source: 'platform_dispatcher', error: error, stackTrace: stackTrace);
     return true;
   };
 

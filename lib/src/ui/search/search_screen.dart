@@ -147,6 +147,7 @@ final class _SearchFieldState extends State<_SearchField> {
       controller: _controller,
       textInputAction: TextInputAction.search,
       onFieldSubmitted: (String value) => widget.onIntent(SubmitSearchIntent(keyword: value)),
+      onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
       decoration: InputDecoration(
         labelText: '书名或作者',
         border: const OutlineInputBorder(),
@@ -358,6 +359,247 @@ final class _SearchBody extends StatelessWidget {
     if (state.results.isEmpty) {
       return Center(child: Text(state.failures.isEmpty ? '没有找到结果' : '全部书源均未返回可用结果'));
     }
+    return _SearchResultPages(state: state, onIntent: onIntent);
+  }
+}
+
+/// 搜索结果的展示分类；同一去重结果只会进入其中一个页面。
+enum _SearchResultCategory {
+  /// 关键字命中书名。
+  title,
+
+  /// 关键字命中作者，且未命中书名。
+  author,
+
+  /// 关键字未命中书名和作者的补充结果。
+  other,
+}
+
+/// 单个搜索结果 PageView 页面的不可变展示数据。
+final class _SearchResultPageData {
+  /// 创建分类页面数据。
+  const _SearchResultPageData({required this.category, required this.label, required this.groups});
+
+  /// 页面分类。
+  final _SearchResultCategory category;
+
+  /// 页面切换栏展示文案。
+  final String label;
+
+  /// 当前页面内的稳定结果组。
+  final List<BookSearchResultGroup> groups;
+}
+
+/// 将已提交关键字对应的结果按书名、作者和其他分类。
+List<_SearchResultPageData> _buildSearchResultPages(SearchUiState state) {
+  /// 用于匹配的已提交关键字，避免编辑中的输入改变当前结果分类。
+  final String keyword = state.committedKeyword.trim().toLowerCase();
+  /// 书名匹配结果。
+  final List<BookSearchResultGroup> titleResults = <BookSearchResultGroup>[];
+  /// 作者匹配结果。
+  final List<BookSearchResultGroup> authorResults = <BookSearchResultGroup>[];
+  /// 非书名、作者匹配的补充结果。
+  final List<BookSearchResultGroup> otherResults = <BookSearchResultGroup>[];
+  for (final BookSearchResultGroup group in state.results) {
+    /// 当前结果组的书名匹配情况。
+    final bool titleMatches = group.primary.name.trim().toLowerCase().contains(keyword);
+    /// 当前结果组的作者匹配情况。
+    final bool authorMatches = group.primary.author.trim().toLowerCase().contains(keyword);
+    if (titleMatches) {
+      titleResults.add(group);
+    } else if (authorMatches) {
+      authorResults.add(group);
+    } else {
+      otherResults.add(group);
+    }
+  }
+  return <_SearchResultPageData>[
+    _SearchResultPageData(category: _SearchResultCategory.title, label: '书名', groups: titleResults),
+    _SearchResultPageData(category: _SearchResultCategory.author, label: '作者', groups: authorResults),
+    if (otherResults.isNotEmpty)
+      _SearchResultPageData(category: _SearchResultCategory.other, label: '其他', groups: otherResults),
+  ];
+}
+
+/// 用 PageView 分开展示书名、作者和可选其他搜索结果。
+final class _SearchResultPages extends StatefulWidget {
+  /// 创建结果分类页面。
+  const _SearchResultPages({required this.state, required this.onIntent});
+
+  /// 搜索页不可变状态。
+  final SearchUiState state;
+
+  /// 页面统一 Intent 入口。
+  final ValueChanged<SearchIntent> onIntent;
+
+  @override
+  State<_SearchResultPages> createState() => _SearchResultPagesState();
+}
+
+/// 管理 PageController，确保“其他”页出现或消失时页码仍然有效。
+final class _SearchResultPagesState extends State<_SearchResultPages> {
+  /// 当前分类页面控制器。
+  late PageController _pageController;
+
+  /// 当前页面数量，用于在页面结构改变时安全重建控制器。
+  late int _pageCount;
+
+  /// 当前可见页下标，驱动轻量切换栏。
+  int _selectedPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    /// 首次渲染时的页面数量。
+    _pageCount = _buildSearchResultPages(widget.state).length;
+    _pageController = PageController();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SearchResultPages oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    /// 更新后的分类页面数量。
+    final int nextPageCount = _buildSearchResultPages(widget.state).length;
+    if (nextPageCount != _pageCount) {
+      /// 结构变更前仍可恢复的页码。
+      final int nextSelectedPage = _selectedPage.clamp(0, nextPageCount - 1).toInt();
+      _pageController.dispose();
+      _pageController = PageController(initialPage: nextSelectedPage);
+      _pageCount = nextPageCount;
+      _selectedPage = nextSelectedPage;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  /// 切换到用户选中的结果分类页面。
+  void _selectPage(int index) {
+    if (index == _selectedPage) {
+      return;
+    }
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    /// 当前状态计算出的分类页面。
+    final List<_SearchResultPageData> pages = _buildSearchResultPages(widget.state);
+    return Column(
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+          child: _SearchResultPageSelector(
+            pages: pages,
+            selectedPage: _selectedPage,
+            onSelected: _selectPage,
+          ),
+        ),
+        const SizedBox(height: SpacingToken.xSmall),
+        Expanded(
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: pages.length,
+            onPageChanged: (int index) => setState(() => _selectedPage = index),
+            itemBuilder: (BuildContext context, int index) {
+              /// 当前分类页面数据。
+              final _SearchResultPageData page = pages[index];
+              return _SearchResultList(
+                key: PageStorageKey<String>('search-result-${page.category.name}'),
+                groups: page.groups,
+                emptyText: '没有匹配${page.label}的结果',
+                onIntent: widget.onIntent,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 搜索结果分类的轻量页面切换栏。
+final class _SearchResultPageSelector extends StatelessWidget {
+  /// 创建分类切换栏。
+  const _SearchResultPageSelector({required this.pages, required this.selectedPage, required this.onSelected});
+
+  /// 可展示页面。
+  final List<_SearchResultPageData> pages;
+
+  /// 当前页码。
+  final int selectedPage;
+
+  /// 选择页面回调。
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    /// 当前主题颜色。
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Row(
+      children: List<Widget>.generate(pages.length, (int index) {
+        /// 当前页数据。
+        final _SearchResultPageData page = pages[index];
+        /// 当前页是否被选择。
+        final bool selected = index == selectedPage;
+        return Expanded(
+          child: Semantics(
+            button: true,
+            selected: selected,
+            label: '${page.label}，${page.groups.length} 条结果',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(RadiusToken.medium),
+              onTap: () => onSelected(index),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeOut,
+                padding: const EdgeInsets.symmetric(vertical: SpacingToken.small),
+                decoration: BoxDecoration(
+                  color: selected ? colors.secondaryContainer : Colors.transparent,
+                  borderRadius: BorderRadius.circular(RadiusToken.medium),
+                ),
+                child: Text(
+                  '${page.label} ${page.groups.length}',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                      ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+/// 分类页面内复用的虚拟化结果列表。
+final class _SearchResultList extends StatelessWidget {
+  /// 创建分类结果列表。
+  const _SearchResultList({required this.groups, required this.emptyText, required this.onIntent, super.key});
+
+  /// 当前分类的结果组。
+  final List<BookSearchResultGroup> groups;
+
+  /// 当前分类没有结果时的提示。
+  final String emptyText;
+
+  /// 页面统一 Intent 入口。
+  final ValueChanged<SearchIntent> onIntent;
+
+  @override
+  Widget build(BuildContext context) {
+    if (groups.isEmpty) {
+      return Center(child: Text(emptyText));
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         /// 宽屏下把结果约束在舒适阅读宽度内的水平留白。
@@ -365,15 +607,12 @@ final class _SearchBody extends StatelessWidget {
             ? (constraints.maxWidth - LayoutToken.contentMaxWidth) / 2
             : SpacingToken.medium;
         return ListView.separated(
-          padding: EdgeInsets.symmetric(
-            horizontal: horizontalPadding,
-            vertical: SpacingToken.small,
-          ),
-          itemCount: state.results.length,
+          padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: SpacingToken.small),
+          itemCount: groups.length,
           separatorBuilder: (BuildContext context, int index) => const Divider(),
           itemBuilder: (BuildContext context, int index) {
             /// 当前稳定结果组。
-            final BookSearchResultGroup group = state.results[index];
+            final BookSearchResultGroup group = groups[index];
             return Material(
               key: ValueKey<String>(group.key),
               color: Colors.transparent,
@@ -383,35 +622,16 @@ final class _SearchBody extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: SpacingToken.small),
                   child: Row(
                     children: <Widget>[
-                      SizedBox(
-                        width: 35,
-                        height: 51,
-                        child: _SearchResultCover(group: group),
-                      ),
+                      SizedBox(width: 35, height: 51, child: _SearchResultCover(group: group)),
                       const SizedBox(width: SpacingToken.mediumSmall),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
-                            Text(
-                              group.primary.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            Text(
-                              group.primary.author.isEmpty ? '未知作者' : group.primary.author,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
+                            Text(group.primary.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall),
+                            Text(group.primary.author.isEmpty ? '未知作者' : group.primary.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
                             const SizedBox(height: SpacingToken.xSmall),
-                            Text(
-                              '${group.primary.originName} · ${group.books.length} 个来源',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
+                            Text('${group.primary.originName} · ${group.books.length} 个来源', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
                           ],
                         ),
                       ),

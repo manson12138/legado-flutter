@@ -1,4 +1,5 @@
 import Flutter
+import Security
 import UIKit
 
 @main
@@ -6,6 +7,9 @@ import UIKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   /// M08 阅读器平台通道；强引用保证 Flutter 引擎存活期间处理器持续有效。
   private var readerPlatformChannel: FlutterMethodChannel?
+
+  /// 登录与注册密码加密通道；强引用保证 Flutter 引擎存活期间处理器持续有效。
+  private var passwordEncryptionChannel: FlutterMethodChannel?
 
   /// P1-05 下载后台通道；iOS 只提供有限后台执行窗口，不承诺无限持续下载。
   private var downloadBackgroundChannel: FlutterMethodChannel?
@@ -83,6 +87,7 @@ import UIKit
   /// - Parameter engineBridge: Flutter 提供的引擎桥接对象，用于取得插件注册表。
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    registerPasswordEncryptionChannel(engineBridge)
     /// 取得只服务 M08 窗口常亮能力的插件注册器；Xcode 26 下该 API 返回可空值。
     guard let registrar = engineBridge.pluginRegistry.registrar(
       forPlugin: "ReaderPlatformBridge"
@@ -121,6 +126,142 @@ import UIKit
     }
     readerPlatformChannel = channel
     registerDownloadBackgroundChannel(engineBridge)
+  }
+
+  /// 注册使用系统 SecKey 的 RSA-OAEP-SHA256 加密通道；不记录明文、公钥或密文。
+  private func registerPasswordEncryptionChannel(_ engineBridge: FlutterImplicitEngineBridge) {
+    guard let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "PasswordEncryptionBridge"
+    ) else {
+      return
+    }
+    /// 与 Dart PasswordEncryptionService 共用的方法通道。
+    let channel = FlutterMethodChannel(
+      name: "io.legado.flutter/password_encryption",
+      binaryMessenger: registrar.messenger()
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "encryptRsaOaepSha256" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard let arguments = call.arguments as? [String: Any],
+            let publicKeyPem = arguments["publicKeyPem"] as? String,
+            let plaintext = arguments["plaintext"] as? String,
+            !publicKeyPem.isEmpty,
+            !plaintext.isEmpty,
+            let self else {
+        result(FlutterError(code: "PASSWORD_ENCRYPTION_FAILED", message: "密码加密准备失败", details: nil))
+        return
+      }
+      self.encryptPassword(publicKeyPem: publicKeyPem, plaintext: plaintext, result: result)
+    }
+    passwordEncryptionChannel = channel
+  }
+
+  /// 使用 SecKey 的 OAEP-SHA256 算法加密 UTF-8 密码并返回 Base64 密文。
+  private func encryptPassword(publicKeyPem: String, plaintext: String, result: @escaping FlutterResult) {
+    guard let derData = decodePublicKeyPem(publicKeyPem),
+          let plaintextData = plaintext.data(using: .utf8),
+          let publicKey = createRsaPublicKey(derData) else {
+      result(FlutterError(code: "PASSWORD_ENCRYPTION_FAILED", message: "密码加密准备失败", details: nil))
+      return
+    }
+    /// iOS 系统定义的 OAEP-SHA256 同时固定主摘要和 MGF1 摘要为 SHA-256。
+    let algorithm = SecKeyAlgorithm.rsaEncryptionOAEPSHA256
+    guard SecKeyIsAlgorithmSupported(publicKey, .encrypt, algorithm) else {
+      result(FlutterError(code: "PASSWORD_ENCRYPTION_FAILED", message: "密码加密准备失败", details: nil))
+      return
+    }
+    /// Security 框架只返回受控错误，不把底层异常详情暴露给 Dart。
+    var securityError: Unmanaged<CFError>?
+    guard let encryptedData = SecKeyCreateEncryptedData(publicKey, algorithm, plaintextData as CFData, &securityError) else {
+      result(FlutterError(code: "PASSWORD_ENCRYPTION_FAILED", message: "密码加密准备失败", details: nil))
+      return
+    }
+    result((encryptedData as Data).base64EncodedString())
+  }
+
+  /// 解码后端下发的 PEM SubjectPublicKeyInfo 公钥数据。
+  private func decodePublicKeyPem(_ publicKeyPem: String) -> Data? {
+    /// 移除 PEM 包装和所有换行、空格。
+    let base64Text = publicKeyPem
+      .replacingOccurrences(of: "-----BEGIN PUBLIC KEY-----", with: "")
+      .replacingOccurrences(of: "-----END PUBLIC KEY-----", with: "")
+      .components(separatedBy: .whitespacesAndNewlines)
+      .joined()
+    return Data(base64Encoded: base64Text)
+  }
+
+  /// 从服务端 SPKI 或已经是 PKCS#1 的 DER 数据创建系统 RSA 公钥。
+  private func createRsaPublicKey(_ derData: Data) -> SecKey? {
+    /// Security 框架可能按系统版本接受 SPKI 或 PKCS#1，因此先保留原始数据再安全回退。
+    let candidates = [derData, extractPkcs1PublicKey(from: derData)].compactMap { $0 }
+    for candidate in candidates {
+      /// 声明导入数据是 RSA 公钥，不持久化到 Keychain。
+      let attributes: [String: Any] = [
+        kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+        kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+      ]
+      /// Security 框架的受控错误不向调用方泄露。
+      var securityError: Unmanaged<CFError>?
+      if let key = SecKeyCreateWithData(candidate as CFData, attributes as CFDictionary, &securityError) {
+        return key
+      }
+    }
+    return nil
+  }
+
+  /// 从 X.509 SubjectPublicKeyInfo 中提取内嵌的 PKCS#1 RSA 公钥，以兼容 Security 导入边界。
+  private func extractPkcs1PublicKey(from subjectPublicKeyInfo: Data) -> Data? {
+    /// DER 字节视图仅在当前函数栈内短暂存在。
+    let bytes = [UInt8](subjectPublicKeyInfo)
+    var index = 0
+    guard let sequenceEnd = readDerElement(tag: 0x30, bytes: bytes, index: &index),
+          let algorithmEnd = readDerElement(tag: 0x30, bytes: bytes, index: &index),
+          algorithmEnd <= sequenceEnd else {
+      return nil
+    }
+    index = algorithmEnd
+    guard let bitStringEnd = readDerElement(tag: 0x03, bytes: bytes, index: &index),
+          index < bitStringEnd,
+          bytes[index] == 0x00 else {
+      return nil
+    }
+    index += 1
+    return Data(bytes[index..<bitStringEnd])
+  }
+
+  /// 读取单个 DER TLV 元素并返回内容结束位置；遇到越界或非 DER 长度立即失败。
+  private func readDerElement(tag: UInt8, bytes: [UInt8], index: inout Int) -> Int? {
+    guard index < bytes.count, bytes[index] == tag else {
+      return nil
+    }
+    index += 1
+    guard index < bytes.count else {
+      return nil
+    }
+    /// DER 短长度或长长度编码的首字节。
+    let firstLengthByte = bytes[index]
+    index += 1
+    var length = 0
+    if firstLengthByte & 0x80 == 0 {
+      length = Int(firstLengthByte)
+    } else {
+      /// 长长度后的长度字节数。
+      let lengthByteCount = Int(firstLengthByte & 0x7f)
+      guard lengthByteCount > 0, lengthByteCount <= 4, index + lengthByteCount <= bytes.count else {
+        return nil
+      }
+      for _ in 0..<lengthByteCount {
+        length = (length << 8) | Int(bytes[index])
+        index += 1
+      }
+    }
+    guard length >= 0, index + length <= bytes.count else {
+      return nil
+    }
+    return index + length
   }
 
   /// 注册离线下载后台通道；系统只授予有限执行时间，过期后队列由下次前台启动续传。

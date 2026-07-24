@@ -3,10 +3,9 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
-import '../../domain/model/book.dart';
 import 'settings_screen.dart';
 
-/// 连接“我的”页面、书架历史流与应用路由的轻量入口。
+/// 连接“我的”页面设置与应用路由的轻量入口。
 final class SettingsRoute extends StatefulWidget {
   /// 创建“我的”页路由。
   const SettingsRoute({
@@ -39,131 +38,103 @@ final class _SettingsRouteState extends State<SettingsRoute> {
   /// 首次进入页面时读取一次的搜索期交互设置。
   late final Future<bool> _searchInteractionSetting;
 
+  /// 首次进入设置时读取一次的分析同意状态；默认关闭。
+  late final Future<bool> _analyticsSetting;
+
   /// 在 State 已绑定 Widget 后创建一次持久设置读取任务。
   @override
   void initState() {
     super.initState();
     _searchInteractionSetting =
         widget.dependencies.standardBookSourceService.loadSearchInteractionSetting();
+    _analyticsSetting = widget.dependencies.remoteBookSourceSyncService.isAnalyticsEnabled();
   }
 
-  /// 构建“我的”页并注入阅读历史、主题、书源、日志和关于回调。
+  /// 构建“我的”页并注入主题、书源、日志和关于回调。
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: widget.themeModeListenable,
       builder: (BuildContext context, ThemeMode themeMode, Widget? child) {
-        return StreamBuilder<List<Book>>(
-          stream: widget.dependencies.bookshelfGateway.watchBookshelf(),
-          initialData: const <Book>[],
-          builder: (BuildContext context, AsyncSnapshot<List<Book>> snapshot) {
-            /// 只保留真正打开过正文的书籍，并按最近阅读时间倒序展示。
-            final List<Book> recentBooks = List<Book>.of(snapshot.data ?? const <Book>[])
-              ..removeWhere((Book book) => book.durChapterTime <= 0)
-              ..sort((Book left, Book right) => right.durChapterTime.compareTo(left.durChapterTime));
+        return FutureBuilder<bool>(
+          future: _searchInteractionSetting,
+          initialData: false,
+          builder: (
+            BuildContext context,
+            AsyncSnapshot<bool> interactionSnapshot,
+          ) {
             return FutureBuilder<bool>(
-              future: _searchInteractionSetting,
+              future: _analyticsSetting,
               initialData: false,
-              builder: (BuildContext context, AsyncSnapshot<bool> interactionSnapshot) {
-                return SettingsScreen(
-                  recentBooks: recentBooks,
-                  themeMode: themeMode,
-                  allowSearchSourceInteraction: interactionSnapshot.data ?? false,
-                  onChangeSearchSourceInteraction: (bool allowed) {
-                    widget.dependencies.standardBookSourceService
-                        .setSearchInteractionAllowed(allowed);
-                  },
-                  onBack: () {
-                    Navigator.of(context).pop();
-                  },
-                  showBackButton: !widget.embedded,
-                  onOpenBook: (Book book) {
-                    Navigator.of(context).pushNamed(AppRoute.reader, arguments: book.bookUrl);
-                  },
-                  onOpenAllHistory: () {
-                    _showReadingHistory(context, recentBooks);
-                  },
-                  onOpenThemeManagement: () {
-                    _showThemeManagement(context, themeMode);
-                  },
-                  onOpenLanguageManagement: () {
-                    _showLanguageManagement(context);
-                  },
-                  onOpenBookSources: () {
-                    Navigator.of(context).pushNamed(AppRoute.bookSourceManagement);
-                  },
-                  onOpenDownloadManagement: () {
-                    Navigator.of(context).pushNamed(
-                      AppRoute.downloadManagement,
+              builder: (
+                BuildContext context,
+                AsyncSnapshot<bool> analyticsSnapshot,
+              ) {
+                return ValueListenableBuilder(
+                  valueListenable:
+                      widget.dependencies.authenticationGateway.session,
+                  builder: (BuildContext context, session, Widget? child) {
+                    return SettingsScreen(
+                      appSession: session,
+                      themeMode: themeMode,
+                      allowSearchSourceInteraction:
+                          interactionSnapshot.data ?? false,
+                      onChangeSearchSourceInteraction: (bool allowed) {
+                        widget.dependencies.standardBookSourceService
+                            .setSearchInteractionAllowed(allowed);
+                      },
+                      analyticsEnabled: analyticsSnapshot.data ?? false,
+                      onChangeAnalyticsEnabled: (bool enabled) {
+                        widget.dependencies.remoteBookSourceSyncService
+                            .setAnalyticsEnabled(enabled);
+                      },
+                      onBack: () => Navigator.of(context).pop(),
+                      showBackButton: !widget.embedded,
+                      onOpenThemeManagement: () {
+                        _showThemeManagement(context, themeMode);
+                      },
+                      onOpenLanguageManagement: () {
+                        _showLanguageManagement(context);
+                      },
+                      onOpenBookSources: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.bookSourceManagement,
+                        );
+                      },
+                      onOpenAuthentication: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.authentication,
+                        );
+                      },
+                      onOpenDownloadManagement: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.downloadManagement,
+                        );
+                      },
+                      onOpenOfflineContentManagement: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.offlineContentManagement,
+                        );
+                      },
+                      onOpenLogManagement: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.logManagement,
+                        );
+                      },
+                      onOpenCrashReportManagement: () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.crashReportManagement,
+                        );
+                      },
+                      onOpenAbout: () {
+                        Navigator.of(context).pushNamed(AppRoute.about);
+                      },
                     );
-                  },
-                  onOpenOfflineContentManagement: () {
-                    Navigator.of(context).pushNamed(
-                      AppRoute.offlineContentManagement,
-                    );
-                  },
-                  onOpenLogManagement: () {
-                    Navigator.of(context).pushNamed(AppRoute.logManagement);
-                  },
-                  onOpenAbout: () {
-                    Navigator.of(context).pushNamed(AppRoute.about);
                   },
                 );
               },
             );
           },
-        );
-      },
-    );
-  }
-
-  /// 展示完整阅读历史，并允许直接继续阅读任意一本书。
-  void _showReadingHistory(BuildContext context, List<Book> books) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.sizeOf(sheetContext).height * 0.72,
-            child: Column(
-              children: <Widget>[
-                ListTile(
-                  title: const Text('阅读历史'),
-                  subtitle: Text('${books.length} 本读过的书'),
-                ),
-                const Divider(),
-                Expanded(
-                  child: books.isEmpty
-                      ? const Center(child: Text('还没有阅读记录'))
-                      : ListView.builder(
-                          itemCount: books.length,
-                          itemBuilder: (BuildContext context, int index) {
-                            /// 当前按最近阅读排序的书籍。
-                            final Book book = books[index];
-                            return ListTile(
-                              leading: const Icon(Icons.menu_book_outlined, size: 20),
-                              title: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                              subtitle: Text(
-                                book.durChapterTitle ?? '上次阅读位置',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              trailing: const Icon(Icons.chevron_right, size: 18),
-                              onTap: () {
-                                Navigator.of(sheetContext).pop();
-                                Navigator.of(context).pushNamed(
-                                  AppRoute.reader,
-                                  arguments: book.bookUrl,
-                                );
-                              },
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-          ),
         );
       },
     );

@@ -5,6 +5,7 @@ import '../components/app_scaffold.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 import 'bookshelf_contract.dart';
+import 'bookshelf_page_switcher.dart';
 
 /// 只消费 BookshelfUiState 并发送 Intent 的无状态书架页面。
 final class BookshelfScreen extends StatelessWidget {
@@ -12,6 +13,7 @@ final class BookshelfScreen extends StatelessWidget {
   const BookshelfScreen({
     required this.state,
     required this.onIntent,
+    required this.onPageSelected,
     this.showBackButton = true,
     super.key,
   });
@@ -21,15 +23,16 @@ final class BookshelfScreen extends StatelessWidget {
   /// 用户操作统一入口。
   final ValueChanged<BookshelfIntent> onIntent;
 
+  /// 书架/历史目标页切换回调。
+  final ValueChanged<int> onPageSelected;
+
   /// 普通模式顶部栏是否展示返回按钮。
   final bool showBackButton;
 
   /// 构建选择模式或普通模式顶部栏和共享页面状态。
   @override
   Widget build(BuildContext context) {
-    return AppScaffold(
-      appBar: state.selectionMode ? _selectionAppBar() : _normalAppBar(),
-      body: Column(
+    return Column(
         children: <Widget>[
           if (!state.selectionMode) _BookshelfControls(state: state, onIntent: onIntent),
           if (state.refreshing || state.refreshProgress.total > 0)
@@ -38,7 +41,6 @@ final class BookshelfScreen extends StatelessWidget {
             _BookshelfRefreshFailures(failures: state.refreshFailures),
           Expanded(child: _BookshelfBody(state: state, onIntent: onIntent)),
         ],
-      ),
     );
   }
 
@@ -53,7 +55,10 @@ final class BookshelfScreen extends StatelessWidget {
               tooltip: '返回',
             )
           : null,
-      title: const Text('书架'),
+      title: BookshelfPageSwitcher(
+        pageProgress: 0,
+        onSelected: onPageSelected,
+      ),
       actions: <Widget>[
         IconButton(
           onPressed: () => onIntent(const OpenBookshelfLocalBookImportIntent()),
@@ -261,6 +266,11 @@ final class _BookshelfRefreshStatus extends StatelessWidget {
               ),
               if (state.refreshing)
                 TextButton(onPressed: () => onIntent(const CancelBookshelfRefreshIntent()), child: const Text('停止')),
+              if (!state.refreshing)
+                TextButton(
+                  onPressed: () => onIntent(const DismissBookshelfRefreshResultIntent()),
+                  child: const Text('关闭'),
+                ),
             ],
           ),
         ],
@@ -399,8 +409,8 @@ final class _BookshelfGrid extends StatelessWidget {
         final double contentWidth = constraints.maxWidth - horizontalPadding * 2;
         /// 每个书籍卡片期望占用的宽度，在上一版紧凑值上继续缩小约 30%。
         const double targetTileWidth = 88;
-        /// 通过卡片左右留白缩小书籍视觉宽度，同时保持封面顶部继续铺满卡片。
-        const double cardHorizontalInset = 4;
+        /// 通过卡片左右各 1.5px 留白，让书籍视觉宽度较原先约增加 5%，同时保持封面顶部继续铺满卡片。
+        const double cardHorizontalInset = 1.5;
         /// 当前响应式网格列数，手机通常显示三列，宽屏最多显示十列。
         final int columns = (contentWidth / targetTileWidth).floor().clamp(3, 10).toInt();
         return GridView.builder(

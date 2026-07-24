@@ -8,6 +8,8 @@ import '../api/http/app_dio_log_interceptor.dart';
 import '../api/http/http_contract.dart';
 import '../api/http/response_decoder.dart';
 import '../api/http/source_url_resolver.dart';
+import '../api/remote_app/remote_app_api.dart';
+import '../api/remote_app/remote_app_service_config.dart';
 import '../api/js/java_compatibility_bridge.dart';
 import '../api/js/js_engine.dart';
 import '../api/js/js_engine_pool.dart';
@@ -26,7 +28,9 @@ import '../data/dao/bookmark_dao.dart';
 import '../data/dao/book_content_process_dao.dart';
 import '../data/dao/replace_rule_dao.dart';
 import '../data/dao/download_task_dao.dart';
+import '../data/dao/reading_history_dao.dart';
 import '../data/local/legado_database.dart';
+import '../data/local/secure_auth_session_store.dart';
 import '../data/model/book_source_import_decoder.dart';
 import '../data/repository/adult_content_repository.dart';
 import '../data/repository/book_repository.dart';
@@ -35,6 +39,10 @@ import '../data/repository/book_source_repository.dart';
 import '../data/repository/download_repository.dart';
 import '../data/repository/search_history_repository.dart';
 import '../data/repository/reader_repository.dart';
+import '../data/repository/reading_history_repository.dart';
+import '../data/repository/remote_app_configuration_repository.dart';
+import '../data/repository/authentication_repository.dart';
+import '../platform/password_encryption_platform_service.dart';
 import '../domain/gateway/adult_content_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
 import '../domain/gateway/book_content_process_gateway.dart';
@@ -44,9 +52,11 @@ import '../domain/gateway/book_source_gateway.dart';
 import '../domain/gateway/chapter_gateway.dart';
 import '../domain/gateway/cover_cache_gateway.dart';
 import '../domain/gateway/reading_progress_gateway.dart';
+import '../domain/gateway/reading_history_gateway.dart';
 import '../domain/gateway/reader_cache_gateway.dart';
 import '../domain/gateway/replace_rule_gateway.dart';
 import '../domain/gateway/search_history_gateway.dart';
+import '../domain/gateway/authentication_gateway.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
 import '../domain/usecase/save_book_content_process_use_case.dart';
 import '../domain/usecase/delete_books_from_bookshelf_use_case.dart';
@@ -59,8 +69,10 @@ import '../domain/usecase/replace_books_group_use_case.dart';
 import '../domain/usecase/resolve_book_shelf_state_use_case.dart';
 import '../domain/usecase/save_book_chapters_use_case.dart';
 import '../domain/usecase/save_reading_progress_use_case.dart';
+import '../domain/usecase/record_reading_history_use_case.dart';
 import '../help/logging/app_logger.dart';
 import '../help/logging/app_log_manager.dart';
+import '../help/crash_reporting/crash_report_manager.dart';
 import '../model/web_book/standard_source_parser.dart';
 import '../model/web_book/standard_source_service.dart';
 import '../model/web_book/book_detail_service.dart';
@@ -83,6 +95,10 @@ import '../model/local_book/pdf_local_book_parser.dart';
 import '../model/local_book/umd_local_book_parser.dart';
 import '../ui/components/cover_url_cache.dart';
 import 'default_book_source_bootstrapper.dart';
+import 'remote_app_bootstrapper.dart';
+import 'app_access_coordinator.dart';
+import 'bookshelf_layout_preferences.dart';
+import 'remote_book_source_sync_service.dart';
 
 /// 保存应用级共享依赖的组合根容器。
 ///
@@ -93,12 +109,14 @@ final class AppDependencies {
   const AppDependencies({
     required this.logger,
     required this.logManager,
+    required this.crashReportManager,
     required this.adultContentGateway,
     required this.bookSourceGateway,
     required this.bookshelfGateway,
     required this.bookGroupGateway,
     required this.chapterGateway,
     required this.readingProgressGateway,
+    required this.readingHistoryGateway,
     required this.bookmarkGateway,
     required this.bookContentProcessGateway,
     required this.replaceRuleGateway,
@@ -108,6 +126,12 @@ final class AppDependencies {
     required this.cookieManager,
     required this.scriptInteractionBroker,
     required this.defaultBookSourceBootstrapper,
+    required this.remoteAppBootstrapper,
+    required this.appAccessCoordinator,
+    required this.remoteAppConfigurationRepository,
+    required this.authenticationGateway,
+    required this.remoteBookSourceSyncService,
+    required this.bookshelfLayoutPreferences,
     required this.importBookSources,
     required this.bookSourceImportTextResolver,
     required this.addBookToBookshelf,
@@ -119,6 +143,7 @@ final class AppDependencies {
     required this.saveBookChapters,
     required this.saveReadingProgress,
     required this.restoreReadingProgress,
+    required this.recordReadingHistory,
     required this.saveBookContentProcess,
     required this.standardBookSourceService,
     required this.bookDetailService,
@@ -133,6 +158,8 @@ final class AppDependencies {
   factory AppDependencies.create({
     required AppLogger logger,
     required AppLogManager logManager,
+    required CrashReportManager crashReportManager,
+    required RemoteAppServiceConfig remoteAppConfig,
   }) {
     /// M2 Flutter 独立数据库，首次数据操作时惰性打开。
     final LegadoDatabase database = LegadoDatabase(logger: logger);
@@ -140,6 +167,8 @@ final class AppDependencies {
     final BookDao bookDao = BookDao(database);
     /// 章节表 DAO，只在数据组合根内创建，不向 UI 暴露。
     final BookChapterDao chapterDao = BookChapterDao(database);
+    /// 阅读历史书籍与目录快照 DAO，不复用书架成员表。
+    final ReadingHistoryDao readingHistoryDao = ReadingHistoryDao(database);
     /// 书架分组 DAO，只在数据组合根内创建。
     final BookGroupDao bookGroupDao = BookGroupDao(database);
     /// 书源表 DAO，只在数据组合根内创建，不向 UI 暴露。
@@ -163,6 +192,9 @@ final class AppDependencies {
       bookDao,
       chapterDao,
     );
+    /// 与书架成员资格独立的阅读历史 Repository。
+    final ReadingHistoryRepository readingHistoryRepository =
+        ReadingHistoryRepository(database, readingHistoryDao);
     /// M07 用户分组 Repository。
     final BookGroupRepository bookGroupRepository = BookGroupRepository(bookGroupDao);
     /// 统一 Dio 实例；随后安装会遮盖认证信息的应用日志拦截器。
@@ -184,6 +216,38 @@ final class AppDependencies {
     );
     /// 统一 HTTP 实现。
     final UnifiedHttpClient httpClient = DioUnifiedHttpClient(dio, cookieManager);
+    /// 服务端 App API 的集中配置和 HMAC 实现。
+    final RemoteAppApi remoteAppApi = RemoteAppApi(
+      httpClient: httpClient,
+      config: remoteAppConfig,
+    );
+    /// 启动配置和过滤规则的远端仓储。
+    final RemoteAppConfigurationRepository remoteAppConfigurationRepository =
+        RemoteAppConfigurationRepository(remoteAppApi, cacheDao);
+    /// App 用户注册登录与内存会话仓储。
+    final AuthenticationRepository authenticationRepository = AuthenticationRepository(
+      remoteAppApi,
+      const MethodChannelPasswordEncryptionService(),
+      logger,
+      SecureAuthenticationSessionStore(),
+    );
+    /// 崩溃上报使用可选内存会话，不会为此持久化认证信息。
+    crashReportManager.configureUploader((Map<String, Object?> report) async {
+      final RemoteCrashReportReceipt receipt = await remoteAppApi.uploadCrashReport(
+        report: report,
+        token: authenticationRepository.currentToken(),
+      );
+      return CrashReportUploadReceipt(receiptId: receipt.receiptId, retentionDays: receipt.retentionDays);
+    });
+    /// App 登录会话和服务端书源下载服务；token 仅保存在内存。
+    final RemoteBookSourceSyncService remoteBookSourceSyncService =
+        RemoteBookSourceSyncService(
+          remoteAppApi,
+          cacheDao,
+          authenticationRepository,
+          remoteAppConfig,
+          logger,
+        );
     /// 成人内容屏蔽 Repository；供搜索、换源和书源导入共用同一套判定。
     final AdultContentRepository adultContentRepository = AdultContentRepository(
       cacheDao,
@@ -191,6 +255,14 @@ final class AppDependencies {
       httpClient,
       logger,
     );
+    /// 首帧后异步刷新远端启动配置和内容过滤规则。
+    final RemoteAppBootstrapper remoteAppBootstrapper = RemoteAppBootstrapper(
+      repository: remoteAppConfigurationRepository,
+      adultContentGateway: adultContentRepository,
+      logger: logger,
+    );
+    /// 应用准入和升级状态的前台轮询协调器。
+    final AppAccessCoordinator appAccessCoordinator = AppAccessCoordinator(remoteAppBootstrapper);
     /// 书源 Repository，组合 DAO、不可信 JSON 解码边界与成人内容屏蔽判定。
     final BookSourceRepository bookSourceRepository = BookSourceRepository(
       database,
@@ -198,6 +270,10 @@ final class AppDependencies {
       cacheDao,
       const BookSourceImportDecoder(),
       adultContentRepository,
+      remoteBookSourceSyncService.recordOutcome,
+    );
+    remoteBookSourceSyncService.configureBookSourceProvider(
+      bookSourceRepository.getByUrl,
     );
     /// 扫码书源中的 HTTP/HTTPS 地址下载与字符集解码服务。
     final BookSourceImportTextResolver bookSourceImportTextResolver =
@@ -291,6 +367,8 @@ final class AppDependencies {
     /// 书源 JSON 导入 UseCase，供管理页面和启动内置书源导入共同复用。
     final ImportBookSourcesUseCase importBookSources =
         ImportBookSourcesUseCase(bookSourceRepository);
+    /// 服务器同步每页成功后立即复用该导入事务，并以相同 URL 覆盖策略续传。
+    remoteBookSourceSyncService.configurePageImporter(importBookSources);
     /// 离线下载队列持久化 Repository。
     final DownloadRepository downloadRepository = DownloadRepository(downloadTaskDao);
     /// 自动下载换源专用单 worker 搜索器；搜索成功本身不评分，由整书批次统一结算。
@@ -329,12 +407,14 @@ final class AppDependencies {
     return AppDependencies(
       logger: logger,
       logManager: logManager,
+      crashReportManager: crashReportManager,
       adultContentGateway: adultContentRepository,
       bookSourceGateway: bookSourceRepository,
       bookshelfGateway: bookRepository,
       bookGroupGateway: bookGroupRepository,
       chapterGateway: bookRepository,
       readingProgressGateway: bookRepository,
+      readingHistoryGateway: readingHistoryRepository,
       bookmarkGateway: readerRepository,
       bookContentProcessGateway: readerRepository,
       replaceRuleGateway: readerRepository,
@@ -349,6 +429,12 @@ final class AppDependencies {
         assetBundle: rootBundle,
         logger: logger,
       ),
+      remoteAppBootstrapper: remoteAppBootstrapper,
+      appAccessCoordinator: appAccessCoordinator,
+      remoteAppConfigurationRepository: remoteAppConfigurationRepository,
+      authenticationGateway: authenticationRepository,
+      remoteBookSourceSyncService: remoteBookSourceSyncService,
+      bookshelfLayoutPreferences: BookshelfLayoutPreferences(cacheDao),
       importBookSources: importBookSources,
       bookSourceImportTextResolver: bookSourceImportTextResolver,
       addBookToBookshelf: addBookToBookshelf,
@@ -360,6 +446,8 @@ final class AppDependencies {
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
       saveReadingProgress: SaveReadingProgressUseCase(bookRepository),
       restoreReadingProgress: RestoreReadingProgressUseCase(bookRepository),
+      recordReadingHistory:
+          RecordReadingHistoryUseCase(readingHistoryRepository),
       saveBookContentProcess: SaveBookContentProcessUseCase(readerRepository),
       standardBookSourceService: standardBookSourceService,
       bookDetailService: bookDetailService,
@@ -376,6 +464,9 @@ final class AppDependencies {
 
   /// 设置页使用的日志文件查看、删除和 ADB 回显能力。
   final AppLogManager logManager;
+
+  /// “我的”页崩溃报告管理与全局错误入口共用的文件边界。
+  final CrashReportManager crashReportManager;
 
   /// 成人内容屏蔽领域边界，供搜索、换源和书源导入共用同一套判定。
   final AdultContentGateway adultContentGateway;
@@ -394,6 +485,9 @@ final class AppDependencies {
 
   /// 阅读进度领域边界，供后续同步能力组合使用。
   final ReadingProgressGateway readingProgressGateway;
+
+  /// 与书架独立的阅读历史书籍和目录快照边界。
+  final ReadingHistoryGateway readingHistoryGateway;
 
   /// 阅读器书签持久化边界。
   final BookmarkGateway bookmarkGateway;
@@ -421,6 +515,23 @@ final class AppDependencies {
 
   /// 启动期按需导入 Flutter assets 内置书源的业务协调器。
   final DefaultBookSourceBootstrapper defaultBookSourceBootstrapper;
+
+  /// 启动后异步同步服务端配置的协调器。
+  final RemoteAppBootstrapper remoteAppBootstrapper;
+
+  /// 应用级准入、升级与前台轮询协调器。
+  final AppAccessCoordinator appAccessCoordinator;
+
+  /// 公告和功能开关的缓存及按需刷新仓储。
+  final RemoteAppConfigurationRepository remoteAppConfigurationRepository;
+  /// 当前 App 用户认证边界；token 始终由数据层保留在内存。
+  final AuthenticationGateway authenticationGateway;
+
+  /// App 登录及服务端书源同步服务。
+  final RemoteBookSourceSyncService remoteBookSourceSyncService;
+
+  /// 书架与阅读历史列表/网格模式的持久化偏好服务。
+  final BookshelfLayoutPreferences bookshelfLayoutPreferences;
 
   /// 书源 JSON 导入业务动作。
   final ImportBookSourcesUseCase importBookSources;
@@ -454,6 +565,9 @@ final class AppDependencies {
 
   /// 恢复最后阅读位置的业务动作。
   final RestoreReadingProgressUseCase restoreReadingProgress;
+
+  /// 首次成功阅读后记录历史快照的业务动作。
+  final RecordReadingHistoryUseCase recordReadingHistory;
 
   /// 从稳定正文选区创建用户高亮或下划线的业务动作。
   final SaveBookContentProcessUseCase saveBookContentProcess;

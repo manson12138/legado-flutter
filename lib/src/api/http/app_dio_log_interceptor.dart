@@ -23,7 +23,10 @@ final class AppDioLogInterceptor extends Interceptor {
     'access_token',
     'refresh_token',
     'password',
+    'passwordencrypted',
     'passwd',
+    'username',
+    'publickey',
     'secret',
     'api_key',
     'apikey',
@@ -54,7 +57,7 @@ final class AppDioLogInterceptor extends Interceptor {
           'maxRedirects=${options.maxRedirects}\n'
           'responseType=${options.responseType.name}\n'
           'headers=${isBookSourceQrRequest ? _formatRequestHeaderSummary(options.headers) : _formatJson(_sanitizeMap(options.headers))}\n'
-          'body=${isBookSourceQrRequest ? _formatBodySummary(options.data, options.contentType) : _formatRequestBody(options.data, options.contentType)}',
+          'body=${isBookSourceQrRequest ? _formatBodySummary(options.data, options.contentType) : _isAuthenticationPayloadRequest(options) ? '<redacted authentication body>' : _formatRequestBody(options.data, options.contentType)}',
     );
     handler.next(options);
   }
@@ -80,7 +83,7 @@ final class AppDioLogInterceptor extends Interceptor {
           'redirectCount=${response.redirects.length}\n'
           'contentType=${response.headers.value('content-type') ?? 'none'}\n'
           'headers=${isBookSourceQrRequest ? _formatResponseHeaderSummary(response.headers.map) : _formatJson(_sanitizeResponseHeaders(response.headers.map))}\n'
-          'body=${isBookSourceQrRequest ? _formatBodySummary(response.data, response.headers.value('content-type')) : _formatResponseBody(response.data, response.headers.value('content-type'))}',
+          'body=${isBookSourceQrRequest ? _formatBodySummary(response.data, response.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response.data, response.headers.value('content-type'))}',
     );
     handler.next(response);
   }
@@ -117,7 +120,7 @@ final class AppDioLogInterceptor extends Interceptor {
           'maxRedirects=${request.maxRedirects}\n'
           'redirectCount=${response?.redirects.length ?? 0}\n'
           'responseHeaders=${isBookSourceQrRequest ? _formatResponseHeaderSummary(response?.headers.map ?? const <String, List<String>>{}) : _formatJson(_sanitizeResponseHeaders(response?.headers.map ?? const <String, List<String>>{}))}\n'
-          'responseBody=${isBookSourceQrRequest ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
+          'responseBody=${isBookSourceQrRequest ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
       // 【扫码诊断日志】扫码请求不附加可能包含目标地址的原始异常文本。
       error: isBookSourceQrRequest ? null : transportError ?? error,
       stackTrace: error.stackTrace,
@@ -128,6 +131,16 @@ final class AppDioLogInterceptor extends Interceptor {
   /// 【扫码诊断日志】判断请求是否属于二维码添加书源业务。
   bool _isBookSourceQrRequest(RequestOptions request) {
     return request.extra[networkRequestLogContextExtraKey] == bookSourceQrScanLogTag;
+  }
+
+  /// 判断是否为携带账户凭据或公钥的认证请求；这类请求的正文禁止输出。
+  bool _isAuthenticationPayloadRequest(RequestOptions request) {
+    final String path = request.uri.path;
+    return path == '/api/v1/auth/password-key' ||
+        path == '/api/v1/auth/login' ||
+        path == '/api/v1/auth/register' ||
+        path == '/api/v1/auth/refresh' ||
+        path == '/api/v1/auth/logout';
   }
 
   /// 【扫码诊断日志】根据业务上下文选择稳定的 Logcat Tag。
