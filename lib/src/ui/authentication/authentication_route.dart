@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../domain/model/app_account.dart';
-import '../component/app_scaffold.dart';
+import '../components/app_scaffold.dart';
 import 'authentication_view_model.dart';
 
 /// 登录、注册和已登录账号资料的统一入口。
