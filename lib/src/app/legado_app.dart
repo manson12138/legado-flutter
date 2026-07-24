@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../domain/model/app_account.dart';
 import '../ui/theme/app_theme.dart';
 import '../ui/authentication/authentication_route.dart';
 import 'app_dependencies.dart';
@@ -29,6 +30,9 @@ final class LegadoApp extends StatefulWidget {
 
 /// 保存当前会话主题模式，并把修改能力向“我的”页面传递。
 final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver {
+  /// 写死的管理员账号；该账号进入主界面后不执行 App 准入或版本检查。
+  static const String _administratorUsername = 'admin';
+
   /// 当前主题模式监听器，首次启动默认跟随系统，并向已保留的一级页面同步变化。
   final ValueNotifier<ThemeMode> _themeModeNotifier = ValueNotifier<ThemeMode>(
     ThemeMode.system,
@@ -138,24 +142,33 @@ final class _LegadoAppState extends State<LegadoApp> with WidgetsBindingObserver
 
   /// 会话恢复或用户登录成功后，才异步启动主界面所需的书源和下载后台工作。
   void _onAuthenticationSessionChanged() {
-    if (widget.dependencies.authenticationGateway.session.value == null ||
+    final AppAuthenticationSession? session =
+        widget.dependencies.authenticationGateway.session.value;
+    if (session == null ||
         _hasStartedMainBackgroundServices) {
       return;
     }
     _hasStartedMainBackgroundServices = true;
-    unawaited(_initializeMainBackgroundServices());
+    unawaited(_initializeMainBackgroundServices(session));
   }
 
   /// 串行导入内置书源并恢复下载队列，避免两项工作并发占用同一 SQLite 连接。
-  Future<void> _initializeMainBackgroundServices() async {
+  Future<void> _initializeMainBackgroundServices(
+    AppAuthenticationSession session,
+  ) async {
     try {
       await widget.dependencies.defaultBookSourceBootstrapper.importIfEmpty();
     } finally {
       await widget.dependencies.downloadCoordinator.start();
-      if (mounted) {
+      if (mounted && !_isAdministrator(session)) {
         widget.dependencies.appAccessCoordinator.start();
       }
     }
+  }
+
+  /// 仅用户名精确为 `admin` 的硬编码管理员账号跳过准入和版本检查。
+  bool _isAdministrator(AppAuthenticationSession session) {
+    return session.account.username == _administratorUsername;
   }
 
   /// 恢复或刷新持久化安全会话，并在完成前保持认证门覆盖业务页面。
