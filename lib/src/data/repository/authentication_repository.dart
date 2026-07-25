@@ -34,6 +34,10 @@ final class AuthenticationRepository implements AuthenticationGateway {
   DateTime? _refreshExpiresAt;
   /// 防止启动与前台恢复并发覆盖最新会话的任务。
   Future<void>? _restoreTask;
+  /// 已恢复本地会话后的后台远端校验任务；网络不能阻塞启动页，但同一会话只校验一次。
+  Future<void>? _restoredSessionValidationTask;
+  /// 每次替换或清除内存会话时递增，用于拒绝过期后台校验结果覆盖新登录。
+  int _sessionGeneration = 0;
   /// 内存中缓存的服务端公钥，应用退出即释放。
   RemotePasswordKey? _cachedPasswordKey;
   /// 当前公钥缓存的失效时间。
@@ -46,20 +50,23 @@ final class AuthenticationRepository implements AuthenticationGateway {
 
   @override
   Future<AppAuthenticationSession> login({required String username, required String password}) async {
-    _logger.info(tag: remoteAppApiLogTag, message: 'stage=login_started');
+    /// 用户主动开始新登录后，旧会话的后台校验不再允许回写安全存储或内存状态。
+    _sessionGeneration += 1;
+    _logger.info(tag: authenticationLogTag, message: 'stage=login_started');
     final RemoteAppLoginResult result = await _submitWithPasswordRetry(
       password,
       (String passwordEncrypted) => _api.loginWithProfile(username: username, passwordEncrypted: passwordEncrypted),
+      operation: 'login',
     );
     try {
       final AppAuthenticationSession session = _createSession(result.user, await _api.fetchAccountPermissions(result.accessToken));
       await _persistAndApply(result, session);
-      _logger.info(tag: remoteAppApiLogTag, message: 'stage=login_succeeded');
+      _logger.info(tag: authenticationLogTag, message: 'stage=login_succeeded');
       return session;
     } catch (error) {
       await _clearSession();
       _logger.warning(
-        tag: remoteAppApiLogTag,
+        tag: authenticationLogTag,
         message: 'stage=login_failed phase=permission_fetch',
         error: error,
       );
@@ -69,11 +76,23 @@ final class AuthenticationRepository implements AuthenticationGateway {
 
   @override
   Future<AppAccount> register({required String username, required String password, required String invitationCode}) async {
-    final RemoteAppUser user = await _submitWithPasswordRetry(
-      password,
-      (String passwordEncrypted) => _api.register(username: username, passwordEncrypted: passwordEncrypted, invitationCode: invitationCode),
-    );
-    return AppAccount(id: user.id, username: user.username, status: user.status);
+    _logger.info(tag: authenticationLogTag, message: 'stage=register_started');
+    try {
+      final RemoteAppUser user = await _submitWithPasswordRetry(
+        password,
+        (String passwordEncrypted) => _api.register(username: username, passwordEncrypted: passwordEncrypted, invitationCode: invitationCode),
+        operation: 'register',
+      );
+      _logger.info(tag: authenticationLogTag, message: 'stage=register_succeeded');
+      return AppAccount(id: user.id, username: user.username, status: user.status);
+    } catch (error) {
+      _logger.warning(
+        tag: authenticationLogTag,
+        message: 'stage=register_failed',
+        error: error,
+      );
+      rethrow;
+    }
   }
 
   @override
@@ -123,7 +142,7 @@ final class AuthenticationRepository implements AuthenticationGateway {
       try {
         await _api.logoutWithRefreshToken(refreshToken);
       } on Object catch (error) {
-        _logger.warning(tag: remoteAppApiLogTag, message: 'stage=session_logout_degraded', error: error);
+        _logger.warning(tag: authenticationLogTag, message: 'stage=session_logout_degraded', error: error);
       }
     }
     await _clearSession();
@@ -148,17 +167,102 @@ final class AuthenticationRepository implements AuthenticationGateway {
       _refreshToken = stored.refreshToken;
       _refreshExpiresAt = stored.refreshExpiresAt;
       _session.value = _sessionFromStored(stored);
-      if (!now.isBefore(stored.accessExpiresAt) || !now.isBefore(stored.refreshAfter)) {
-        await _refreshStoredToken(stored.refreshToken);
-      } else {
-        await _refreshRestoredPermissions(stored.accessToken);
-      }
+      _sessionGeneration += 1;
+      final int generation = _sessionGeneration;
+      /// 本地安全快照决定认证门是否放行；远端校验改在后台进行，避免网络超时遮住首屏。
+      _startRestoredSessionValidation(stored, generation);
     } on Object catch (error) {
       if (_isUnauthorized(error)) {
         await _clearSession();
         return;
       }
-      _logger.warning(tag: remoteAppApiLogTag, message: 'stage=session_restore_degraded reason=remote_unavailable', error: error);
+      _logger.warning(tag: authenticationLogTag, message: 'stage=session_restore_degraded reason=remote_unavailable', error: error);
+    }
+  }
+
+  /// 单飞校验已恢复快照；网络失败保留未过期会话，401 仅在会话仍为同一代时清除。
+  void _startRestoredSessionValidation(
+    StoredAuthenticationSession stored,
+    int generation,
+  ) {
+    if (_restoredSessionValidationTask != null) {
+      return;
+    }
+    final Future<void> task = _validateRestoredSession(stored, generation);
+    _restoredSessionValidationTask = task.whenComplete(() {
+      _restoredSessionValidationTask = null;
+    });
+  }
+
+  /// 刷新或校验本地会话对应的服务端状态，不允许旧任务覆盖用户之后建立的新会话。
+  Future<void> _validateRestoredSession(
+    StoredAuthenticationSession stored,
+    int generation,
+  ) async {
+    try {
+      final DateTime now = DateTime.now().toUtc();
+      if (!now.isBefore(stored.accessExpiresAt) ||
+          !now.isBefore(stored.refreshAfter)) {
+        final RemoteAppLoginResult result =
+            await _api.refreshLogin(stored.refreshToken);
+        final RemoteAppAccountPermissions permissions =
+            await _api.fetchAccountPermissions(result.accessToken);
+        if (_sessionGeneration != generation) {
+          return;
+        }
+        await _persistAndApply(result, _createSession(result.user, permissions));
+        _logger.info(
+          tag: authenticationLogTag,
+          message: 'stage=session_restored action=token_refreshed',
+        );
+        return;
+      }
+      final RemoteAppAccountPermissions permissions =
+          await _api.fetchAccountPermissions(stored.accessToken);
+      if (_sessionGeneration != generation) {
+        return;
+      }
+      final AppAuthenticationSession existing = _sessionFromStored(stored);
+      await _persistCurrent(
+        accessToken: stored.accessToken,
+        accessExpiresAt: stored.accessExpiresAt,
+        refreshAfter: stored.refreshAfter,
+        refreshToken: stored.refreshToken,
+        refreshExpiresAt: stored.refreshExpiresAt,
+        session: _createSession(
+          RemoteAppUser(
+            id: existing.account.id,
+            username: existing.account.username,
+            status: existing.account.status,
+          ),
+          permissions,
+        ),
+      );
+      if (_sessionGeneration != generation) {
+        return;
+      }
+      _session.value = _createSession(
+        RemoteAppUser(
+          id: existing.account.id,
+          username: existing.account.username,
+          status: existing.account.status,
+        ),
+        permissions,
+      );
+      _logger.info(
+        tag: authenticationLogTag,
+        message: 'stage=session_restored action=permissions_refreshed',
+      );
+    } on Object catch (error) {
+      if (_isUnauthorized(error) && _sessionGeneration == generation) {
+        await _clearSession();
+        return;
+      }
+      _logger.warning(
+        tag: authenticationLogTag,
+        message: 'stage=session_restore_degraded reason=remote_unavailable',
+        error: error,
+      );
     }
   }
 
@@ -167,7 +271,7 @@ final class AuthenticationRepository implements AuthenticationGateway {
     final RemoteAppLoginResult result = await _api.refreshLogin(refreshToken);
     final AppAuthenticationSession session = _createSession(result.user, await _api.fetchAccountPermissions(result.accessToken));
     await _persistAndApply(result, session);
-    _logger.info(tag: remoteAppApiLogTag, message: 'stage=session_restored action=token_refreshed');
+    _logger.info(tag: authenticationLogTag, message: 'stage=session_restored action=token_refreshed');
   }
 
   /// 未到刷新时刻时仅校验权限，避免不必要地换取 Token。
@@ -184,7 +288,7 @@ final class AuthenticationRepository implements AuthenticationGateway {
     );
     await _persistCurrent(accessToken: token, accessExpiresAt: accessExpiresAt, refreshAfter: refreshAfter, refreshToken: refreshToken, refreshExpiresAt: refreshExpiresAt, session: session);
     _session.value = session;
-    _logger.info(tag: remoteAppApiLogTag, message: 'stage=session_restored action=permissions_refreshed');
+    _logger.info(tag: authenticationLogTag, message: 'stage=session_restored action=permissions_refreshed');
   }
 
   /// 将新 Token、期限与会话完整写入安全存储后，再替换内存状态。
@@ -195,6 +299,7 @@ final class AuthenticationRepository implements AuthenticationGateway {
     _refreshAfter = result.refreshAfter;
     _refreshToken = result.refreshToken;
     _refreshExpiresAt = result.refreshExpiresAt;
+    _sessionGeneration += 1;
     _session.value = session;
   }
 
@@ -234,37 +339,42 @@ final class AuthenticationRepository implements AuthenticationGateway {
     _refreshAfter = null;
     _refreshToken = null;
     _refreshExpiresAt = null;
+    _sessionGeneration += 1;
     _session.value = null;
     try {
       await _sessionStore.clear();
     } on Object catch (error) {
-      _logger.warning(tag: remoteAppApiLogTag, message: 'stage=session_clear_degraded', error: error);
+      _logger.warning(tag: authenticationLogTag, message: 'stage=session_clear_degraded', error: error);
     }
   }
 
   /// 使用本次公钥加密并提交；只有后端明确的密钥失效码允许重新取钥和重试一次。
-  Future<T> _submitWithPasswordRetry<T>(String password, Future<T> Function(String passwordEncrypted) submit) async {
+  Future<T> _submitWithPasswordRetry<T>(
+    String password,
+    Future<T> Function(String passwordEncrypted) submit, {
+    required String operation,
+  }) async {
     _EncryptedPassword encryptedPassword = await _encryptPassword(password);
     try {
       return await submit(encryptedPassword.value);
     } catch (error) {
       if (!_api.isPasswordKeyInvalidError(error)) {
         _logger.warning(
-          tag: remoteAppApiLogTag,
-          message: 'stage=login_failed phase=credential_submit',
+          tag: authenticationLogTag,
+          message: 'stage=${operation}_failed phase=credential_submit',
           error: error,
         );
         rethrow;
       }
-      _logger.info(tag: remoteAppApiLogTag, message: 'stage=login_password_key_retry');
+      _logger.info(tag: authenticationLogTag, message: 'stage=${operation}_password_key_retry');
       _clearPasswordKeyIfMatches(encryptedPassword.keyId);
       encryptedPassword = await _encryptPassword(password);
       try {
         return await submit(encryptedPassword.value);
       } catch (retryError) {
         _logger.warning(
-          tag: remoteAppApiLogTag,
-          message: 'stage=login_failed phase=credential_submit_retry',
+          tag: authenticationLogTag,
+          message: 'stage=${operation}_failed phase=credential_submit_retry',
           error: retryError,
         );
         rethrow;
@@ -288,8 +398,8 @@ final class AuthenticationRepository implements AuthenticationGateway {
       rethrow;
     } catch (error) {
       _logger.warning(
-        tag: remoteAppApiLogTag,
-        message: 'stage=login_failed phase=password_encrypt',
+        tag: authenticationLogTag,
+        message: 'stage=authentication_failed phase=password_encrypt',
         error: error,
       );
       rethrow;
@@ -304,15 +414,15 @@ final class AuthenticationRepository implements AuthenticationGateway {
       return cachedPasswordKey;
     }
     try {
-      _logger.info(tag: remoteAppApiLogTag, message: 'stage=login_password_key_fetch_started');
+      _logger.info(tag: authenticationLogTag, message: 'stage=password_key_fetch_started');
       final RemotePasswordKey fetchedPasswordKey = await _api.fetchPasswordKey();
       _cachedPasswordKey = fetchedPasswordKey;
       _passwordKeyExpiresAt = DateTime.now().add(_passwordKeyCacheDuration);
       return fetchedPasswordKey;
     } catch (error) {
       _logger.warning(
-        tag: remoteAppApiLogTag,
-        message: 'stage=login_failed phase=password_key_fetch',
+        tag: authenticationLogTag,
+        message: 'stage=authentication_failed phase=password_key_fetch',
         error: error,
       );
       rethrow;

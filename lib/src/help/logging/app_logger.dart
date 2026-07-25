@@ -4,6 +4,12 @@ const String bookSourceQrScanLogTag = '[BOOK_SOURCE_QR_SCAN]';
 /// 普通应用日志在 Android Logcat 中使用的固定 Tag。
 const String appLogTag = 'LEGADO_APP';
 
+/// 应用启动、认证门恢复和主界面后台服务初始化使用的固定 Logcat Tag。
+const String appStartupLogTag = 'LEGADO_STARTUP';
+
+/// App 账号登录、注册及会话生命周期使用的固定 Logcat Tag；不得记录认证凭据。
+const String authenticationLogTag = 'LEGADO_AUTH';
+
 /// 页面路由跳转日志在 Android Logcat 中使用的固定 Tag。
 const String navigationLogTag = 'LEGADO_NAV';
 

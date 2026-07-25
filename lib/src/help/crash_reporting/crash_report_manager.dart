@@ -57,23 +57,20 @@ final class CrashReportManager {
 
   /// 创建并初始化应用支持目录中的独立崩溃报告目录。
   static Future<CrashReportManager> create({required int productId, required String versionName, required int versionCode, required String channel}) async {
-    final Directory supportDirectory = await getApplicationSupportDirectory();
-    final Directory directory = Directory(path_util.join(supportDirectory.path, 'crash-reports'));
-    if (!await directory.exists()) {
-      await directory.create(recursive: true);
-    }
-    return CrashReportManager._(directory: directory, productId: productId, versionName: versionName, versionCode: versionCode, channel: channel);
+    final CrashReportManager manager = CrashReportManager.deferred(productId: productId, versionName: versionName, versionCode: versionCode, channel: channel);
+    await manager.initialize();
+    return manager;
   }
 
-  CrashReportManager._({required Directory directory, required int productId, required String versionName, required int versionCode, required String channel})
-      : _directory = directory,
-        _productId = productId,
+  /// 创建可在首帧前使用的崩溃管理器；目录在 [initialize] 中异步准备。
+  CrashReportManager.deferred({required int productId, required String versionName, required int versionCode, required String channel})
+      : _productId = productId,
         _versionName = versionName,
         _versionCode = versionCode,
         _channel = channel;
 
   /// 崩溃报告目录。
-  final Directory _directory;
+  Directory? _directory;
   /// 后端产品标识。
   final int _productId;
   /// 当前语义版本名。
@@ -91,6 +88,19 @@ final class CrashReportManager {
   /// 最近一次相同异常的记录时间。
   DateTime? _lastOccurredAt;
 
+  /// 后台创建报告目录；目录失败时全局错误处理继续保持日志降级而不阻塞页面。
+  Future<void> initialize() async {
+    if (_directory != null) {
+      return;
+    }
+    final Directory supportDirectory = await getApplicationSupportDirectory();
+    final Directory directory = Directory(path_util.join(supportDirectory.path, 'crash-reports'));
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    _directory = directory;
+  }
+
   /// 注入专用网络上传能力；不保存 Token，Token 由调用方在每次上传时即时提供。
   void configureUploader(Future<CrashReportUploadReceipt> Function(Map<String, Object?> payload) uploader) {
     _uploader = uploader;
@@ -98,6 +108,9 @@ final class CrashReportManager {
 
   /// 尽力记录一次未捕获异常；写盘失败不再抛出，避免错误处理递归。
   void record({required String source, required Object error, required StackTrace stackTrace}) {
+    if (_directory == null) {
+      return;
+    }
     final DateTime occurredAt = DateTime.now().toUtc();
     final String exceptionType = error.runtimeType.toString();
     final String fingerprint = '$source|$exceptionType|${_sanitize(stackTrace.toString(), maximumLength: 800)}';
@@ -120,8 +133,12 @@ final class CrashReportManager {
 
   /// 按发生时间倒序读取全部可解析报告；损坏文件不会阻断其他报告展示。
   Future<List<CrashReportFile>> listReports() async {
+    final Directory? directory = _directory;
+    if (directory == null) {
+      return const <CrashReportFile>[];
+    }
     final List<CrashReportFile> reports = <CrashReportFile>[];
-    await for (final FileSystemEntity entity in _directory.list(followLinks: false)) {
+    await for (final FileSystemEntity entity in directory.list(followLinks: false)) {
       if (entity is! File || !entity.path.endsWith('.json')) {
         continue;
       }
@@ -183,8 +200,12 @@ final class CrashReportManager {
 
   /// 删除目录内所有报告；调用方必须在 UI 层完成用户确认。
   Future<void> deleteAllReports() async {
+    final Directory? directory = _directory;
+    if (directory == null) {
+      return;
+    }
     await _enqueue(() async {
-      await for (final FileSystemEntity entity in _directory.list(followLinks: false)) {
+      await for (final FileSystemEntity entity in directory.list(followLinks: false)) {
         if (entity is File && entity.path.endsWith('.json')) {
           await entity.delete();
         }
@@ -222,7 +243,11 @@ final class CrashReportManager {
       encoded = jsonEncode(payload);
     }
     final String fileName = file == null ? 'crash-${payload['occurredAt']}-${payload['reportId']}.json'.replaceAll(':', '-') : path_util.basename(file.path);
-    final File target = file ?? File(path_util.join(_directory.path, fileName));
+    final Directory? directory = _directory;
+    if (directory == null) {
+      return;
+    }
+    final File target = file ?? File(path_util.join(directory.path, fileName));
     final File temporary = File('${target.path}.tmp');
     await temporary.writeAsString(encoded, flush: true);
     if (await target.exists()) {
@@ -270,7 +295,7 @@ final class CrashReportManager {
 
   /// 对异常文本做凭据、URL 查询、路径和长度脱敏。
   String _sanitize(String value, {required int maximumLength}) {
-    String sanitized = value.replaceAllMapped(RegExp(r'(?i)(authorization|cookie|token|password|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+'), (Match match) => '${match.group(1)}=[REDACTED]');
+    String sanitized = value.replaceAllMapped(RegExp(r'(authorization|cookie|token|password|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+', caseSensitive: false), (Match match) => '${match.group(1)}=[REDACTED]');
     sanitized = sanitized.replaceAllMapped(RegExp(r'https?://[^\s?]+\?[^\s]+'), (Match match) => '${match.group(0)?.split('?').first}?[QUERY_REDACTED]');
     sanitized = sanitized.replaceAll(RegExp(r'([A-Za-z]:\\|/)(?:[^\s/\\]+[\\/])+'), '[PATH_REDACTED]/');
     sanitized = sanitized.replaceAll(RegExp(r'\s+'), ' ').trim();

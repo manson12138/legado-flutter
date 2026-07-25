@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:ui' show FlutterView;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../domain/model/app_account.dart';
+import '../../help/logging/app_logger.dart';
 import '../components/app_scaffold.dart';
 import 'authentication_view_model.dart';
 
@@ -11,6 +16,7 @@ final class AuthenticationRoute extends StatefulWidget {
   const AuthenticationRoute({
     required this.dependencies,
     this.embedded = false,
+    this.inputEnabled = true,
     super.key,
   });
 
@@ -20,13 +26,17 @@ final class AuthenticationRoute extends StatefulWidget {
   /// 是否作为根部认证门展示，嵌入时不允许返回业务路由。
   final bool embedded;
 
+  /// 根部启动页完成认证输入就绪前为 `false`，此时表单不可获得焦点或提交。
+  final bool inputEnabled;
+
   /// 创建认证入口状态。
   @override
   State<AuthenticationRoute> createState() => _AuthenticationRouteState();
 }
 
 /// 管理表单控制器、焦点和密码可见性的认证入口状态。
-final class _AuthenticationRouteState extends State<AuthenticationRoute> {
+final class _AuthenticationRouteState extends State<AuthenticationRoute>
+    with WidgetsBindingObserver {
   /// 登录与注册共用的账号输入控制器。
   final TextEditingController _usernameController = TextEditingController();
 
@@ -65,16 +75,33 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
   /// 确认密码是否以明文显示。
   bool _isConfirmPasswordVisible = false;
 
+  /// 上一次已记录的软键盘可见性，避免同一状态的窗口度量变化重复写入日志。
+  bool? _lastKeyboardVisible;
+
+  /// 首次获取焦点后用于补发键盘请求的单次计时器，避免系统输入法尚未响应时首击无键盘。
+  Timer? _keyboardFallbackTimer;
+
   /// 初始化认证 ViewModel，避免在 build 中重复订阅会话。
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _usernameFocusNode.addListener(_logInputFocusChanged);
+    _passwordFocusNode.addListener(_logInputFocusChanged);
+    _confirmPasswordFocusNode.addListener(_logInputFocusChanged);
+    _invitationCodeFocusNode.addListener(_logInputFocusChanged);
     _viewModel = AuthenticationViewModel(widget.dependencies.authenticationGateway);
   }
 
   /// 释放所有输入和焦点资源，避免路由销毁后继续持有页面对象。
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _usernameFocusNode.removeListener(_logInputFocusChanged);
+    _passwordFocusNode.removeListener(_logInputFocusChanged);
+    _confirmPasswordFocusNode.removeListener(_logInputFocusChanged);
+    _invitationCodeFocusNode.removeListener(_logInputFocusChanged);
+    _keyboardFallbackTimer?.cancel();
     _viewModel.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
@@ -85,6 +112,23 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
     _confirmPasswordFocusNode.dispose();
     _invitationCodeFocusNode.dispose();
     super.dispose();
+  }
+
+  /// 记录软键盘展示或隐藏，帮助定位输入框焦点与系统输入法之间的时序问题。
+  @override
+  void didChangeMetrics() {
+    final bool isKeyboardVisible =
+        WidgetsBinding.instance.platformDispatcher.views.any(
+      (FlutterView view) => view.viewInsets.bottom > 0,
+    );
+    if (_lastKeyboardVisible == isKeyboardVisible) {
+      return;
+    }
+    _lastKeyboardVisible = isKeyboardVisible;
+    widget.dependencies.logger.info(
+      tag: authenticationLogTag,
+      message: 'stage=keyboard_visibility_changed visible=$isKeyboardVisible',
+    );
   }
 
   /// 根据认证状态构建表单或账号资料，并在根部模式禁止返回。
@@ -99,7 +143,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
                   keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
+                      ScrollViewKeyboardDismissBehavior.manual,
                   children: <Widget>[
                     _buildBrand(context, state.session == null),
                     const SizedBox(height: 28),
@@ -147,6 +191,8 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
   /// 构建登录或注册表单，并避免在提交过程中触发重复请求。
   Widget _buildCredentials(BuildContext context, AuthenticationUiState state) {
     final bool isRegistering = state.formMode == AuthenticationFormMode.register;
+    /// 输入交互由启动页就绪状态和认证请求状态共同决定，避免冷启动期间建立过早的输入连接。
+    final bool isInputEnabled = widget.inputEnabled && !state.isSubmitting;
     return Form(
       key: _formKey,
       child: Column(
@@ -166,7 +212,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
               ),
             ],
             selected: <AuthenticationFormMode>{state.formMode},
-            onSelectionChanged: state.isSubmitting
+            onSelectionChanged: !isInputEnabled
                 ? null
                 : (Set<AuthenticationFormMode> selection) {
                     final AuthenticationFormMode? formMode =
@@ -186,11 +232,13 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
           TextFormField(
             controller: _usernameController,
             focusNode: _usernameFocusNode,
-            enabled: !state.isSubmitting,
+            enabled: isInputEnabled,
             autocorrect: false,
             enableSuggestions: false,
             textInputAction: TextInputAction.next,
             autofillHints: const <String>[AutofillHints.username],
+            onTap: () => _requestInputFocus(_usernameFocusNode),
+            onTapOutside: (_) => _dismissKeyboard(),
             decoration: const InputDecoration(
               labelText: '账号',
               prefixIcon: Icon(Icons.person_outline_rounded),
@@ -201,7 +249,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
           TextFormField(
             controller: _passwordController,
             focusNode: _passwordFocusNode,
-            enabled: !state.isSubmitting,
+            enabled: isInputEnabled,
             obscureText: !_isPasswordVisible,
             autocorrect: false,
             enableSuggestions: false,
@@ -209,6 +257,8 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
             autofillHints: isRegistering
                 ? const <String>[AutofillHints.newPassword]
                 : const <String>[AutofillHints.password],
+            onTap: () => _requestInputFocus(_passwordFocusNode),
+            onTapOutside: (_) => _dismissKeyboard(),
             decoration: InputDecoration(
               labelText: '密码',
               prefixIcon: const Icon(Icons.lock_outline_rounded),
@@ -238,12 +288,14 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
             TextFormField(
               controller: _confirmPasswordController,
               focusNode: _confirmPasswordFocusNode,
-              enabled: !state.isSubmitting,
+              enabled: isInputEnabled,
               obscureText: !_isConfirmPasswordVisible,
               autocorrect: false,
               enableSuggestions: false,
               textInputAction: TextInputAction.next,
               autofillHints: const <String>[AutofillHints.newPassword],
+              onTap: () => _requestInputFocus(_confirmPasswordFocusNode),
+              onTapOutside: (_) => _dismissKeyboard(),
               decoration: InputDecoration(
                 labelText: '确认密码',
                 prefixIcon: const Icon(Icons.lock_reset_outlined),
@@ -267,11 +319,13 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
             TextFormField(
               controller: _invitationCodeController,
               focusNode: _invitationCodeFocusNode,
-              enabled: !state.isSubmitting,
+              enabled: isInputEnabled,
               autocorrect: false,
               enableSuggestions: false,
               textCapitalization: TextCapitalization.characters,
               textInputAction: TextInputAction.done,
+              onTap: () => _requestInputFocus(_invitationCodeFocusNode),
+              onTapOutside: (_) => _dismissKeyboard(),
               decoration: const InputDecoration(
                 labelText: '邀请码',
                 prefixIcon: Icon(Icons.key_outlined),
@@ -286,7 +340,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
           ],
           const SizedBox(height: 24),
           FilledButton(
-            onPressed: state.isSubmitting ? null : _submitCredentials,
+            onPressed: isInputEnabled ? _submitCredentials : null,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: state.isSubmitting
@@ -425,8 +479,134 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute> {
     return null;
   }
 
+  /// 确保触摸输入框时立即获得焦点，避免根部认证门的嵌入路由延迟软键盘展示。
+  void _requestInputFocus(FocusNode focusNode) {
+    if (!widget.inputEnabled) {
+      return;
+    }
+    widget.dependencies.logger.info(
+      tag: authenticationLogTag,
+      message: 'stage=input_tapped field=${_inputFieldName(focusNode)} has_focus=${focusNode.hasFocus}',
+    );
+    if (!focusNode.hasFocus) {
+      FocusScope.of(context).requestFocus(focusNode);
+    }
+  }
+
+  /// 点击认证表单外的非输入区域时释放当前焦点并收起系统软键盘。
+  void _dismissKeyboard() {
+    _keyboardFallbackTimer?.cancel();
+    final FocusNode? primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus == null || !primaryFocus.hasFocus) {
+      return;
+    }
+    widget.dependencies.logger.info(
+      tag: authenticationLogTag,
+      message: 'stage=keyboard_dismiss_requested',
+    );
+    primaryFocus.unfocus();
+  }
+
+  /// 记录认证输入框焦点变化，不包含文本内容或任何认证凭据。
+  void _logInputFocusChanged() {
+    final String fieldName = _focusedInputFieldName();
+    widget.dependencies.logger.info(
+      tag: authenticationLogTag,
+      message: 'stage=input_focus_changed field=$fieldName has_focus=${fieldName != 'none'}',
+    );
+    final FocusNode? focusedNode = _focusedInputNode();
+    if (focusedNode == null) {
+      _keyboardFallbackTimer?.cancel();
+      return;
+    }
+    _scheduleKeyboardFallback(focusedNode);
+  }
+
+  /// 焦点建立后等待 100ms；系统键盘仍未出现时才补发一次受控显示请求。
+  void _scheduleKeyboardFallback(FocusNode focusNode) {
+    _keyboardFallbackTimer?.cancel();
+    _keyboardFallbackTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted || !focusNode.hasFocus || _isKeyboardVisible()) {
+        return;
+      }
+      widget.dependencies.logger.info(
+        tag: authenticationLogTag,
+        message: 'stage=keyboard_fallback_requested field=${_inputFieldName(focusNode)}',
+      );
+      unawaited(
+        SystemChannels.textInput.invokeMethod<void>('TextInput.show').catchError(
+          (Object error) {
+            widget.dependencies.logger.warning(
+              tag: authenticationLogTag,
+              message: 'stage=keyboard_fallback_degraded',
+              error: error,
+            );
+          },
+        ),
+      );
+    });
+  }
+
+  /// 读取当前任一 Flutter 视图的键盘 Insets，避免可见键盘上重复发送显示请求。
+  bool _isKeyboardVisible() => WidgetsBinding.instance.platformDispatcher.views
+      .any((FlutterView view) => view.viewInsets.bottom > 0);
+
+  /// 返回当前拥有焦点的认证输入框；没有焦点时不安排键盘兜底任务。
+  FocusNode? _focusedInputNode() {
+    if (_usernameFocusNode.hasFocus) {
+      return _usernameFocusNode;
+    }
+    if (_passwordFocusNode.hasFocus) {
+      return _passwordFocusNode;
+    }
+    if (_confirmPasswordFocusNode.hasFocus) {
+      return _confirmPasswordFocusNode;
+    }
+    if (_invitationCodeFocusNode.hasFocus) {
+      return _invitationCodeFocusNode;
+    }
+    return null;
+  }
+
+  /// 返回当前触发监听的输入框；没有焦点时记录为 `none`，避免泄露输入文本。
+  String _focusedInputFieldName() {
+    if (_usernameFocusNode.hasFocus) {
+      return 'username';
+    }
+    if (_passwordFocusNode.hasFocus) {
+      return 'password';
+    }
+    if (_confirmPasswordFocusNode.hasFocus) {
+      return 'confirm_password';
+    }
+    if (_invitationCodeFocusNode.hasFocus) {
+      return 'invitation_code';
+    }
+    return 'none';
+  }
+
+  /// 将输入框焦点映射为固定诊断字段名，禁止把用户填写的内容写入日志。
+  String _inputFieldName(FocusNode focusNode) {
+    if (identical(focusNode, _usernameFocusNode)) {
+      return 'username';
+    }
+    if (identical(focusNode, _passwordFocusNode)) {
+      return 'password';
+    }
+    if (identical(focusNode, _confirmPasswordFocusNode)) {
+      return 'confirm_password';
+    }
+    if (identical(focusNode, _invitationCodeFocusNode)) {
+      return 'invitation_code';
+    }
+    return 'none';
+  }
+
   /// 提交已通过本地表单校验的登录或注册请求。
   Future<void> _submitCredentials() async {
+    if (!widget.inputEnabled) {
+      return;
+    }
     final FormState? formState = _formKey.currentState;
     if (formState == null || !formState.validate()) {
       return;

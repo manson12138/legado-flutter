@@ -4,7 +4,7 @@
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-07-24。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-07-25。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -98,7 +98,7 @@ lib/main.dart
 | 内置书源启动导入 | `lib/src/app/default_book_source_bootstrapper.dart` | 新库首次启动时从 Flutter assets 导入默认书源，复用书源导入 UseCase |
 | 路由常量 | `lib/src/app/app_route.dart` | 应用内稳定路由名 |
 | 路由与参数校验 | `lib/src/app/app_router.dart` | Route 创建、构造注入、无效参数错误页 |
-| 根 Widget | `lib/src/app/legado_app.dart` | 主题、初始路由、路由观察器、错误边界和认证门；启动阶段只恢复认证会话，登录成功后异步导入内置书源、恢复下载并启动准入轮询（硬编码 `admin` 账号跳过准入与版本检查） |
+| 根 Widget | `lib/src/app/legado_app.dart` | `LegadoBootstrapApp` 先展示轻量启动壳并在 Flutter 首帧后创建完整依赖；`LegadoApp` 负责主题、初始路由、路由观察器、错误边界和认证门。启动阶段只恢复认证会话，登录成功后异步导入内置书源、恢复下载并启动准入轮询（硬编码 `admin` 账号跳过准入与版本检查） |
 | 全局错误边界 | `lib/src/app/app_error_boundary.dart` | Flutter 框架与平台调度错误 |
 | 导航观察 | `lib/src/app/app_navigation_observer.dart` | 页面切换诊断日志 |
 
@@ -175,7 +175,7 @@ Route 管理生命周期、插件、导航、对话框和 Effect；Screen 保持
 | 详情和目录 | `ui/book_info/` | `BookDetailService`、`SaveBookChaptersUseCase`、`AddBookToBookshelfUseCase` | `ui/book/info/`、`model/webBook/` | [`m06/README.md`](./m06/README.md)、[`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md)、[`m06/02_search_source_ranking_and_detail_failover_plan.md`](./m06/02_search_source_ranking_and_detail_failover_plan.md) |
 | 书架 | `ui/bookshelf/` | `BookRepository`、`BookGroupRepository`、`BookshelfRefreshCoordinator` | `ui/main/bookshelf/` | [`m07/README.md`](./m07/README.md) |
 | 书架内历史阅读双页 | `ui/bookshelf/bookshelf_page_switcher.dart`、`reading_history_contract.dart`、`reading_history_view_model.dart`、`reading_history_screen.dart`；`ui/reader/` 写入历史并提供显式加入书架图标 | `ReadingHistoryDao` / `ReadingHistoryRepository` / `ReadingHistoryGateway` / `RecordReadingHistoryUseCase`；独立 `reading_history_books`/`reading_history_chapters` 快照，`books` 仍只表示书架 | Android `ReadRecord` 与书架/阅读入口 | [`m11/reading_history_and_bookshelf_pageview_design.md`](./m11/reading_history_and_bookshelf_pageview_design.md)、[`m11/bookshelf_history_fixed_header_interaction_plan.md`](./m11/bookshelf_history_fixed_header_interaction_plan.md)、[`m11/bookshelf_history_and_remote_source_sync_feedback_plan.md`](./m11/bookshelf_history_and_remote_source_sync_feedback_plan.md) |
-| App 登录注册与全局认证门 | `app/legado_app.dart`、`ui/authentication/`、`domain/gateway/authentication_gateway.dart`、`data/repository/authentication_repository.dart` | 安全会话恢复、全局认证阻断、RSA-OAEP 密码传输、权限读取与退出登录；未登录不会展示业务路由 | Android App 登录/注册相关入口 | [`m11/backend_api_integration/10_authentication_entry_and_full_flow_plan.md`](./m11/backend_api_integration/10_authentication_entry_and_full_flow_plan.md) |
+| App 登录注册、全局认证门与启动输入就绪 | `app/legado_app.dart`、`ui/authentication/`、`domain/gateway/authentication_gateway.dart`、`data/repository/authentication_repository.dart` | 安全会话恢复、全局认证阻断、RSA-OAEP 密码传输、权限读取与退出登录；启动页覆盖预挂载的认证根 Navigator，认证恢复并完成首帧时序后才开放输入交互；未登录不会展示业务路由，仍待双端真机验收 | Android App 登录/注册相关入口 | [`m11/backend_api_integration/10_authentication_entry_and_full_flow_plan.md`](./m11/backend_api_integration/10_authentication_entry_and_full_flow_plan.md)、[`m11/authentication_startup_splash_and_input_readiness_plan.md`](./m11/authentication_startup_splash_and_input_readiness_plan.md) |
 | 网络书正文阅读 | `ui/reader/` | `ReadBookCoordinator`、`ReaderTextProcessor`、`ReaderRepository`、`ReaderSearchState`、`ReaderDisplayConfig`；安全资源协议在 `domain/model/reader_content_markup.dart`，图片视图在 `ui/reader/reader_content_image.dart`；原生选区与标注 Span 在 `ui/reader/reader_selection_region.dart`，标注模型/持久化在 `domain/model/book_content_process.dart`、`data/dao/book_content_process_dao.dart` | `ui/book/read/`、`model/ReadBook.kt`、`help/book/ContentProcessor.kt`、`data/entities/BookContentProcess.kt` | [`m08/README.md`](./m08/README.md)、[`m08/01_reader_ui_rebuild_priority.md`](./m08/01_reader_ui_rebuild_priority.md)、[`CORE_READING_FLOW_GAP_PRIORITY.md`](./CORE_READING_FLOW_GAP_PRIORITY.md) |
 | 整书换源 | `ui/change_book_source/` | `ChangeSourceCoordinator`、`ChangeBookSourceUseCase`、`BookRepository.changeBookSource` | `ui/book/changesource/`、`ChangeSourceSearchUseCase.kt`、`ChangeBookSourceUseCase.kt` | [`m11/README.md`](./m11/README.md) |
 | 单章换源 | `ui/change_chapter_source/`（阅读器内 `ReaderChangeChapterSourceSheet`） | `ChangeChapterSourceCoordinator`、`chapter_title_matcher.dart`、`ReadBookCoordinator.invalidateChapter` | `ui/book/read/sheet/ChangeChapterSourceSheet.kt`、`BookHelp.getDurChapter`、`BookHelp.saveText` | [`m11/chapter_change_source/README.md`](./m11/chapter_change_source/README.md) |
@@ -426,9 +426,11 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 | iOS 样本与验收矩阵 | [`m10/03_ios_compatibility_report.md`](./m10/03_ios_compatibility_report.md)、[`m10/04_ios_acceptance_matrix.md`](./m10/04_ios_acceptance_matrix.md) |
 | iOS 启动白屏、数据库锁等待与认证输入焦点分析 | [`m10/05_ios_startup_white_screen_database_lock_analysis.md`](./m10/05_ios_startup_white_screen_database_lock_analysis.md)：启动期内置书源导入与离线下载恢复的 SQLite 竞争，以及认证页被重复会话恢复层覆盖的 iOS 输入焦点问题、修复范围与用户验收重点 |
 | M11 当前 Feature 与门禁记录 | [`m11/README.md`](./m11/README.md) |
-| App 后端 API 接入范围、HMAC 决策、P0 启动/过滤基础设施与后续实施顺序；2026-07-23 App API 文档的登录、日志、版本和更新契约差异 | [`m11/backend_api_integration/01_implementation_plan.md`](./m11/backend_api_integration/01_implementation_plan.md)、[`05_app_api_20260723_gap_analysis.md`](./m11/backend_api_integration/05_app_api_20260723_gap_analysis.md) |
+| App 后端 API 接入范围、HMAC 决策、P0 启动/过滤基础设施与后续实施顺序；2026-07-23 App API 文档的登录、日志、版本和更新契约差异；根目录 `app_build_secrets.json` 是 Android 构建脚本和 iOS Xcode Build Phase 共用的 Dart HMAC 编译参数来源，`tool/encode_app_build_secrets.dart` 与 `ios/scripts/xcode_backend_with_app_build_secrets.sh` 负责为 Xcode 转换并注入 `DART_DEFINES` | [`m11/backend_api_integration/01_implementation_plan.md`](./m11/backend_api_integration/01_implementation_plan.md)、[`05_app_api_20260723_gap_analysis.md`](./m11/backend_api_integration/05_app_api_20260723_gap_analysis.md) |
 | App 用户注册登录、RSA-OAEP 密码传输、邀请码、权限读取、内存会话与导出 API 契约缺口；安全持久化 Token、启动/前台自动恢复与双 Token 迁移设计 | [`m11/backend_api_integration/02_authentication_and_api_gap_plan.md`](./m11/backend_api_integration/02_authentication_and_api_gap_plan.md)、[`04_authentication_rsa_oaep_upgrade_design.md`](./m11/backend_api_integration/04_authentication_rsa_oaep_upgrade_design.md)、[`06_persistent_auth_session_design.md`](./m11/backend_api_integration/06_persistent_auth_session_design.md)、[`07_dual_token_session_migration_design.md`](./m11/backend_api_integration/07_dual_token_session_migration_design.md) |
 | App 准入轮询、拒绝阻断、Android 退出与升级弹窗的平台差异 | [`m11/backend_api_integration/03_app_access_and_update_plan.md`](./m11/backend_api_integration/03_app_access_and_update_plan.md) |
+| 启动前/首帧后/登录后初始化分层、认证会话恢复不阻塞首帧、文件能力延后与性能验收 | [`m11/backend_api_integration/09_startup_initialization_performance_design.md`](./m11/backend_api_integration/09_startup_initialization_performance_design.md) |
+| 首帧前控制台降级、首帧后切换文件日志与日志管理入口 | `help/logging/deferred_app_log_service.dart`；启动编排见 [`m11/backend_api_integration/09_startup_initialization_performance_design.md`](./m11/backend_api_integration/09_startup_initialization_performance_design.md) |
 | App 埋点候选事件、隐私边界、props 白名单与实施顺序 | [`m11/backend_api_integration/08_analytics_event_catalog_proposal.md`](./m11/backend_api_integration/08_analytics_event_catalog_proposal.md) |
 | 整书换源行为、映射与验收 | [`m11/change_source/01_android_behavior_inventory.md`](./m11/change_source/01_android_behavior_inventory.md)、[`02_mapping_and_design.md`](./m11/change_source/02_mapping_and_design.md)、[`03_acceptance_matrix.md`](./m11/change_source/03_acceptance_matrix.md) |
 | 功能是否纳入首批 | [`m00/04_feature_matrix.md`](./m00/04_feature_matrix.md) |

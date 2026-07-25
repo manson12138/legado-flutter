@@ -448,7 +448,14 @@ final class FileAppLogger implements AppLogger, AppLogManager {
     String prefix = '',
   }) {
     final List<String> lines = value.split('\n');
-    for (final String line in lines) {
+    /// 日志记录统一以换行结尾；拆分时忽略由该结尾产生的空续行，保留正文中的空行。
+    if (lines.length > 1 && lines.last.isEmpty) {
+      lines.removeLast();
+    }
+    for (int lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      /// 首行是日志事件标题；后续行统一标记为该事件的子项，便于在 Logcat 中识别层级。
+      final String linePrefix = lineIndex == 0 ? prefix : '${prefix}│ ';
+      final String line = lines[lineIndex];
       final List<String> chunks = _splitByCharacterCount(
         line,
         _adbChunkCharacters,
@@ -458,7 +465,7 @@ final class FileAppLogger implements AppLogger, AppLogManager {
         _androidLogWriter.write(
           level: level,
           tag: tag,
-          message: '$prefix$chunk',
+          message: '$linePrefix$chunk',
         );
       }
     }

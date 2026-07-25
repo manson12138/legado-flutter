@@ -19,9 +19,17 @@ cd /d "%SCRIPT_DIR%"
 rem Relative path of the APK produced by a Flutter release build.
 set "APK_PATH=build\app\outputs\flutter-apk\app-%BUILD_TYPE%.apk"
 set "APK_FULL_PATH=%SCRIPT_DIR%%APK_PATH%"
+set "APP_BUILD_SECRETS=%SCRIPT_DIR%app_build_secrets.json"
+
+if not exist "%APP_BUILD_SECRETS%" (
+    echo.
+    echo Missing shared build configuration: %APP_BUILD_SECRETS%
+    pause
+    exit /b 1
+)
 
 echo Building %BUILD_TYPE% APK...
-call flutter build apk --%BUILD_TYPE%
+call flutter build apk --%BUILD_TYPE% --dart-define-from-file="%APP_BUILD_SECRETS%"
 if errorlevel 1 (
 
     echo.

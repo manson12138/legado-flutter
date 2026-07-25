@@ -7,6 +7,7 @@ cd /d "%SCRIPT_DIR%"
 
 rem Relative path of the release APK produced by Flutter build.
 set "APK_PATH=build\app\outputs\flutter-apk\app-release.apk"
+set "APP_BUILD_SECRETS=%SCRIPT_DIR%app_build_secrets.json"
 
 rem Android application package name.
 set "PACKAGE_NAME=io.legado.flutter"
@@ -27,8 +28,13 @@ if not defined DEVICE_SERIAL (
 
 echo Detected connected device: %DEVICE_SERIAL%
 
+if not exist "%APP_BUILD_SECRETS%" (
+    echo Missing shared build configuration: %APP_BUILD_SECRETS%
+    exit /b 1
+)
+
 echo Building release APK...
-call flutter build apk --release
+call flutter build apk --release --dart-define-from-file="%APP_BUILD_SECRETS%"
 if errorlevel 1 exit /b 1
 
 echo Installing APK to device %DEVICE_SERIAL% (reinstall, keep data)...

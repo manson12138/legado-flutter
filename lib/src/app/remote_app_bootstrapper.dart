@@ -20,11 +20,12 @@ final class RemoteAppBootstrapper {
 
   /// 后台刷新服务端配置，网络或数据异常时保留本地规则。
   Future<RemoteAppBootstrapStatus?> refreshInBackground() async {
+    _logger.info(tag: appStartupLogTag, message: 'stage=bootstrap_started');
     RemoteAppBootstrapStatus status;
     try {
       status = await _repository.refreshBootstrapStatus();
     } catch (error) {
-      _logger.warning(tag: remoteAppApiLogTag, message: 'stage=bootstrap_degraded reason=remote_unavailable', error: error);
+      _logger.warning(tag: appStartupLogTag, message: 'stage=bootstrap_degraded reason=remote_unavailable', error: error);
       return null;
     }
     try {
@@ -32,9 +33,9 @@ final class RemoteAppBootstrapper {
       final Set<String> keywords = _readRules(values[0], 'word');
       final Set<String> domains = _readRules(values[1], 'domain');
       await _adultContentGateway.replaceRemoteRules(keywords: keywords, domains: domains);
-      _logger.info(tag: remoteAppApiLogTag, message: 'stage=bootstrap_refreshed keywords=${keywords.length} domains=${domains.length}');
+      _logger.info(tag: appStartupLogTag, message: 'stage=bootstrap_refreshed keywords=${keywords.length} domains=${domains.length}');
     } catch (error) {
-      _logger.warning(tag: remoteAppApiLogTag, message: 'stage=filter_degraded reason=remote_unavailable', error: error);
+      _logger.warning(tag: appStartupLogTag, message: 'stage=filter_degraded reason=remote_unavailable', error: error);
     }
     return status;
   }

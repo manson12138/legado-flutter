@@ -346,7 +346,23 @@ final class AppDioLogInterceptor extends Interceptor {
     if (data is Iterable) {
       return _formatJson(_sanitizeValue(data));
     }
-    return _redactSensitiveText(data.toString());
+    return _formatTextBody(data.toString(), contentType);
+  }
+
+  /// 格式化文本正文；JSON 字符串会先解析、脱敏并缩进，其他文本只执行脱敏。
+  String _formatTextBody(String value, String? contentType) {
+    final String normalizedType = contentType?.toLowerCase() ?? '';
+    if (normalizedType.contains('json')) {
+      try {
+        final Object? decodedValue = jsonDecode(value);
+        if (decodedValue is Map || decodedValue is List) {
+          return _formatJson(_sanitizeValue(decodedValue));
+        }
+      } on FormatException {
+        /// 服务器声明 JSON 但正文无效时保留脱敏文本，不能因日志格式化影响响应处理。
+      }
+    }
+    return _redactSensitiveText(value);
   }
 
   /// 文本媒体类型使用 UTF-8 完整解码，其他媒体类型返回稳定二进制摘要。

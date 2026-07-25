@@ -3,12 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'src/app/app_dependencies.dart';
 import 'src/app/app_error_boundary.dart';
 import 'src/app/legado_app.dart';
 import 'src/help/logging/file_app_logger.dart';
 import 'src/help/logging/app_logger.dart';
 import 'src/help/logging/console_app_logger.dart';
+import 'src/help/logging/deferred_app_log_service.dart';
 import 'src/help/media/app_media_directories.dart';
 import 'src/help/crash_reporting/crash_report_manager.dart';
 import 'src/api/remote_app/remote_app_service_config.dart';
@@ -24,44 +24,98 @@ void main() {
 
   runZonedGuarded<Future<void>>(
     () async {
+      activeLogger.info(tag: appStartupLogTag, message: 'stage=main_started');
       WidgetsFlutterBinding.ensureInitialized();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       // App 固定竖屏，不支持横屏；阅读器可以按单书配置临时切换，退出阅读器后会自行恢复本设置。
-      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
+      /// 固定方向请求无需阻塞 Flutter 首帧；阅读器仍会在进入和退出时自行覆盖及恢复方向。
+      unawaited(
+        SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]).catchError((Object error) {
+          activeLogger.warning(
+            tag: appStartupLogTag,
+            message: 'stage=preferred_orientation_degraded',
+            error: error,
+          );
+        }),
+      );
 
       /// 默认日志器写入应用私有沙盒，并同时向设置页提供日志管理能力。
-      final FileAppLogger fileLogger = await FileAppLogger.create();
-      activeLogger = fileLogger;
+      final DeferredAppLogService deferredLogService = DeferredAppLogService();
+      activeLogger = deferredLogService;
       /// 远端服务与崩溃报告共享同一组构建版本配置，避免上报版本漂移。
       final RemoteAppServiceConfig remoteAppConfig = RemoteAppServiceConfig.fromEnvironment();
-      final CrashReportManager crashReportManager = await CrashReportManager.create(productId: remoteAppConfig.productId, versionName: remoteAppConfig.appVersionName, versionCode: remoteAppConfig.appVersionCode, channel: remoteAppConfig.channel);
+      final CrashReportManager crashReportManager = CrashReportManager.deferred(productId: remoteAppConfig.productId, versionName: remoteAppConfig.appVersionName, versionCode: remoteAppConfig.appVersionCode, channel: remoteAppConfig.channel);
       activeCrashReportManager = crashReportManager;
-      configureGlobalErrorHandling(fileLogger, crashReportManager);
+      configureGlobalErrorHandling(deferredLogService, crashReportManager);
 
-      /// 预建封面等本地媒体缓存目录，使封面渲染时可以同步判断本地是否已有缓存。
-      await AppMediaDirectories.instance.warmUp();
-
-      /// 应用级依赖容器，仅在组合根创建并向下传递。
-      final AppDependencies dependencies = AppDependencies.create(
-        logger: fileLogger,
-        logManager: fileLogger,
-        crashReportManager: crashReportManager,
-        remoteAppConfig: remoteAppConfig,
+      deferredLogService.info(tag: appStartupLogTag, message: 'stage=run_app');
+      /// 完整业务依赖在 Flutter 第一帧后由启动壳创建，避免原生启动页等待同步对象装配。
+      runApp(
+        LegadoBootstrapApp(
+          logger: deferredLogService,
+          logManager: deferredLogService,
+          crashReportManager: crashReportManager,
+          remoteAppConfig: remoteAppConfig,
+        ),
       );
-      fileLogger.info(message: '应用日志系统初始化完成');
-      runApp(LegadoApp(dependencies: dependencies));
+      /// 媒体目录仅在封面、下载等功能真正使用时才是必需条件，首帧后预热即可。
+      unawaited(_initializeDeferredFileServices(deferredLogService, crashReportManager));
+      unawaited(_warmUpMediaDirectories(deferredLogService));
     },
     (Object error, StackTrace stackTrace) {
       activeCrashReportManager?.record(source: 'zone', error: error, stackTrace: stackTrace);
       // 启动前失败无法保证报告目录可用，后备日志器仍保留原有职责。
       activeLogger.fatal(
+        tag: appStartupLogTag,
         message: '应用启动或未捕获异步任务失败',
         error: error,
         stackTrace: stackTrace,
       );
     },
   );
+}
+
+/// 在首帧后初始化文件日志和崩溃目录；任一步失败都保持控制台日志降级而不影响界面。
+Future<void> _initializeDeferredFileServices(
+  DeferredAppLogService logService,
+  CrashReportManager crashReportManager,
+) async {
+  try {
+    final FileAppLogger fileLogger = await FileAppLogger.create();
+    logService.activate(fileLogger);
+    fileLogger.info(tag: appStartupLogTag, message: 'stage=file_logger_ready');
+  } on Object catch (error) {
+    logService.warning(
+      tag: appStartupLogTag,
+      message: 'stage=file_logger_degraded',
+      error: error,
+    );
+  }
+  try {
+    await crashReportManager.initialize();
+    logService.info(tag: appStartupLogTag, message: 'stage=crash_reporting_ready');
+  } on Object catch (error) {
+    logService.warning(
+      tag: appStartupLogTag,
+      message: 'stage=crash_reporting_degraded',
+      error: error,
+    );
+  }
+}
+
+/// 在首帧后尽力预建可再生媒体目录；失败时由具体调用方的按需初始化继续兜底。
+Future<void> _warmUpMediaDirectories(AppLogger logger) async {
+  try {
+    await AppMediaDirectories.instance.warmUp();
+    logger.info(tag: appStartupLogTag, message: 'stage=media_directories_ready');
+  } on Object catch (error) {
+    logger.warning(
+      tag: appStartupLogTag,
+      message: 'stage=media_directories_warm_up_degraded',
+      error: error,
+    );
+  }
 }

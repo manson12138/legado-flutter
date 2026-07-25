@@ -45,8 +45,23 @@ final class AppMediaDirectories {
   /// 已解析的下载中间态目录绝对路径。
   String? _stagingPath;
 
+  /// 同一进程内唯一的目录预建任务，避免首帧预热和页面按需访问重复执行文件 I/O。
+  Future<void>? _warmUpTask;
+
   /// 预建全部分类目录和中间态目录；应用启动阶段调用一次即可。
-  Future<void> warmUp() async {
+  Future<void> warmUp() {
+    final Future<void>? existingTask = _warmUpTask;
+    if (existingTask != null) {
+      return existingTask;
+    }
+    final Future<void> task = _performWarmUp();
+    _warmUpTask = task;
+    return task;
+  }
+
+  /// 执行唯一一次目录解析和创建；失败后允许下一次真实使用重新尝试。
+  Future<void> _performWarmUp() async {
+    try {
     /// 系统缓存根目录，存储紧张时允许被系统回收。
     final Directory cacheRoot = await getApplicationCacheDirectory();
     /// 本地媒体缓存统一挂在 media 子目录下，避免和系统或其他插件缓存混放。
@@ -61,6 +76,10 @@ final class AppMediaDirectories {
     final String stagingPath = path_util.join(tempRoot.path, 'media_staging');
     await Directory(stagingPath).create(recursive: true);
     _stagingPath = stagingPath;
+    } on Object {
+      _warmUpTask = null;
+      rethrow;
+    }
   }
 
   /// 同步返回已预建的分类目录路径；[warmUp] 完成前恒为 null。

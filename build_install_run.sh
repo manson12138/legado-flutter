@@ -11,6 +11,7 @@ readonly DEVICE_SERIAL="R3CN701H6WL"
 
 # Flutter release 构建生成的 APK 相对路径。
 readonly APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+readonly APP_BUILD_SECRETS="app_build_secrets.json"
 
 # Flutter Android 应用包名。
 readonly PACKAGE_NAME="io.legado.flutter"
@@ -21,8 +22,13 @@ readonly MAIN_ACTIVITY=".MainActivity"
 # 切换到 Flutter 工程根目录，避免调用脚本时的当前目录影响构建和 APK 路径。
 cd "${SCRIPT_DIR}"
 
+if [[ ! -f "${APP_BUILD_SECRETS}" ]]; then
+  printf 'Missing shared build configuration: %s\n' "${APP_BUILD_SECRETS}" >&2
+  exit 1
+fi
+
 printf '正在构建 release APK...\n'
-flutter build apk --release
+flutter build apk --release --dart-define-from-file="${APP_BUILD_SECRETS}"
 
 printf '正在覆盖安装 APK 到设备 %s...\n' "${DEVICE_SERIAL}"
 adb -s "${DEVICE_SERIAL}" install -r "${APK_PATH}"
