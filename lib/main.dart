@@ -45,8 +45,9 @@ void main() {
       /// 默认日志器写入应用私有沙盒，并同时向设置页提供日志管理能力。
       final DeferredAppLogService deferredLogService = DeferredAppLogService();
       activeLogger = deferredLogService;
-      /// 远端服务与崩溃报告共享同一组构建版本配置，避免上报版本漂移。
-      final RemoteAppServiceConfig remoteAppConfig = RemoteAppServiceConfig.fromEnvironment();
+      /// 远端服务、准入缓存与崩溃报告共享实际安装包版本，避免升级后继续恢复旧状态。
+      final RemoteAppServiceConfig remoteAppConfig =
+          await _resolveRemoteAppConfig(deferredLogService);
       final CrashReportManager crashReportManager = CrashReportManager.deferred(productId: remoteAppConfig.productId, versionName: remoteAppConfig.appVersionName, versionCode: remoteAppConfig.appVersionCode, channel: remoteAppConfig.channel);
       activeCrashReportManager = crashReportManager;
       configureGlobalErrorHandling(deferredLogService, crashReportManager);
@@ -76,6 +77,31 @@ void main() {
       );
     },
   );
+}
+
+/// 读取当前安装包版本；平台元数据异常时保留网络能力，但禁用旧准入缓存恢复。
+Future<RemoteAppServiceConfig> _resolveRemoteAppConfig(
+  AppLogger logger,
+) async {
+  try {
+    final RemoteAppServiceConfig config =
+        await RemoteAppServiceConfig.fromInstalledPackage();
+    if (!config.hasInstalledVersionIdentity) {
+      logger.warning(
+        tag: appStartupLogTag,
+        message: 'stage=installed_app_version_degraded reason=empty_version_name',
+      );
+    }
+    return config;
+  } on Object catch (error) {
+    logger.warning(
+      tag: appStartupLogTag,
+      message:
+          'stage=installed_app_version_degraded reason=platform_metadata_unavailable error_type=${error.runtimeType}',
+      error: error,
+    );
+    return RemoteAppServiceConfig.fromEnvironment();
+  }
 }
 
 /// 在首帧后初始化文件日志和崩溃目录；任一步失败都保持控制台日志降级而不影响界面。

@@ -2,7 +2,7 @@
 
 状态：`IN_PROGRESS`。本方案定义 Flutter App 与 `novel-admin-platform` App 端 API 的接入边界；P0 基础设施已有代码，但尚未获得 Android/iOS 验收结果。
 
-实施快照：P0 启动/过滤基础设施已开始实现。当前采用用户确认的“客户端 HMAC 仅作为防滥用门槛”方案；服务地址、产品 ID、语义版本名、构建号、channel 与 HMAC 密钥统一通过 `--dart-define` 配置，默认值仅对齐本地后端开发环境，线上构建必须覆盖 HMAC 密钥。2026-07-23 App API 导出对齐已补充 bootstrap 的 `versionName`、`latestVersion`/`downloadUrl`/`changelog` 解码及 Android HTTPS 外部升级入口；AI 未运行构建、测试或检查。
+实施快照：P0 启动/过滤基础设施已开始实现。当前采用用户确认的“客户端 HMAC 仅作为防滥用门槛”方案；服务地址、产品 ID、channel 与 HMAC 密钥通过 `--dart-define` 配置，Android/iOS 语义版本名在启动时从实际安装包元数据读取，构建号在可解析时同步读取。默认值仅用于平台元数据失败时维持网络请求，不能用于恢复旧准入缓存；线上构建必须覆盖 HMAC 密钥。2026-07-23 App API 导出对齐已补充 bootstrap 的 `versionName`、`latestVersion`/`downloadUrl`/`changelog` 解码及外部升级入口；AI 未运行构建、测试或检查。
 
 P1 实施快照：已接入 App 登录与服务端书源下载。会话 token 只驻留内存，应用重启后必须重新登录；下载结果不会直接写库，而是复用既有 JSON 预览、成人内容过滤、冲突策略和导入事务。
 

@@ -67,6 +67,29 @@ final class BookSearchCoordinator {
     return sources;
   }
 
+  /// 持续观察启用且可见的书源，供保活搜索页感知导入、同步和启停变化。
+  ///
+  /// 对应 Android `SearchViewModel.observeEnabledSources()` 与
+  /// `BookSourceDao.flowEnabled()`；已经开始的搜索仍由 [start] 固定自己的
+  /// 书源快照，本流只更新页面候选和下一次搜索使用的集合。
+  Stream<List<BookSource>> watchEnabledSources() {
+    return _sourceGateway.watchAll().asyncMap((List<BookSource> sources) async {
+      /// 当前数据库快照中仍处于启用状态的书源。
+      final List<BookSource> enabledSources = sources
+          .where((BookSource source) => source.enabled)
+          .toList(growable: false);
+      /// 按当前成人内容策略过滤后的搜索候选。
+      final List<BookSource> visibleSources = await _filterVisibleSources(
+        enabledSources,
+      );
+      _logger.debug(
+        tag: bookSearchSourceLogTag,
+        message: '启用书源观察流更新 sourceCount=${visibleSources.length}',
+      );
+      return visibleSources;
+    });
+  }
+
   /// 开始一次可取消的多书源搜索并返回运行句柄。
   Future<BookSearchRun> start({
     required String keyword,

@@ -98,7 +98,7 @@ final class AuthenticationRepository implements AuthenticationGateway {
         message: 'stage=register_failed',
         error: error,
       );
-      rethrow;
+      throw _mapRegistrationFailure(error);
     }
   }
 
@@ -456,6 +456,96 @@ final class AuthenticationRepository implements AuthenticationGateway {
         rethrow;
       }
     }
+  }
+
+  /// 将注册链路中的 API、网络和加密异常转换为不含敏感内容的领域失败。
+  AuthenticationFailureException _mapRegistrationFailure(Object error) {
+    if (error is AuthenticationFailureException) {
+      return error;
+    }
+    if (error is RemoteAppBusinessException) {
+      if (error.statusCode >= 500) {
+        return AuthenticationFailureException(
+          AuthenticationFailureKind.server,
+          businessCode: error.businessCode,
+          statusCode: error.statusCode,
+        );
+      }
+      if (error.statusCode == 429) {
+        return AuthenticationFailureException(
+          AuthenticationFailureKind.rateLimited,
+          businessCode: error.businessCode,
+          statusCode: error.statusCode,
+        );
+      }
+      /// API 层已经丢弃原始 message，这里只允许白名单分类进入领域层。
+      final AuthenticationFailureKind failureKind =
+          switch (error.failureKind) {
+        RemoteAppBusinessFailureKind.missingField =>
+          AuthenticationFailureKind.missingField,
+        RemoteAppBusinessFailureKind.invalidUsernameLength =>
+          AuthenticationFailureKind.invalidUsernameLength,
+        RemoteAppBusinessFailureKind.invalidUsernameCharacters =>
+          AuthenticationFailureKind.invalidUsernameCharacters,
+        RemoteAppBusinessFailureKind.invalidUsername =>
+          AuthenticationFailureKind.invalidUsername,
+        RemoteAppBusinessFailureKind.invalidPasswordLength =>
+          AuthenticationFailureKind.invalidPasswordLength,
+        RemoteAppBusinessFailureKind.invalidInvitationFormat =>
+          AuthenticationFailureKind.invalidInvitationFormat,
+        RemoteAppBusinessFailureKind.invalidInvitation =>
+          AuthenticationFailureKind.invalidInvitation,
+        RemoteAppBusinessFailureKind.expiredInvitation =>
+          AuthenticationFailureKind.expiredInvitation,
+        RemoteAppBusinessFailureKind.usedInvitation =>
+          AuthenticationFailureKind.usedInvitation,
+        RemoteAppBusinessFailureKind.invalidOrExpiredInvitation =>
+          AuthenticationFailureKind.invalidOrExpiredInvitation,
+        RemoteAppBusinessFailureKind.usernameConflict =>
+          AuthenticationFailureKind.usernameConflict,
+        RemoteAppBusinessFailureKind.invalidEncryptedPassword =>
+          AuthenticationFailureKind.passwordSecurity,
+        RemoteAppBusinessFailureKind.unknown =>
+          AuthenticationFailureKind.unknown,
+      };
+      return AuthenticationFailureException(
+        failureKind,
+        businessCode: error.businessCode,
+        statusCode: error.statusCode,
+      );
+    }
+    if (error is UnifiedHttpException) {
+      /// HTTP 分类保持平台无关，UI 不需要依赖 Dio 或原始 Socket 异常。
+      final AuthenticationFailureKind failureKind = switch (error.kind) {
+        HttpFailureKind.dns => AuthenticationFailureKind.dns,
+        HttpFailureKind.connection => AuthenticationFailureKind.connection,
+        HttpFailureKind.tls => AuthenticationFailureKind.tls,
+        HttpFailureKind.connectTimeout ||
+        HttpFailureKind.sendTimeout ||
+        HttpFailureKind.receiveTimeout ||
+        HttpFailureKind.totalTimeout => AuthenticationFailureKind.timeout,
+        HttpFailureKind.decode => AuthenticationFailureKind.response,
+        HttpFailureKind.httpStatus =>
+          (error.statusCode ?? 0) >= 500
+              ? AuthenticationFailureKind.server
+              : AuthenticationFailureKind.response,
+        HttpFailureKind.cancelled ||
+        HttpFailureKind.unsupportedOption ||
+        HttpFailureKind.unknown => AuthenticationFailureKind.unknown,
+      };
+      return AuthenticationFailureException(
+        failureKind,
+        statusCode: error.statusCode,
+      );
+    }
+    if (error is FormatException) {
+      return const AuthenticationFailureException(
+        AuthenticationFailureKind.passwordSecurity,
+      );
+    }
+    return const AuthenticationFailureException(
+      AuthenticationFailureKind.unknown,
+    );
   }
 
   /// 读取短期缓存的公钥，并将明文仅交给原生系统密码学实现以生成本次密文。

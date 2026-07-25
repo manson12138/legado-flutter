@@ -11,6 +11,9 @@ import UIKit
   /// 登录与注册密码加密通道；强引用保证 Flutter 引擎存活期间处理器持续有效。
   private var passwordEncryptionChannel: FlutterMethodChannel?
 
+  /// 当前 iOS 安装包语义版本名查询通道。
+  private var appPackageInfoChannel: FlutterMethodChannel?
+
   /// P1-05 下载后台通道；iOS 只提供有限后台执行窗口，不承诺无限持续下载。
   private var downloadBackgroundChannel: FlutterMethodChannel?
 
@@ -87,6 +90,7 @@ import UIKit
   /// - Parameter engineBridge: Flutter 提供的引擎桥接对象，用于取得插件注册表。
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    registerAppPackageInfoChannel(engineBridge)
     registerPasswordEncryptionChannel(engineBridge)
     /// 取得只服务 M08 窗口常亮能力的插件注册器；Xcode 26 下该 API 返回可空值。
     guard let registrar = engineBridge.pluginRegistry.registrar(
@@ -126,6 +130,36 @@ import UIKit
     }
     readerPlatformChannel = channel
     registerDownloadBackgroundChannel(engineBridge)
+  }
+
+  /// 注册实际安装包版本名通道；只读取 Info.plist，不持有监听器或业务状态。
+  ///
+  /// - Parameter engineBridge: Flutter 隐式引擎桥，用于取得独立插件注册器。
+  private func registerAppPackageInfoChannel(
+    _ engineBridge: FlutterImplicitEngineBridge
+  ) {
+    guard let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "AppPackageInfoBridge"
+    ) else {
+      return
+    }
+    /// 与 Dart AppPackageInfoService 共用的平台通道。
+    let channel = FlutterMethodChannel(
+      name: "io.legado.flutter/app_package_info",
+      binaryMessenger: registrar.messenger()
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "getVersionName" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      /// Xcode 从 Flutter versionName 写入的当前安装包语义版本。
+      let versionName = Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleShortVersionString"
+      ) as? String
+      result(versionName)
+    }
+    appPackageInfoChannel = channel
   }
 
   /// 注册使用系统 SecKey 的 RSA-OAEP-SHA256 加密通道；不记录明文、公钥或密文。

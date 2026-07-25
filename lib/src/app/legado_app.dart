@@ -575,19 +575,21 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     const ModalBarrier(dismissible: false, color: Color(0x66000000)),
     Center(child: AlertDialog(
       title: const Text('发现新版本'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text('已有新版本${state.versionName == null ? '' : ' ${state.versionName}'}可用。${changelog.isEmpty ? '' : '\n\n$changelog'}'),
-          if (_canOpenDownload(state)) ...<Widget>[
-            const SizedBox(height: 16),
-            _buildDownloadAddress(context, state.downloadUrl),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('已有新版本${state.versionName == null ? '' : ' ${state.versionName}'}可用。${changelog.isEmpty ? '' : '\n\n$changelog'}'),
+            if (_hasDownloadAddress(state.downloadUrl)) ...<Widget>[
+              const SizedBox(height: 16),
+              _buildDownloadAddress(context, state.downloadUrl),
+            ],
           ],
-        ],
+        ),
       ),
       actions: <Widget>[
-        if (_canOpenDownload(state)) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
+        if (_downloadUri(state.downloadUrl) != null) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
         TextButton(onPressed: () {
           widget.dependencies.logger.info(
             tag: appAccessCheckLogTag,
@@ -612,13 +614,13 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
         Text(state.message ?? '请更新到最新版本后再继续使用。', textAlign: TextAlign.center),
         if (state.versionName != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('推荐版本：${state.versionName}')),
         if (state.changelog case final String value when value.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(value, textAlign: TextAlign.center)),
-        if (_canOpenDownload(state)) Padding(
+        if (_hasDownloadAddress(state.downloadUrl)) Padding(
           padding: const EdgeInsets.only(top: 16),
           child: _buildDownloadAddress(context, state.downloadUrl),
         ),
         const SizedBox(height: 24),
-        if (_canOpenDownload(state)) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
-        if (_canOpenDownload(state)) const SizedBox(height: 8),
+        if (_downloadUri(state.downloadUrl) != null) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
+        if (_downloadUri(state.downloadUrl) != null) const SizedBox(height: 8),
         FilledButton.tonal(onPressed: () => widget.coordinator.refresh(trigger: 'blocking_page_retry'), child: const Text('重新检查')),
         const SizedBox(height: 8),
         if (defaultTargetPlatform == TargetPlatform.android) TextButton(onPressed: SystemNavigator.pop, child: const Text('退出应用')),
@@ -626,10 +628,21 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     ))),
   );
 
-  /// 仅允许打开服务端下发的合法 HTTPS 外部下载地址。
-  bool _canOpenDownload(AppAccessState state) {
-    final Uri? uri = Uri.tryParse(state.downloadUrl ?? '');
-    return uri != null && uri.hasAuthority && uri.scheme == 'https';
+  /// 非空下载地址始终展示并允许复制，不能因跳转校验失败而隐藏服务端原值。
+  bool _hasDownloadAddress(String? rawUrl) =>
+      rawUrl?.trim().isNotEmpty == true;
+
+  /// 只把浏览器可处理的 HTTP 或 HTTPS 下载地址交给系统外部应用。
+  Uri? _downloadUri(String? rawUrl) {
+    final Uri? uri = Uri.tryParse(rawUrl?.trim() ?? '');
+    if (uri == null || !uri.hasAuthority) {
+      return null;
+    }
+    final String scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') {
+      return null;
+    }
+    return uri;
   }
 
   /// 构建完整可见的下载地址；点击以外部浏览器打开，长按复制原始地址。
@@ -667,8 +680,13 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
 
   /// 委托系统浏览器处理升级地址；失败时保留当前阻断状态并反馈给用户。
   Future<void> _openDownload(String? rawUrl) async {
-    final Uri? uri = Uri.tryParse(rawUrl ?? '');
-    if (uri == null || !uri.hasAuthority || uri.scheme != 'https') {
+    final Uri? uri = _downloadUri(rawUrl);
+    if (uri == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('下载地址无效，请长按复制后手动打开')),
+        );
+      }
       return;
     }
     final bool launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -678,13 +696,13 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法打开升级地址，请稍后重试')));
   }
 
-  /// 将经 HTTPS 校验的下载地址复制到系统剪贴板，并反馈操作结果。
+  /// 将弹窗中完整展示的下载地址复制到系统剪贴板，并反馈操作结果。
   Future<void> _copyDownloadAddress(String rawUrl) async {
-    final Uri? uri = Uri.tryParse(rawUrl);
-    if (uri == null || !uri.hasAuthority || uri.scheme != 'https') {
+    final String address = rawUrl.trim();
+    if (address.isEmpty) {
       return;
     }
-    await Clipboard.setData(ClipboardData(text: rawUrl));
+    await Clipboard.setData(ClipboardData(text: address));
     if (!mounted) {
       return;
     }

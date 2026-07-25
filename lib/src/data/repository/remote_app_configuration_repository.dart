@@ -89,13 +89,14 @@ final class RemoteAppConfigurationRepository {
     }
   }
 
-  /// 判断缓存记录是否属于当前产品、版本、构建号和渠道。
+  /// 判断缓存记录是否属于当前产品、语义版本名和渠道。
+  ///
+  /// Android versionCode 与 iOS build number 可以独立变化，不参与跨平台升级缓存失效。
+  /// 未能读取实际安装包版本时直接判定不匹配，由调用方删除旧缓存并等待网络重新确认。
   bool _matchesCurrentApp(Map<Object?, Object?> value) {
-    final Object? versionCode = value['appVersionCode'];
-    return value['productId'] == _config.productId &&
+    return _config.hasInstalledVersionIdentity &&
+        value['productId'] == _config.productId &&
         value['appVersionName'] == _config.appVersionName &&
-        versionCode is num &&
-        versionCode.toInt() == _config.appVersionCode &&
         value['channel'] == _config.channel;
   }
 

@@ -151,12 +151,73 @@ final class AuthenticationViewModel {
       await action();
       _publish(message: successMessage);
       return true;
+    } on AuthenticationFailureException catch (error) {
+      _publish(
+        message: _registrationFailureMessage(error),
+        isError: true,
+      );
+      return false;
     } on FormatException {
       _publish(message: '输入内容不符合要求，请检查后重试', isError: true);
       return false;
     } catch (_) {
       _publish(message: '请求失败，请检查网络与输入后重试', isError: true);
       return false;
+    }
+  }
+
+  /// 将注册领域失败转换为固定中文反馈，未知响应只展示安全数字状态。
+  String _registrationFailureMessage(AuthenticationFailureException error) {
+    switch (error.kind) {
+      case AuthenticationFailureKind.missingField:
+        return '注册信息不完整，请填写账号、密码、确认密码和邀请码';
+      case AuthenticationFailureKind.invalidUsernameLength:
+        return '账号必须为 4～32 位';
+      case AuthenticationFailureKind.invalidUsernameCharacters:
+        return '账号只能包含英文字母、数字和下划线';
+      case AuthenticationFailureKind.invalidUsername:
+        return '账号需为 4～32 位，仅支持英文字母、数字和下划线';
+      case AuthenticationFailureKind.invalidPasswordLength:
+        return '密码必须为 8～72 位';
+      case AuthenticationFailureKind.invalidInvitationFormat:
+        return '邀请码格式不正确，请检查后重试';
+      case AuthenticationFailureKind.invalidInvitation:
+        return '邀请码无效，请获取新的邀请码';
+      case AuthenticationFailureKind.expiredInvitation:
+        return '邀请码已过期，请获取新的邀请码';
+      case AuthenticationFailureKind.usedInvitation:
+        return '邀请码已被使用，请获取新的邀请码';
+      case AuthenticationFailureKind.invalidOrExpiredInvitation:
+        return '邀请码无效或已过期，请获取新的邀请码';
+      case AuthenticationFailureKind.usernameConflict:
+        return '该用户名已被当前产品使用';
+      case AuthenticationFailureKind.passwordSecurity:
+        return '密码安全处理失败，请重试';
+      case AuthenticationFailureKind.dns:
+        return '无法解析服务器地址，请检查网络或 DNS 设置';
+      case AuthenticationFailureKind.connection:
+        return '无法连接服务器，请检查网络后重试';
+      case AuthenticationFailureKind.tls:
+        return '安全连接失败，请检查系统时间或网络环境';
+      case AuthenticationFailureKind.timeout:
+        return '请求超时，请稍后重试';
+      case AuthenticationFailureKind.rateLimited:
+        return '注册请求过于频繁，请稍后重试';
+      case AuthenticationFailureKind.server:
+        return '服务器内部错误，请稍后重试';
+      case AuthenticationFailureKind.response:
+        return '服务器响应异常，请稍后重试';
+      case AuthenticationFailureKind.unknown:
+        /// 仅展示数字业务码或 HTTP 状态，不展示服务端原始 message。
+        final int? businessCode = error.businessCode;
+        if (businessCode != null) {
+          return '注册失败（错误码：$businessCode），请稍后重试';
+        }
+        final int? statusCode = error.statusCode;
+        if (statusCode != null) {
+          return '注册失败（HTTP $statusCode），请稍后重试';
+        }
+        return '注册失败，请稍后重试';
     }
   }
 

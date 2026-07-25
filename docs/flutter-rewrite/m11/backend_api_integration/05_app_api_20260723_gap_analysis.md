@@ -29,7 +29,7 @@ Flutter 已对 `/api/v1/auth/password-key`、`/api/v1/auth/login`、`/api/v1/aut
 
 `GET /api/v1/app/bootstrap` 现在要求 `productId`、`versionName`、`versionCode` 和可选 `channel`。Flutter 已从集中构建配置发送语义版本名，不以 build number 替代。
 
-`bootstrap.update` 文档字段为 `latestVersion`、`latestVersionCode`、`downloadUrl`、`changelog`。Flutter 已统一 DTO、`AppAccessState` 和升级 UI：展示 `latestVersion` 与 `changelog`，Android 仅在 HTTPS `downloadUrl` 合法时显示系统浏览器跳转入口；iOS 保留受控提示，不能自动下载或安装。
+`bootstrap.update` 文档字段为 `latestVersion`、`latestVersionCode`、`downloadUrl`、`changelog`。Flutter 已统一 DTO、`AppAccessState` 和升级 UI：展示 `latestVersion`、`changelog` 与非空 `downloadUrl`，地址可长按复制；合法 HTTP/HTTPS 地址可点击交给系统外部浏览器，无法自动打开的地址仍保留可见和可复制，iOS 不自动下载或安装。
 
 同时需要与后端确认版本码规则：接口示例为 `20300`，当前 Flutter 默认值随本次 Schema 构建升为
 `6`。在确认前不能擅自转换既有 build number。

@@ -40,6 +40,9 @@ class MainActivity : FlutterActivity() {
     /** 登录与注册密码加密平台通道名称。 */
     private val passwordEncryptionChannel = "io.legado.flutter/password_encryption"
 
+    /** 当前 Android 安装包 versionName 查询通道名称。 */
+    private val appPackageInfoChannel = "io.legado.flutter/app_package_info"
+
     /** 当前 Activity 生命周期内是否已经申请过通知权限，避免状态刷新重复弹窗。 */
     private var notificationPermissionRequested = false
 
@@ -55,6 +58,7 @@ class MainActivity : FlutterActivity() {
         registerLoggingChannel(flutterEngine)
         registerDownloadBackgroundChannel(flutterEngine)
         registerPasswordEncryptionChannel(flutterEngine)
+        registerAppPackageInfoChannel(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             readerPlatformChannel,
@@ -98,6 +102,27 @@ class MainActivity : FlutterActivity() {
                 }
 
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** 注册实际安装包版本名通道；只读取 PackageManager，不持有监听器或业务状态。 */
+    private fun registerAppPackageInfoChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            appPackageInfoChannel,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "getVersionName") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            try {
+                /** Android 系统记录的当前已安装包信息。 */
+                val packageInfo = packageManager.getPackageInfo(packageName, 0)
+                result.success(packageInfo.versionName)
+            } catch (_: PackageManager.NameNotFoundException) {
+                /** 当前包理论上始终存在；异常时返回空值，让 Dart 禁止恢复旧准入缓存。 */
+                result.success(null)
             }
         }
     }

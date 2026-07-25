@@ -487,24 +487,178 @@ final class RemoteAppApi {
     /// 后端业务失败必须优先保留机器可识别业务码，供认证层严格决定是否允许单次重试。
     final int businessCode = (root['code'] as num).toInt();
     if (businessCode != 0) {
-      throw RemoteAppBusinessException(businessCode: businessCode, statusCode: response.statusCode);
+      throw RemoteAppBusinessException(
+        businessCode: businessCode,
+        statusCode: response.statusCode,
+        failureKind: _classifyBusinessFailure(
+          businessCode: businessCode,
+          statusCode: response.statusCode,
+          messageValue: root['message'],
+        ),
+      );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw UnifiedHttpException(HttpFailureKind.httpStatus, '远端 App 服务返回异常状态', statusCode: response.statusCode);
     }
     return root['data'];
   }
+
+  /// 将注册接口已确认的稳定文案转换为受控分类，不保存或向上透传任意服务端正文。
+  RemoteAppBusinessFailureKind _classifyBusinessFailure({
+    required int businessCode,
+    required int statusCode,
+    required Object? messageValue,
+  }) {
+    if (messageValue is! String) {
+      return RemoteAppBusinessFailureKind.unknown;
+    }
+    /// 只检查有限长度的错误标识，避免异常服务端响应造成无界字符串处理。
+    final String message = messageValue.trim();
+    if (message.isEmpty || message.length > 200) {
+      return RemoteAppBusinessFailureKind.unknown;
+    }
+    /// 英文兼容值用于当前已部署后端；中文值对应用户确认的新注册契约。
+    final String lowerMessage = message.toLowerCase();
+    if ((statusCode == 409 || businessCode == 40900) &&
+        (message == '该用户名已被当前产品使用' ||
+            lowerMessage ==
+                'username already exists for this product')) {
+      return RemoteAppBusinessFailureKind.usernameConflict;
+    }
+    if (statusCode != 400 || businessCode != 40000) {
+      return RemoteAppBusinessFailureKind.unknown;
+    }
+    if (lowerMessage == 'invalid encrypted password' ||
+        message == '加密密码无效') {
+      return RemoteAppBusinessFailureKind.invalidEncryptedPassword;
+    }
+    if (message == '缺少字段' ||
+        message == '缺少必填字段' ||
+        message == '注册信息缺少必填字段' ||
+        message.contains('缺少') && message.contains('字段') ||
+        lowerMessage.contains('field validation for') &&
+            lowerMessage.contains('required')) {
+      return RemoteAppBusinessFailureKind.missingField;
+    }
+    if (message == '用户名长度不合法' ||
+        message == '用户名必须为4～32位' ||
+        message == '用户名必须为 4～32 位') {
+      return RemoteAppBusinessFailureKind.invalidUsernameLength;
+    }
+    if (message.contains('用户名') &&
+        (message.contains('长度') ||
+            message.contains('4～32') ||
+            message.contains('4-32'))) {
+      return RemoteAppBusinessFailureKind.invalidUsernameLength;
+    }
+    if (message == '用户名字符不合法' ||
+        message == '用户名只能包含英文字母、数字和下划线') {
+      return RemoteAppBusinessFailureKind.invalidUsernameCharacters;
+    }
+    if (message.contains('用户名') &&
+        (message.contains('字符') ||
+            message.contains('字母') ||
+            message.contains('下划线'))) {
+      return RemoteAppBusinessFailureKind.invalidUsernameCharacters;
+    }
+    if (lowerMessage ==
+        'username must be 4-32 characters using letters, numbers, or underscore') {
+      return RemoteAppBusinessFailureKind.invalidUsername;
+    }
+    if (message == '密码长度不合法' ||
+        message == '密码必须为8～72位' ||
+        message == '密码必须为 8～72 位' ||
+        lowerMessage == 'password must be between 8 and 72 characters') {
+      return RemoteAppBusinessFailureKind.invalidPasswordLength;
+    }
+    if (message.contains('密码') &&
+        (message.contains('长度') ||
+            message.contains('8～72') ||
+            message.contains('8-72'))) {
+      return RemoteAppBusinessFailureKind.invalidPasswordLength;
+    }
+    if (message == '邀请码格式不合法' ||
+        message == '邀请码格式错误' ||
+        message.contains('邀请码') && message.contains('格式')) {
+      return RemoteAppBusinessFailureKind.invalidInvitationFormat;
+    }
+    if (message == '邀请码已使用' ||
+        message == '邀请码已被使用' ||
+        message.contains('邀请码') && message.contains('已使用')) {
+      return RemoteAppBusinessFailureKind.usedInvitation;
+    }
+    if (message == '邀请码已过期' ||
+        message.contains('邀请码') && message.contains('过期')) {
+      return RemoteAppBusinessFailureKind.expiredInvitation;
+    }
+    if (message == '邀请码无效' ||
+        message.contains('邀请码') && message.contains('无效')) {
+      return RemoteAppBusinessFailureKind.invalidInvitation;
+    }
+    if (lowerMessage == 'invalid or expired invitation code') {
+      return RemoteAppBusinessFailureKind.invalidOrExpiredInvitation;
+    }
+    return RemoteAppBusinessFailureKind.unknown;
+  }
 }
 
-/// 远端 App 的受控业务失败；仅保留状态和数字业务码，不保存服务端正文或敏感数据。
+/// 远端 App 业务失败的安全分类；不包含服务端原始正文。
+enum RemoteAppBusinessFailureKind {
+  /// 未进入白名单的业务失败。
+  unknown,
+
+  /// 请求缺少注册必填字段。
+  missingField,
+
+  /// 注册用户名长度不合法。
+  invalidUsernameLength,
+
+  /// 注册用户名包含不允许的字符。
+  invalidUsernameCharacters,
+
+  /// 旧后端无法细分长度和字符时返回的用户名规则失败。
+  invalidUsername,
+
+  /// 注册密码长度不合法。
+  invalidPasswordLength,
+
+  /// 邀请码格式不合法。
+  invalidInvitationFormat,
+
+  /// 邀请码不存在或不属于当前产品。
+  invalidInvitation,
+
+  /// 邀请码已经过期。
+  expiredInvitation,
+
+  /// 普通用户邀请码已经成功使用。
+  usedInvitation,
+
+  /// 旧后端无法细分无效和过期时返回的邀请码失败。
+  invalidOrExpiredInvitation,
+
+  /// 用户名在当前产品内重复。
+  usernameConflict,
+
+  /// 服务端无法解密密码密文。
+  invalidEncryptedPassword,
+}
+
+/// 远端 App 的受控业务失败；仅保留状态、数字业务码和白名单分类。
 final class RemoteAppBusinessException implements Exception {
   /// 创建不向 UI 暴露原始响应的业务异常。
-  const RemoteAppBusinessException({required this.businessCode, required this.statusCode});
+  const RemoteAppBusinessException({
+    required this.businessCode,
+    required this.statusCode,
+    required this.failureKind,
+  });
 
   /// 后端统一响应信封中的机器可识别业务码。
   final int businessCode;
   /// 本次响应的 HTTP 状态；仅供数据层的受控判定使用。
   final int statusCode;
+  /// 从稳定服务端标识转换出的安全失败分类。
+  final RemoteAppBusinessFailureKind failureKind;
 }
 
 /// 服务端书源游标批次的受控 DTO；items 仍由既有导入解码器进行完整校验。

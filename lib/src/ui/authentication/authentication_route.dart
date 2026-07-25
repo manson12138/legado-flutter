@@ -66,8 +66,15 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
   /// 表单校验与提交状态的锚点。
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
+  /// 认证表单滚动控制器；键盘弹出后用于保证当前输入框可见。
+  final ScrollController _formScrollController = ScrollController();
+
   /// 当前认证操作的业务状态。
   late final AuthenticationViewModel _viewModel;
+
+  /// 注册账号允许使用的 ASCII 字母、数字和下划线。
+  static final RegExp _registrationUsernamePattern =
+      RegExp(r'^[A-Za-z0-9_]+$');
 
   /// 登录密码是否以明文显示。
   bool _isPasswordVisible = false;
@@ -80,6 +87,9 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
 
   /// 首次获取焦点后用于补发键盘请求的单次计时器，避免系统输入法尚未响应时首击无键盘。
   Timer? _keyboardFallbackTimer;
+
+  /// 是否已经安排下一帧输入框可见性检查，避免键盘动画期间重复排队。
+  bool _isFocusVisibilityCheckScheduled = false;
 
   /// 初始化认证 ViewModel，避免在 build 中重复订阅会话。
   @override
@@ -107,6 +117,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _invitationCodeController.dispose();
+    _formScrollController.dispose();
     _usernameFocusNode.dispose();
     _passwordFocusNode.dispose();
     _confirmPasswordFocusNode.dispose();
@@ -121,6 +132,7 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
         WidgetsBinding.instance.platformDispatcher.views.any(
       (FlutterView view) => view.viewInsets.bottom > 0,
     );
+    _scheduleFocusedInputVisibility();
     if (_lastKeyboardVisible == isKeyboardVisible) {
       return;
     }
@@ -136,12 +148,22 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
   Widget build(BuildContext context) => ValueListenableBuilder<AuthenticationUiState>(
         valueListenable: _viewModel.state,
         builder: (BuildContext context, AuthenticationUiState state, Widget? child) {
+          /// 键盘显示时增加少量列表底部余量，让最后一个输入框和提交按钮不贴近键盘边缘。
+          final double formBottomPadding =
+              MediaQuery.viewInsetsOf(context).bottom > 0 ? 48 : 36;
           final Widget content = SafeArea(
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: ListView(
-                  padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
+                  controller: _formScrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    28,
+                    24,
+                    formBottomPadding,
+                  ),
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.manual,
                   children: <Widget>[
@@ -157,7 +179,13 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
             ),
           );
           if (widget.embedded) {
-            return PopScope(canPop: false, child: Material(child: content));
+            return PopScope(
+              canPop: false,
+              child: Scaffold(
+                resizeToAvoidBottomInset: true,
+                body: content,
+              ),
+            );
           }
           return AppScaffold(
             appBar: AppBar(title: const Text('账号与安全')),
@@ -239,11 +267,16 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
             autofillHints: const <String>[AutofillHints.username],
             onTap: () => _requestInputFocus(_usernameFocusNode),
             onTapOutside: (_) => _dismissKeyboard(),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: '账号',
-              prefixIcon: Icon(Icons.person_outline_rounded),
+              helperText: isRegistering
+                  ? '4～32 位，仅支持英文字母、数字和下划线'
+                  : null,
+              prefixIcon: const Icon(Icons.person_outline_rounded),
             ),
             validator: _validateUsername,
+            onFieldSubmitted: (_) =>
+                _moveInputFocus(_passwordFocusNode),
           ),
           const SizedBox(height: 12),
           TextFormField(
@@ -261,6 +294,9 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
             onTapOutside: (_) => _dismissKeyboard(),
             decoration: InputDecoration(
               labelText: '密码',
+              helperText: isRegistering
+                  ? '8～72 位；空格会作为密码内容保留'
+                  : null,
               prefixIcon: const Icon(Icons.lock_outline_rounded),
               suffixIcon: IconButton(
                 tooltip: _isPasswordVisible ? '隐藏密码' : '显示密码',
@@ -278,9 +314,11 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
             ),
             validator: _validatePassword,
             onFieldSubmitted: (_) {
-              if (!isRegistering) {
-                _submitCredentials();
+              if (isRegistering) {
+                _moveInputFocus(_confirmPasswordFocusNode);
+                return;
               }
+              _submitCredentials();
             },
           ),
           if (isRegistering) ...<Widget>[
@@ -314,6 +352,8 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
                 ),
               ),
               validator: _validateConfirmPassword,
+              onFieldSubmitted: (_) =>
+                  _moveInputFocus(_invitationCodeFocusNode),
             ),
             const SizedBox(height: 12),
             TextFormField(
@@ -328,6 +368,8 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
               onTapOutside: (_) => _dismissKeyboard(),
               decoration: const InputDecoration(
                 labelText: '邀请码',
+                helperText:
+                    '普通邀请码 5 分钟内限一人；App 管理员邀请码 1 天内不限人数',
                 prefixIcon: Icon(Icons.key_outlined),
               ),
               validator: _validateInvitationCode,
@@ -503,16 +545,41 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
 
   /// 校验账号输入，空白账号不会发送到认证接口。
   String? _validateUsername(String? value) {
-    if ((value ?? '').trim().isEmpty) {
+    /// 服务端会去除账号首尾空白，客户端使用同一标准化值完成注册校验。
+    final String username = (value ?? '').trim();
+    if (username.isEmpty) {
       return '请输入账号';
+    }
+    if (_viewModel.state.value.formMode !=
+        AuthenticationFormMode.register) {
+      return null;
+    }
+    /// 注册账号只允许 ASCII 字符，因此字符串长度与服务端约定的位数一致。
+    final int usernameLength = username.length;
+    if (usernameLength < 4 || usernameLength > 32) {
+      return '账号必须为 4～32 位';
+    }
+    if (!_registrationUsernamePattern.hasMatch(username)) {
+      return '账号只能包含英文字母、数字和下划线';
     }
     return null;
   }
 
-  /// 校验密码输入，避免将空密码提交给服务端。
+  /// 校验密码输入；注册时执行服务端确认的 8～72 位限制，登录不改变已有密码语义。
   String? _validatePassword(String? value) {
-    if ((value ?? '').isEmpty) {
+    /// 密码不得执行 trim，前后空格属于用户实际输入的密码内容。
+    final String password = value ?? '';
+    if (password.isEmpty) {
       return '请输入密码';
+    }
+    if (_viewModel.state.value.formMode !=
+        AuthenticationFormMode.register) {
+      return null;
+    }
+    /// 使用 Unicode 码点计数，避免 Dart UTF-16 代理对被错误算成两位。
+    final int passwordLength = password.runes.length;
+    if (passwordLength < 8 || passwordLength > 72) {
+      return '密码必须为 8～72 位';
     }
     return null;
   }
@@ -548,6 +615,16 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
     if (!focusNode.hasFocus) {
       FocusScope.of(context).requestFocus(focusNode);
     }
+    _scheduleFocusedInputVisibility();
+  }
+
+  /// 从软键盘“下一项”移动到目标输入框，并在键盘动画后保证目标区域可见。
+  void _moveInputFocus(FocusNode focusNode) {
+    if (!widget.inputEnabled) {
+      return;
+    }
+    FocusScope.of(context).requestFocus(focusNode);
+    _scheduleFocusedInputVisibility();
   }
 
   /// 点击认证表单外的非输入区域时释放当前焦点并收起系统软键盘。
@@ -577,6 +654,34 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
       return;
     }
     _scheduleKeyboardFallback(focusedNode);
+    _scheduleFocusedInputVisibility();
+  }
+
+  /// 合并同一帧的焦点与键盘尺寸变化，避免重复启动滚动动画。
+  void _scheduleFocusedInputVisibility() {
+    if (!mounted || _isFocusVisibilityCheckScheduled) {
+      return;
+    }
+    _isFocusVisibilityCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((Duration elapsed) {
+      _isFocusVisibilityCheckScheduled = false;
+      if (!mounted || !_isKeyboardVisible()) {
+        return;
+      }
+      final FocusNode? focusedNode = _focusedInputNode();
+      final BuildContext? focusedContext = focusedNode?.context;
+      if (focusedContext == null) {
+        return;
+      }
+      unawaited(
+        Scrollable.ensureVisible(
+          focusedContext,
+          alignment: 0.58,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    });
   }
 
   /// 焦点建立后等待 100ms；系统键盘仍未出现时才补发一次受控显示请求。

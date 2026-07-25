@@ -26,6 +26,10 @@ final class SearchViewModel {
        _searchPreferences = searchPreferences,
        _analyticsRecorder = analyticsRecorder,
        _logger = logger {
+    _bookSourceSubscription = _coordinator.watchEnabledSources().listen(
+      _applySourceSnapshot,
+      onError: _handleSourceStreamError,
+    );
     _adultContentRuleSubscription = _coordinator.adultContentRuleChanges.listen(
       (int _) => unawaited(_refreshSourcesAfterAdultContentRuleChange()),
     );
@@ -53,6 +57,8 @@ final class SearchViewModel {
   final StreamController<SearchEffect> _effectController = StreamController<SearchEffect>.broadcast();
   /// 当前搜索运行句柄。
   BookSearchRun? _run;
+  /// 启用书源变化订阅，使主页保活的搜索页无需重建即可更新候选。
+  StreamSubscription<List<BookSource>>? _bookSourceSubscription;
   /// 成人内容屏蔽规则变化监听，用于刷新保活页面中的书源和旧结果。
   StreamSubscription<int>? _adultContentRuleSubscription;
   /// 每次搜索递增的运行编号，用于拒绝旧回调污染新状态。
@@ -142,47 +148,86 @@ final class SearchViewModel {
     }
   }
 
-  /// 并行读取书源和历史，失败时保持页面可重试。
+  /// 读取搜索历史和匹配偏好；书源由独立观察流负责首次及后续加载。
   Future<void> _initialize() async {
-    /// 初始化书源读取代次；屏蔽规则变化后旧初始化结果不得覆盖新列表。
-    final int sourceLoadGeneration = ++_sourceLoadGeneration;
-    /// 【搜书诊断日志】初始化耗时计时器。
+    /// 【搜书诊断日志】辅助状态初始化耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
-    _logger.info(tag: bookSearchUiLogTag, message: '搜索页面初始化开始');
+    _logger.info(tag: bookSearchUiLogTag, message: '搜索页面辅助状态初始化开始');
     try {
-      /// 当前启用书源。
-      final List<BookSource> sources = await _coordinator.loadEnabledSources();
       /// 已保存历史。
       final List<String> history = await _historyGateway.load();
       /// 上次使用的结果匹配方式；不存在或无效值时保持默认模糊搜索。
       final String? savedMatchModeName = await _searchPreferences.readMatchModeName();
-      /// 初始化期间屏蔽规则是否保持不变。
-      final bool sourceSnapshotCurrent =
-          sourceLoadGeneration == _sourceLoadGeneration;
       _emit(
         _state.copyWith(
-          loadingSources: sourceSnapshotCurrent ? false : null,
-          sources: sourceSnapshotCurrent ? sources : null,
           history: history,
           matchMode: _matchModeFromName(savedMatchModeName),
         ),
       );
       _logger.info(
         tag: bookSearchUiLogTag,
-        message: '搜索页面初始化完成 sourceCount=${sources.length} '
+        message: '搜索页面辅助状态初始化完成 '
             'historyCount=${history.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
     } catch (error, stackTrace) {
       _logger.error(
         tag: bookSearchUiLogTag,
-        message: '搜索页面初始化失败 elapsedMs=${stopwatch.elapsedMilliseconds}',
+        message: '搜索页面辅助状态初始化失败 elapsedMs=${stopwatch.elapsedMilliseconds}',
         error: error,
         stackTrace: stackTrace,
       );
-      if (sourceLoadGeneration == _sourceLoadGeneration) {
-        _emit(_state.copyWith(loadingSources: false, errorMessage: '读取启用书源失败'));
-      }
+      _emit(_state.copyWith(errorMessage: '读取搜索历史或偏好失败'));
     }
+  }
+
+  /// 应用启用书源观察流的新快照，并清理已经失效的临时选择条件。
+  ///
+  /// 当前搜索运行继续使用启动时的固定书源集合；这里只影响选择面板和下一次搜索。
+  void _applySourceSnapshot(List<BookSource> sources) {
+    if (_stateController.isClosed) {
+      return;
+    }
+    /// 最新快照中可用于搜索的书源主键。
+    final Set<String> visibleUrls = sources
+        .map((BookSource source) => source.bookSourceUrl)
+        .toSet();
+    /// 移除已经删除、停用或被屏蔽的显式选择。
+    final Set<String> selectedUrls =
+        _state.selectedSourceUrls.intersection(visibleUrls);
+    /// 当前选中分组是否仍至少包含一个可用书源。
+    final String? selectedGroup = _state.selectedSourceGroup;
+    final bool clearSelectedGroup = selectedGroup != null &&
+        !sources.any(
+          (BookSource source) => _sourceHasGroup(source, selectedGroup),
+        );
+    _emit(
+      _state.copyWith(
+        loadingSources: false,
+        sources: sources,
+        selectedSourceUrls: selectedUrls,
+        clearSelectedSourceGroup: clearSelectedGroup,
+        clearError: _state.errorMessage == '读取启用书源失败',
+      ),
+    );
+  }
+
+  /// 将书源观察流失败转换为页面可恢复错误，保留最后一次成功快照。
+  void _handleSourceStreamError(Object error, StackTrace stackTrace) {
+    if (_stateController.isClosed) {
+      return;
+    }
+    _logger.error(
+      tag: bookSearchUiLogTag,
+      message: '搜索页监听启用书源失败',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    _emit(
+      _state.copyWith(
+        loadingSources: false,
+        errorMessage: '读取启用书源失败',
+      ),
+    );
   }
 
   /// 屏蔽开关或词库变化后取消旧搜索、清空旧结果并刷新可用书源快照。
@@ -651,6 +696,8 @@ final class SearchViewModel {
     _sourceLoadGeneration += 1;
     _generation += 1;
     _cancel(manual: false);
+    unawaited(_bookSourceSubscription?.cancel());
+    _bookSourceSubscription = null;
     unawaited(_adultContentRuleSubscription?.cancel());
     _adultContentRuleSubscription = null;
     _stateController.close();
