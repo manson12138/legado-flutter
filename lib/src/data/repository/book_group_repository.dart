@@ -6,21 +6,26 @@ import '../local/data_error.dart';
 /// 将分组 DAO 转换为领域 Gateway，并统一数据错误边界。
 final class BookGroupRepository implements BookGroupGateway {
   /// 创建分组 Repository。
-  const BookGroupRepository(this._dao);
+  const BookGroupRepository(this._dao, this._requireUserId);
 
   /// 分组 DAO。
   final BookGroupDao _dao;
 
+  /// 返回当前认证用户 ID；未认证调用不会回退到公共分组。
+  final int Function() _requireUserId;
+
   @override
   Stream<List<BookGroup>> watchGroups() {
-    return guardDataStream<List<BookGroup>>(_dao.watchAll());
+    final int userId = _requireUserId();
+    return guardDataStream<List<BookGroup>>(_dao.watchAll(userId));
   }
 
   @override
   Future<BookGroup> createGroup(String name) {
+    final int userId = _requireUserId();
     return guardDataOperation<BookGroup>(() async {
       /// 当前全部分组。
-      final List<BookGroup> groups = await _dao.getAll();
+      final List<BookGroup> groups = await _dao.getAll(userId);
       /// 已使用正数位值。
       final Set<int> usedIds = groups.where((BookGroup group) => group.groupId > 0).map(
         (BookGroup group) => group.groupId,
@@ -45,7 +50,7 @@ final class BookGroupRepository implements BookGroupGateway {
         groupName: name,
         order: order,
       );
-      await _dao.upsert(group);
+      await _dao.upsert(userId, group);
       return group;
     });
   }

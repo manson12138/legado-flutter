@@ -17,10 +17,15 @@ final class LocalBookImportCoordinator {
     required LocalBookParserRegistry parserRegistry,
     required BookshelfGateway bookshelfGateway,
     required AddBookToBookshelfUseCase addBook,
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
   }) : _storage = storage,
        _parserRegistry = parserRegistry,
        _bookshelfGateway = bookshelfGateway,
-       _addBook = addBook;
+       _addBook = addBook,
+       _analyticsRecorder = analyticsRecorder;
 
   /// 应用私有文件存储边界。
   final LocalBookStorage _storage;
@@ -34,8 +39,15 @@ final class LocalBookImportCoordinator {
   /// 原子保存书籍和目录的业务动作。
   final AddBookToBookshelfUseCase _addBook;
 
+  /// 本地书导入完成事件写入边界。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
+
   /// 导入单个系统选择文件；失败时补偿未持久化的新副本。
   Future<LocalBookImportResult> importFile(LocalBookPickedFile pickedFile) async {
+    final Stopwatch stopwatch = Stopwatch()..start();
     /// 已复制到应用目录的稳定文件引用。
     LocalBookFileReference? reference;
     /// 导入前已经存在的同内容书籍。
@@ -62,21 +74,116 @@ final class LocalBookImportCoordinator {
       final AppResult<void> saved = await _addBook.save(mergedBook, parsed.chapters);
       switch (saved) {
         case AppSuccess<void>():
+          await _recordImportAnalytics(
+            format: reference.format,
+            result: existingBook == null ? 'imported' : 'updated',
+            elapsedMilliseconds: stopwatch.elapsedMilliseconds,
+          );
+          if (existingBook == null) {
+            await _recordBookAddedAnalytics();
+          }
           return LocalBookImportResult(book: mergedBook, updated: existingBook != null);
         case AppFailure<void>(error: final error):
           throw LocalBookException(error.message);
       }
     } on LocalBookException {
+      await _recordImportAnalytics(
+        format: reference?.format ?? _formatFromName(pickedFile.name),
+        result: 'failed',
+        elapsedMilliseconds: stopwatch.elapsedMilliseconds,
+      );
       if (reference != null && existingBook == null) {
         await _tryDeleteCopy(reference);
       }
       rethrow;
     } catch (error) {
+      await _recordImportAnalytics(
+        format: reference?.format ?? _formatFromName(pickedFile.name),
+        result: 'failed',
+        elapsedMilliseconds: stopwatch.elapsedMilliseconds,
+      );
       if (reference != null && existingBook == null) {
         await _tryDeleteCopy(reference);
       }
       throw const LocalBookException('本地书导入失败，请确认文件可读取且存储空间充足');
     }
+  }
+
+  /// 本地书导入结果失败时也只上传格式、结果和耗时分桶。
+  Future<void> _recordImportAnalytics({
+    required LocalBookFormat? format,
+    required String result,
+    required int elapsedMilliseconds,
+  }) async {
+    final String? normalizedFormat = switch (format) {
+      LocalBookFormat.txt => 'txt',
+      LocalBookFormat.epub => 'epub',
+      LocalBookFormat.pdf => 'pdf',
+      LocalBookFormat.umd => 'umd',
+      _ => null,
+    };
+    if (normalizedFormat == null) {
+      return;
+    }
+    try {
+      await _analyticsRecorder(
+        'local_book_import_completed',
+        props: <String, Object?>{
+          'format': normalizedFormat,
+          'result': result,
+          'durationBucket': _durationBucket(elapsedMilliseconds),
+        },
+      );
+    } on Object {
+      // 匿名分析失败不能改变导入成功或失败结果。
+    }
+  }
+
+  /// 新内容首次进入书架时报告统一加书入口。
+  Future<void> _recordBookAddedAnalytics() async {
+    try {
+      await _analyticsRecorder(
+        'book_added_to_shelf',
+        props: const <String, Object?>{'entry': 'import'},
+      );
+    } on Object {
+      // 加书事务已经成功，匿名分析保持旁路。
+    }
+  }
+
+  /// 在文件复制前按扩展名推断受支持格式，用于失败事件。
+  LocalBookFormat? _formatFromName(String name) {
+    final String lower = name.toLowerCase();
+    if (lower.endsWith('.txt')) {
+      return LocalBookFormat.txt;
+    }
+    if (lower.endsWith('.epub')) {
+      return LocalBookFormat.epub;
+    }
+    if (lower.endsWith('.pdf')) {
+      return LocalBookFormat.pdf;
+    }
+    if (lower.endsWith('.umd')) {
+      return LocalBookFormat.umd;
+    }
+    return null;
+  }
+
+  /// 将精确耗时转换为 API 固定分桶。
+  String _durationBucket(int elapsedMilliseconds) {
+    if (elapsedMilliseconds < 1000) {
+      return 'lt_1s';
+    }
+    if (elapsedMilliseconds < 3000) {
+      return '1_3s';
+    }
+    if (elapsedMilliseconds < 10000) {
+      return '3_10s';
+    }
+    if (elapsedMilliseconds < 30000) {
+      return '10_30s';
+    }
+    return 'gte_30s';
   }
 
   /// 合并重新解析的文件事实和已有用户状态。

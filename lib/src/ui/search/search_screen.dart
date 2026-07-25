@@ -75,6 +75,8 @@ final class SearchScreen extends StatelessWidget {
             padding: const EdgeInsets.all(SpacingToken.medium),
             child: _SearchField(state: state, onIntent: onIntent),
           ),
+          _SearchMatchModeControls(state: state, onIntent: onIntent),
+          _SearchSourceControls(state: state, onIntent: onIntent),
           if (state.history.isNotEmpty && state.committedKeyword.isEmpty)
             _SearchHistory(state: state, onIntent: onIntent),
           if (state.searching || state.progress.total > 0)
@@ -363,6 +365,468 @@ final class _SearchBody extends StatelessWidget {
   }
 }
 
+/// 本次搜索的书源筛选入口；选择面板以模态浮层展示，不改变底层页面布局。
+final class _SearchSourceControls extends StatelessWidget {
+  /// 创建书源筛选入口。
+  const _SearchSourceControls({required this.state, required this.onIntent});
+
+  /// 当前搜索页面状态。
+  final SearchUiState state;
+
+  /// Intent 统一入口。
+  final ValueChanged<SearchIntent> onIntent;
+
+  /// 打开覆盖底层最近搜索和结果区的书源选择面板。
+  Future<void> _openSourceSelectionSheet(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (BuildContext sheetContext) {
+        return _SearchSourceSelectionSheet(
+          initialState: state,
+          onSave: (SearchUiState draft) {
+            onIntent(
+              ApplySearchSourceSelectionIntent(
+                selectedSourceUrls: draft.selectedSourceUrls,
+                useAllSources: draft.useAllSources,
+            selectedSourceGroup: draft.selectedSourceGroup,
+            sourceQuery: draft.sourceQuery,
+            onlySuccessfulSources: draft.onlySuccessfulSources,
+          ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    /// 书源名称筛选条件，与 ViewModel 提交搜索时使用相同的规范化规则。
+    final String sourceQuery = state.sourceQuery.trim().toLowerCase();
+    /// 实际会参与搜索的书源数，包含分组、名称、成功率和勾选四层筛选。
+    final int selectedCount = state.sources.where((BookSource source) {
+      final bool groupMatches = state.selectedSourceGroup == null ||
+          (source.bookSourceGroup ?? '')
+              .split(',')
+              .map((String value) => value.trim())
+              .contains(state.selectedSourceGroup);
+      final bool queryMatches = sourceQuery.isEmpty ||
+          source.bookSourceName.toLowerCase().contains(sourceQuery) ||
+          source.bookSourceUrl.toLowerCase().contains(sourceQuery);
+      return groupMatches &&
+          queryMatches &&
+          (!state.onlySuccessfulSources || source.sourceScore > 0) &&
+          (state.useAllSources || state.selectedSourceUrls.contains(source.bookSourceUrl));
+    }).length;
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+      leading: const Icon(Icons.filter_alt_outlined),
+      title: Text('搜索书源（$selectedCount/${state.sources.length}）'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _openSourceSelectionSheet(context),
+    );
+  }
+}
+
+/// 展示并即时切换本次搜索结果的匹配方式，不纳入书源筛选浮层草稿。
+final class _SearchMatchModeControls extends StatelessWidget {
+  /// 创建搜索匹配方式选择区。
+  const _SearchMatchModeControls({required this.state, required this.onIntent});
+
+  /// 当前搜索页面状态。
+  final SearchUiState state;
+
+  /// Intent 统一入口。
+  final ValueChanged<SearchIntent> onIntent;
+
+  /// 构建无背景的紧凑匹配选项，当前项仅用勾选和文字强调。
+  Widget _buildOption(
+    BuildContext context,
+    SearchMatchMode mode,
+    String label,
+  ) {
+    /// 当前选项是否为正在生效的结果匹配方式。
+    final bool selected = state.matchMode == mode;
+    /// 选中文字使用主题色，未选文字保持次级前景色。
+    final Color foreground = selected
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: '$label匹配',
+        child: InkWell(
+          onTap: selected
+              ? null
+              : () => onIntent(ChangeSearchMatchModeIntent(mode)),
+          child: SizedBox(
+            height: 44,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                if (selected) ...<Widget>[
+                  Icon(Icons.check_rounded, size: 18, color: foreground),
+                  const SizedBox(width: 2),
+                ],
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: foreground,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+      child: Row(
+        children: <Widget>[
+          Text(
+            '结果匹配',
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          const SizedBox(width: SpacingToken.small),
+          Expanded(
+            child: Row(
+              children: <Widget>[
+                _buildOption(
+                  context,
+                  SearchMatchMode.contains,
+                  '包含',
+                ),
+                Text(
+                  '|',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                ),
+                _buildOption(
+                  context,
+                  SearchMatchMode.exact,
+                  '精准',
+                ),
+                Text(
+                  '|',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                ),
+                _buildOption(
+                  context,
+                  SearchMatchMode.fuzzy,
+                  '模糊',
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 覆盖搜索页内容的书源选择浮层；候选列表在面板内独立滚动并随键盘收缩。
+final class _SearchSourceSelectionSheet extends StatefulWidget {
+  /// 创建书源选择浮层。
+  const _SearchSourceSelectionSheet({
+    required this.initialState,
+    required this.onSave,
+  });
+
+  /// 打开浮层时的搜索状态快照；关闭而未保存时该快照不被修改。
+  final SearchUiState initialState;
+
+  /// 保存草稿时一次性提交给 SearchViewModel 的回调。
+  final ValueChanged<SearchUiState> onSave;
+
+  @override
+  State<_SearchSourceSelectionSheet> createState() => _SearchSourceSelectionSheetState();
+}
+
+/// 持有只在浮层生命周期内存在的书源筛选草稿。
+final class _SearchSourceSelectionSheetState extends State<_SearchSourceSelectionSheet> {
+  /// 用户正在编辑、尚未保存的筛选状态。
+  late SearchUiState _draft;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = widget.initialState;
+  }
+
+  /// 在浮层内更新草稿，不影响底层搜索页的已保存筛选状态。
+  void _updateDraft(SearchUiState nextDraft) {
+    setState(() => _draft = nextDraft);
+  }
+
+  /// 取消草稿中的所有书源勾选，保存前不改变底层搜索范围。
+  void _clearAllSources() {
+    _updateDraft(
+      _draft.copyWith(
+        selectedSourceUrls: <String>{},
+        useAllSources: false,
+      ),
+    );
+  }
+
+  /// 将草稿中当前全部可用书源设为已选。
+  void _selectAllSources() {
+    _updateDraft(
+      _draft.copyWith(
+        selectedSourceUrls: <String>{},
+        useAllSources: true,
+      ),
+    );
+  }
+
+  /// 在草稿中反选当前全部可用书源。
+  void _invertSources() {
+    final Set<String> allSourceUrls = _draft.sources
+        .map((BookSource source) => source.bookSourceUrl)
+        .toSet();
+    final Set<String> selectedSourceUrls = _draft.useAllSources
+        ? allSourceUrls
+        : _draft.selectedSourceUrls;
+    _updateDraft(
+      _draft.copyWith(
+        selectedSourceUrls: allSourceUrls.difference(selectedSourceUrls),
+        useAllSources: false,
+      ),
+    );
+  }
+
+  /// 在草稿中切换单个书源；首次取消全选时先展开为显式集合。
+  void _toggleSource(String sourceUrl) {
+    final Set<String> selectedSourceUrls = _draft.useAllSources
+        ? _draft.sources.map((BookSource source) => source.bookSourceUrl).toSet()
+        : Set<String>.from(_draft.selectedSourceUrls);
+    if (!selectedSourceUrls.add(sourceUrl)) {
+      selectedSourceUrls.remove(sourceUrl);
+    }
+    _updateDraft(
+      _draft.copyWith(
+        selectedSourceUrls: selectedSourceUrls,
+        useAllSources: false,
+      ),
+    );
+  }
+
+  /// 保存草稿并关闭浮层；此时才会更新入口的选中数量。
+  void _save() {
+    widget.onSave(_draft);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    /// 键盘占用的底部空间；面板通过内边距避开键盘而不推挤底层页面。
+    final double keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final String query = _draft.sourceQuery.trim().toLowerCase();
+    final List<String> groups = _draft.sources
+        .expand((BookSource source) => (source.bookSourceGroup ?? '').split(','))
+        .map((String value) => value.trim())
+        .where((String value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false)
+      ..sort();
+    final List<BookSource> visible = _draft.sources.where((BookSource source) {
+      final bool groupMatches = _draft.selectedSourceGroup == null ||
+          (source.bookSourceGroup ?? '').split(',').map((String value) => value.trim()).contains(_draft.selectedSourceGroup);
+      final bool queryMatches = query.isEmpty ||
+          source.bookSourceName.toLowerCase().contains(query) ||
+          source.bookSourceUrl.toLowerCase().contains(query);
+      return groupMatches && queryMatches &&
+          (!_draft.onlySuccessfulSources || source.sourceScore > 0);
+    }).toList(growable: false);
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardHeight),
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.42,
+        maxChildSize: 0.95,
+        builder: (BuildContext context, ScrollController scrollController) {
+          return Material(
+            clipBehavior: Clip.antiAlias,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(RadiusToken.large)),
+            child: CustomScrollView(
+              controller: scrollController,
+              slivers: <Widget>[
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      SpacingToken.medium,
+                      SpacingToken.small,
+                      SpacingToken.small,
+                      SpacingToken.small,
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        Text(
+                          '搜索书源（${visible.length}/${_draft.sources.length}）',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close),
+                          tooltip: '关闭搜索书源',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+                    child: TextFormField(
+                      initialValue: _draft.sourceQuery,
+                      onChanged: (String value) =>
+                          _updateDraft(_draft.copyWith(sourceQuery: value)),
+                      decoration: const InputDecoration(
+                        labelText: '搜索书源',
+                        prefixIcon: Icon(Icons.manage_search_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: PopupMenuButton<String>(
+                              tooltip: '选择书源分类',
+                              onSelected: (String value) {
+                                final String? group = value == '__all__' ? null : value;
+                                _updateDraft(
+                                  _draft.copyWith(
+                                    selectedSourceGroup: group,
+                                    clearSelectedSourceGroup: group == null,
+                                  ),
+                                );
+                              },
+                              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                                CheckedPopupMenuItem<String>(
+                                  value: '__all__',
+                                  checked: _draft.selectedSourceGroup == null,
+                                  child: const Text('全部分组'),
+                                ),
+                                ...groups.map(
+                                  (String group) => CheckedPopupMenuItem<String>(
+                                    value: group,
+                                    checked: _draft.selectedSourceGroup == group,
+                                    child: Text(group, overflow: TextOverflow.ellipsis),
+                                  ),
+                                ),
+                              ],
+                              child: Chip(
+                                avatar: const Icon(Icons.folder_outlined, size: 18),
+                                label: Text(
+                                  _draft.selectedSourceGroup ?? '全部分组',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: SpacingToken.xSmall),
+                        SizedBox(
+                          width: 88,
+                          height: 32,
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size(88, 32),
+                              padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: _save,
+                            child: const Text('保存'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+                    child: Row(
+                      children: <Widget>[
+                        TextButton(onPressed: _selectAllSources, child: const Text('全选')),
+                        TextButton(onPressed: _invertSources, child: const Text('反选')),
+                        TextButton(onPressed: _clearAllSources, child: const Text('取消全部')),
+                        const Spacer(),
+                        FilterChip(
+                          label: const Text('仅有成功率'),
+                          selected: _draft.onlySuccessfulSources,
+                          onSelected: (_) => _updateDraft(
+                            _draft.copyWith(
+                              onlySuccessfulSources: !_draft.onlySuccessfulSources,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: SpacingToken.xSmall),
+                ),
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (BuildContext context, int index) {
+                      final BookSource source = visible[index];
+                      final bool checked = _draft.useAllSources ||
+                          _draft.selectedSourceUrls.contains(source.bookSourceUrl);
+                      return CheckboxListTile(
+                        dense: true,
+                        value: checked,
+                        title: Text(
+                          source.bookSourceName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '成功率 ${source.sourceScore}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onChanged: (_) => _toggleSource(source.bookSourceUrl),
+                      );
+                    },
+                    childCount: visible.length,
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 /// 搜索结果的展示分类；同一去重结果只会进入其中一个页面。
 enum _SearchResultCategory {
   /// 关键字命中书名。
@@ -503,7 +967,7 @@ final class _SearchResultPagesState extends State<_SearchResultPages> {
           ),
         ),
         const SizedBox(height: SpacingToken.xSmall),
-        Expanded(
+                Expanded(
           child: PageView.builder(
             controller: _pageController,
             itemCount: pages.length,

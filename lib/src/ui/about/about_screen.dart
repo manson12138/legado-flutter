@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app/app_access_coordinator.dart';
+import '../../api/remote_app/remote_app_service_config.dart';
 import '../components/app_scaffold.dart';
 import '../theme/app_tokens.dart';
 import 'about_contract.dart';
@@ -9,7 +11,9 @@ final class AboutScreen extends StatelessWidget {
   /// 创建“关于”页纯 UI。
   const AboutScreen({
     required this.state,
+    required this.appAccessState,
     required this.onIntent,
+    required this.onCheckUpdate,
     required this.onBack,
     super.key,
   });
@@ -17,8 +21,14 @@ final class AboutScreen extends StatelessWidget {
   /// ViewModel 提供的当前页面状态。
   final AboutUiState state;
 
+  /// 应用级准入协调器提供的最新版本状态。
+  final AppAccessState appAccessState;
+
   /// 把页面操作发送给 ViewModel 的统一入口。
   final ValueChanged<AboutIntent> onIntent;
+
+  /// 用户手动请求重新检查服务端版本状态的回调。
+  final VoidCallback onCheckUpdate;
 
   /// 返回“我的”页面的导航回调。
   final VoidCallback onBack;
@@ -60,12 +70,17 @@ final class AboutScreen extends StatelessWidget {
           const SizedBox(height: SpacingToken.xSmall),
           Center(
             child: Text(
-              '1.0.0+6',
+              '1.0.0+7',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
           const SizedBox(height: SpacingToken.large),
           const Text('Android 与 iOS 共用的简约阅读客户端。书架、书源和阅读数据默认保存在本机。'),
+          const SizedBox(height: SpacingToken.large),
+          _AppUpdateCard(
+            state: appAccessState,
+            onCheckUpdate: onCheckUpdate,
+          ),
           if (state.contentFilterUnlocked) ...<Widget>[
             const SizedBox(height: SpacingToken.large),
             const Text('内容过滤管理', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -73,6 +88,67 @@ final class AboutScreen extends StatelessWidget {
             _ContentFilterCard(state: state, onIntent: onIntent),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 展示当前版本检查状态，并提供手动检查入口。
+final class _AppUpdateCard extends StatelessWidget {
+  /// 创建应用版本检查卡片。
+  const _AppUpdateCard({
+    required this.state,
+    required this.onCheckUpdate,
+  });
+
+  /// 应用级准入协调器的受控状态。
+  final AppAccessState state;
+
+  /// 触发一次前台单飞版本检查的回调。
+  final VoidCallback onCheckUpdate;
+
+  /// 构建版本状态说明与检查按钮。
+  @override
+  Widget build(BuildContext context) {
+    final bool checking = state.isRestoring || state.isChecking;
+    final bool latest = state.hasConfirmedStatus && !state.hasUpdate;
+    final String versionName = state.versionName?.trim() ?? '';
+    final String statusText = checking
+        ? '正在检查更新…'
+        : latest
+        ? '已是最新版本'
+        : state.hasConfirmedStatus
+        ? '发现新版本${versionName.isEmpty ? '' : ' $versionName'}'
+        : '尚未检查更新';
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(RadiusToken.medium),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.outlineVariant.withValues(
+            alpha: 0.55,
+          ),
+        ),
+      ),
+      child: ListTile(
+        leading: Icon(
+          latest ? Icons.verified_outlined : Icons.system_update_outlined,
+          color: latest ? Theme.of(context).colorScheme.primary : null,
+        ),
+        title: const Text('版本更新'),
+        subtitle: Text(statusText),
+        trailing: checking
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : latest
+            ? const Icon(Icons.check_circle_outline)
+            : TextButton(
+                onPressed: onCheckUpdate,
+                child: const Text('检查更新'),
+              ),
       ),
     );
   }
@@ -89,17 +165,23 @@ final class _ContentFilterCard extends StatelessWidget {
   /// 把页面操作发送给 ViewModel 的统一入口。
   final ValueChanged<AboutIntent> onIntent;
 
+  /// 当前安装包实际用于 App HMAC 签名的编译期密钥；仅在连点解锁的排查入口展示，
+  /// 便于与服务端的 `APP_SIGNATURE_SECRET` 逐字核对。
+  static final String _appSignatureSecret =
+      RemoteAppServiceConfig.fromEnvironment().hmacSecret;
+
   /// 构建开关和更新词库按钮。
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(RadiusToken.medium),
-        border: Border.all(
+        side: BorderSide(
           color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.55),
         ),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.symmetric(
           horizontal: SpacingToken.small,
@@ -125,6 +207,31 @@ final class _ContentFilterCard extends StatelessWidget {
                       ? null
                       : () => onIntent(const UpdateAdultKeywordsIntent()),
                   child: Text(state.updatingAdultKeywords ? '更新中…' : '更新词库'),
+                ),
+              ),
+            ),
+            const Divider(height: SpacingToken.small),
+            Padding(
+              padding: const EdgeInsets.only(
+                left: SpacingToken.small,
+                right: SpacingToken.small,
+                bottom: SpacingToken.small,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '当前 App 签名密钥（对应服务端 APP_SIGNATURE_SECRET）',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                    const SizedBox(height: SpacingToken.xSmall),
+                    SelectableText(
+                      _appSignatureSecret,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
                 ),
               ),
             ),

@@ -38,12 +38,14 @@ final class CrashReportFile {
 /// 崩溃上传成功后由网络边界返回的受控结果。
 final class CrashReportUploadReceipt {
   /// 创建服务端已接收或已去重的回执。
-  const CrashReportUploadReceipt({required this.receiptId, required this.retentionDays});
+  const CrashReportUploadReceipt({required this.receiptId, required this.retentionDays, required this.duplicate});
 
   /// 服务端回执标识。
   final String receiptId;
   /// 服务端原始报告保留天数。
   final int retentionDays;
+  /// 本次请求是否命中服务端幂等去重。
+  final bool duplicate;
 }
 
 /// 应用私有崩溃报告的落盘、脱敏、列表、上传状态和保留上限管理器。
@@ -83,6 +85,11 @@ final class CrashReportManager {
   Future<void> _pendingOperation = Future<void>.value();
   /// App 组合根在网络和认证依赖就绪后注入的上传实现。
   Future<CrashReportUploadReceipt> Function(Map<String, Object?> payload)? _uploader;
+  /// 组合根注入的匿名上传结果记录边界。
+  Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  })? _analyticsRecorder;
   /// 最近一次相同异常的内存去重键。
   String? _lastFingerprint;
   /// 最近一次相同异常的记录时间。
@@ -104,6 +111,16 @@ final class CrashReportManager {
   /// 注入专用网络上传能力；不保存 Token，Token 由调用方在每次上传时即时提供。
   void configureUploader(Future<CrashReportUploadReceipt> Function(Map<String, Object?> payload) uploader) {
     _uploader = uploader;
+  }
+
+  /// 注入匿名上传结果记录边界，不持有认证信息。
+  void configureAnalyticsRecorder(
+    Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
+  ) {
+    _analyticsRecorder = analyticsRecorder;
   }
 
   /// 尽力记录一次未捕获异常；写盘失败不再抛出，避免错误处理递归。
@@ -177,15 +194,42 @@ final class CrashReportManager {
         upload['uploadedAt'] = DateTime.now().toUtc().toIso8601String();
         upload['receiptId'] = receipt.receiptId;
         upload.remove('lastFailureCode');
+        await _recordUploadAnalytics(
+          result: 'success',
+          duplicate: receipt.duplicate,
+        );
       } on Object {
         upload['state'] = CrashReportUploadState.failed.name;
         upload['lastFailureCode'] = 'UPLOAD_FAILED';
+        await _recordUploadAnalytics(result: 'failed', duplicate: false);
         rethrow;
       } finally {
         payload['upload'] = upload;
         await _writePayload(payload, file: file);
       }
     });
+  }
+
+  /// 匿名事件失败不能覆盖崩溃报告上传和本地状态写回结果。
+  Future<void> _recordUploadAnalytics({
+    required String result,
+    required bool duplicate,
+  }) async {
+    final analyticsRecorder = _analyticsRecorder;
+    if (analyticsRecorder == null) {
+      return;
+    }
+    try {
+      await analyticsRecorder(
+        'crash_report_upload_result',
+        props: <String, Object?>{
+          'result': result,
+          'duplicate': duplicate,
+        },
+      );
+    } on Object {
+      // 崩溃管理链路必须与可选匿名分析隔离。
+    }
   }
 
   /// 删除一份报告；调用方必须在 UI 层完成用户确认。

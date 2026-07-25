@@ -14,44 +14,47 @@ final class BookGroupDao {
   final LegadoDatabase _database;
 
   /// 按显示顺序读取全部系统和用户分组。
-  Future<List<BookGroup>> getAll() async {
+  Future<List<BookGroup>> getAll(int userId) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.bookGroups,
-      where: '<all> orderBy=`order` ASC',
+      where: 'userId = ? orderBy=`order` ASC',
+      argumentCount: 1,
     );
     /// 全部分组数据库行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookGroups,
+      where: 'userId = ?',
+      whereArgs: <Object?>[userId],
       orderBy: '`order` ASC',
     );
     return rows.map(bookGroupFromMap).toList(growable: false);
   }
 
   /// 按分组主键查询单个分组。
-  Future<BookGroup?> getById(int groupId) async {
+  Future<BookGroup?> getById(int userId, int groupId) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.bookGroups,
-      where: 'groupId = ? limit=1',
-      argumentCount: 1,
+      where: 'userId = ? AND groupId = ? limit=1',
+      argumentCount: 2,
     );
     /// 最多包含一个分组的主键查询结果。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookGroups,
-      where: 'groupId = ?',
-      whereArgs: <Object?>[groupId],
+      where: 'userId = ? AND groupId = ?',
+      whereArgs: <Object?>[userId, groupId],
       limit: 1,
     );
     return rows.isEmpty ? null : bookGroupFromMap(rows.first);
   }
 
   /// 观察全部分组；表变化时重新查询。
-  Stream<List<BookGroup>> watchAll() async* {
+  Stream<List<BookGroup>> watchAll(int userId) async* {
     /// 当前观察依赖的表集合。
     final Set<String> observedTables = <String>{DatabaseTables.bookGroups};
     /// 已消费的最近一次相关表提交版本。
@@ -59,7 +62,7 @@ final class BookGroupDao {
       observedTables,
     );
     while (true) {
-      yield await getAll();
+      yield await getAll(userId);
       observedRevision = await _database.changeNotifier.waitForTableChange(
         observedTables,
         observedRevision,
@@ -68,7 +71,7 @@ final class BookGroupDao {
   }
 
   /// 替换写入一个分组。
-  Future<void> upsert(BookGroup group) async {
+  Future<void> upsert(int userId, BookGroup group) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
@@ -78,26 +81,26 @@ final class BookGroupDao {
     );
     await database.insert(
       DatabaseTables.bookGroups,
-      bookGroupToMap(group),
+      <String, Object?>{'userId': userId, ...bookGroupToMap(group)},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _database.changeNotifier.notifyTables(<String>{DatabaseTables.bookGroups});
   }
 
   /// 按主键删除分组；书籍上的位掩码由业务 UseCase 另行协调。
-  Future<void> deleteById(int groupId) async {
+  Future<void> deleteById(int userId, int groupId) async {
     /// 已打开的数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'DELETE',
       table: DatabaseTables.bookGroups,
-      where: 'groupId = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND groupId = ?',
+      argumentCount: 2,
     );
     await database.delete(
       DatabaseTables.bookGroups,
-      where: 'groupId = ?',
-      whereArgs: <Object?>[groupId],
+      where: 'userId = ? AND groupId = ?',
+      whereArgs: <Object?>[userId, groupId],
     );
     _database.changeNotifier.notifyTables(<String>{DatabaseTables.bookGroups});
   }

@@ -58,7 +58,7 @@ final class HttpRequest {
     this.method = HttpRequestMethod.get,
     Map<String, String> headers = const <String, String>{},
     this.body = const EmptyHttpRequestBody(),
-    this.connectTimeout = const Duration(seconds: 15),
+    this.connectTimeout = const Duration(seconds: 60),
     this.sendTimeout = const Duration(seconds: 15),
     this.receiveTimeout = const Duration(seconds: 60),
     this.totalTimeout = const Duration(seconds: 60),
@@ -91,7 +91,7 @@ final class HttpRequest {
   /// 接收超时。
   final Duration receiveTimeout;
 
-  /// 包含重试与响应读取的总超时。
+  /// 单次请求尝试包含响应读取的总超时；网络层重试时每次尝试独立计时。
   final Duration totalTimeout;
 
   /// 是否跟随重定向。

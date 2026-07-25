@@ -21,8 +21,10 @@ final class DefaultBookSourceBootstrapper {
   });
 
   /// Flutter assets 中保存内置书源 JSON 的稳定路径。
-  static const String defaultBookSourcesAssetPath =
-      'assets/default_data/book_sources.json';
+  static const String defaultBookSourcesAssetPath = '';
+  /// Flutter assets 中保存内置书源 JSON 的稳定路径。
+  // static const String defaultBookSourcesAssetPath =
+  //     'assets/default_data/book_sources.json';
 
   /// 读取现有书源数量的领域边界，用于避免覆盖用户已经管理过的书源。
   final BookSourceGateway sourceGateway;
@@ -38,46 +40,97 @@ final class DefaultBookSourceBootstrapper {
 
   /// 当书源表为空时导入内置书源；已有任意书源时跳过，保护用户数据。
   Future<void> importIfEmpty() async {
-    /// 当前数据库中已经存在的用户或内置书源。
-    final List<BookSource> existingSources = await sourceGateway.getAll();
-    if (existingSources.isNotEmpty) {
+    /// 本次启动导入的总耗时，不记录书源内容或资源绝对路径。
+    final Stopwatch stopwatch = Stopwatch()..start();
+    logger.info(
+      tag: defaultBookSourceBootstrapLogTag,
+      message: 'stage=import_if_empty_started',
+    );
+    try {
+      /// 当前数据库中已经存在的用户或内置书源。
+      final List<BookSource> existingSources = await sourceGateway.getAll();
       logger.info(
-        message: '跳过内置书源导入，当前已有书源数量=${existingSources.length}',
+        tag: defaultBookSourceBootstrapLogTag,
+        message: 'stage=existing_sources_loaded '
+            'sourceCount=${existingSources.length} '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
-      return;
-    }
+      if (existingSources.isNotEmpty) {
+        logger.info(
+          tag: defaultBookSourceBootstrapLogTag,
+          message: 'stage=import_skipped reason=existing_sources '
+              'sourceCount=${existingSources.length} '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+        return;
+      }
 
-    /// 从 Flutter assets 读取的原始 Android 兼容书源 JSON。
-    final String sourceJson = await assetBundle.loadString(
-      defaultBookSourcesAssetPath,
-      cache: false,
-    );
-    /// 内置书源导入结果；空库场景仍使用 skip 策略防止同批重复 URL 覆盖首条。
-    final AppResult<BookSourceImportResult> result =
-        await importBookSources.execute(
-      sourceJson,
-      conflictPolicy: BookSourceConflictPolicy.skip,
-    );
+      logger.info(
+        tag: defaultBookSourceBootstrapLogTag,
+        message: 'stage=asset_load_started',
+      );
+      /// 从 Flutter assets 读取的原始 Android 兼容书源 JSON。
+      final String sourceJson = await assetBundle.loadString(
+        defaultBookSourcesAssetPath,
+        cache: false,
+      );
+      logger.info(
+        tag: defaultBookSourceBootstrapLogTag,
+        message: 'stage=asset_load_completed '
+            'characterCount=${sourceJson.length} '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
 
-    if (result is AppFailure<BookSourceImportResult>) {
+      logger.info(
+        tag: defaultBookSourceBootstrapLogTag,
+        message: 'stage=json_import_started',
+      );
+      /// 内置书源导入结果；空库场景仍使用 skip 策略防止同批重复 URL 覆盖首条。
+      final AppResult<BookSourceImportResult> result =
+          await importBookSources.execute(
+        sourceJson,
+        conflictPolicy: BookSourceConflictPolicy.skip,
+      );
+
+      if (result is AppFailure<BookSourceImportResult>) {
+        logger.error(
+          tag: defaultBookSourceBootstrapLogTag,
+          message: 'stage=json_import_failed '
+              'errorKind=${result.error.kind} '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+          error: result.error.cause,
+          stackTrace: result.error.stackTrace,
+        );
+        throw result.error;
+      }
+
+      if (result is AppSuccess<BookSourceImportResult>) {
+        /// 可写入数据库的内置书源统计，不记录书源 URL、Header、Cookie 或规则正文。
+        final BookSourceImportResult summary = result.value;
+        logger.info(
+          tag: defaultBookSourceBootstrapLogTag,
+          message: 'stage=json_import_completed '
+              'total=${summary.total} '
+              'added=${summary.added} '
+              'overwritten=${summary.overwritten} '
+              'skipped=${summary.skipped} '
+              'invalid=${summary.invalid} '
+              'blockedAdult=${summary.blockedAdult} '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+      }
+    } on Object catch (error, stackTrace) {
       logger.error(
-        message: '内置书源导入失败：${result.error.message}',
-        error: result.error.cause,
-        stackTrace: result.error.stackTrace,
+        tag: defaultBookSourceBootstrapLogTag,
+        message: 'stage=import_if_empty_failed '
+            'errorType=${error.runtimeType} '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        error: error,
+        stackTrace: stackTrace,
       );
-      throw result.error;
-    }
-
-    if (result is AppSuccess<BookSourceImportResult>) {
-      /// 可写入数据库的内置书源统计，不记录书源 URL、Header、Cookie 或规则正文。
-      final BookSourceImportResult summary = result.value;
-      logger.info(
-        message: '内置书源导入完成 '
-            'total=${summary.total} '
-            'added=${summary.added} '
-            'skipped=${summary.skipped} '
-            'invalid=${summary.invalid}',
-      );
+      rethrow;
+    } finally {
+      stopwatch.stop();
     }
   }
 }

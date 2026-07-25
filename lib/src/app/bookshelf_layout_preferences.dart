@@ -35,13 +35,13 @@ final class BookshelfLayoutPreferences {
     ));
   }
 
-  /// 读取阅读历史布局；缺失或旧值时保持默认列表布局。
+  /// 读取阅读历史布局；缺失或旧值时保持与书架一致的默认网格布局。
   Future<ReadingHistoryLayoutMode> readReadingHistoryLayout() async {
     final String? value =
         (await _cacheDao.get(_readingHistoryLayoutCacheKey))?.value;
     return switch (value) {
       'grid' => ReadingHistoryLayoutMode.grid,
-      _ => ReadingHistoryLayoutMode.list,
+      _ => ReadingHistoryLayoutMode.grid,
     };
   }
 

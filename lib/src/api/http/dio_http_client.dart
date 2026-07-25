@@ -13,8 +13,22 @@ final class DioHttpCancellationToken implements HttpCancellationToken {
   /// Dio 内部取消令牌。
   final CancelToken _token = CancelToken();
 
+  /// 当前请求取消时需要一并取消的单次尝试令牌监听器。
+  final Set<void Function(String reason)> _cancelListeners =
+      <void Function(String reason)>{};
+
   /// 仅供网络适配器读取的 Dio 令牌。
   CancelToken get dioToken => _token;
+
+  /// 注册当前请求取消监听器，并返回移除监听器的回调以避免请求结束后继续持有引用。
+  void Function() addCancelListener(void Function(String reason) listener) {
+    if (_token.isCancelled) {
+      listener('用户取消请求');
+      return () {};
+    }
+    _cancelListeners.add(listener);
+    return () => _cancelListeners.remove(listener);
+  }
 
   @override
   bool get isCancelled => _token.isCancelled;
@@ -23,12 +37,28 @@ final class DioHttpCancellationToken implements HttpCancellationToken {
   void cancel([String reason = '用户取消请求']) {
     if (!_token.isCancelled) {
       _token.cancel(reason);
+      for (final void Function(String reason) listener
+          in Set<void Function(String reason)>.from(_cancelListeners)) {
+        listener(reason);
+      }
+      _cancelListeners.clear();
     }
   }
 }
 
 /// Dio 统一 HTTP 实现；集中处理 Cookie、重定向、超时和错误映射。
 final class DioUnifiedHttpClient implements UnifiedHttpClient {
+  /// 单个 HTTP 请求包含首次请求在内的最大尝试次数。
+  static const int _maximumAttemptCount = 3;
+
+  /// 可恢复网络失败后的固定重试等待时间。
+  static const Duration _retryDelay = Duration(seconds: 5);
+
+  /// 为及时响应取消而拆分重试等待时间的轮询间隔。
+  static const Duration _retryCancellationCheckInterval = Duration(
+    milliseconds: 100,
+  );
+
   /// 创建网络客户端。
   DioUnifiedHttpClient(this._dio, this._cookieManager);
 
@@ -47,9 +77,44 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
     final DioHttpCancellationToken token = cancellationToken is DioHttpCancellationToken
         ? cancellationToken
         : DioHttpCancellationToken();
-    if (cancellationToken?.isCancelled ?? false) {
+    if (_isCancelled(cancellationToken, token)) {
       throw const UnifiedHttpException(HttpFailureKind.cancelled, '请求已取消');
     }
+    for (int attempt = 1; attempt <= _maximumAttemptCount; attempt += 1) {
+      if (_isCancelled(cancellationToken, token)) {
+        throw const UnifiedHttpException(HttpFailureKind.cancelled, '请求已取消');
+      }
+      try {
+        return await _executeAttempt(request, token);
+      } on UnifiedHttpException catch (error) {
+        if (!_shouldRetry(error) || attempt == _maximumAttemptCount) {
+          rethrow;
+        }
+        await _waitForRetry(
+          externalToken: cancellationToken,
+          internalToken: token,
+        );
+      }
+    }
+    throw const UnifiedHttpException(HttpFailureKind.unknown, '请求重试状态异常');
+  }
+
+  /// 执行单次 HTTP 尝试；Cookie、超时和响应转换均在每次尝试中独立完成。
+  Future<HttpResponse> _executeAttempt(
+    HttpRequest request,
+    DioHttpCancellationToken token,
+  ) async {
+    /// 本次尝试独占的 Dio 取消令牌；单次总超时不会取消后续重试。
+    final CancelToken attemptToken = CancelToken();
+    /// 请求结束后移除外部取消监听，避免长生命周期令牌保留已结束请求。
+    final void Function() removeCancelListener = token.addCancelListener(
+      (String reason) {
+        if (!attemptToken.isCancelled) {
+          attemptToken.cancel(reason);
+        }
+      },
+    );
+    try {
     /// 已合并 Cookie 的请求 Header。
     final Map<String, String> headers = await _cookieManager.applyRequestCookies(
       request.uri,
@@ -68,6 +133,7 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
       maxRedirects: request.maxRedirects,
       validateStatus: (int? status) => status != null,
       contentType: _contentType(request.body),
+      connectTimeout: request.connectTimeout,
       sendTimeout: request.sendTimeout,
       receiveTimeout: request.receiveTimeout,
       extra: <String, dynamic>{
@@ -75,19 +141,18 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
         networkRequestLogContextExtraKey: request.logContext,
       },
     );
-    try {
       /// Dio 原始字节响应。
       final Response<List<int>> response = await _dio
           .requestUri<List<int>>(
             request.uri,
             data: requestData,
             options: options,
-            cancelToken: token.dioToken,
+            cancelToken: attemptToken,
           )
           .timeout(
             request.totalTimeout,
             onTimeout: () {
-              token.cancel('请求总超时');
+              attemptToken.cancel('单次请求总超时');
               throw const UnifiedHttpException(
                 HttpFailureKind.totalTimeout,
                 '请求超过总超时限制',
@@ -131,6 +196,49 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
       throw const UnifiedHttpException(HttpFailureKind.totalTimeout, '请求超过总超时限制');
     } catch (error) {
       throw _mapUnknownException(error);
+    } finally {
+      removeCancelListener();
+    }
+  }
+
+  /// 判断外部或内部取消令牌是否已终止当前请求。
+  bool _isCancelled(
+    HttpCancellationToken? externalToken,
+    DioHttpCancellationToken internalToken,
+  ) {
+    return (externalToken?.isCancelled ?? false) || internalToken.isCancelled;
+  }
+
+  /// 判断失败是否属于无需改变业务输入即可安全重试的网络问题。
+  bool _shouldRetry(UnifiedHttpException error) {
+    return switch (error.kind) {
+      HttpFailureKind.dns ||
+      HttpFailureKind.connection ||
+      HttpFailureKind.tls ||
+      HttpFailureKind.connectTimeout ||
+      HttpFailureKind.sendTimeout ||
+      HttpFailureKind.receiveTimeout ||
+      HttpFailureKind.totalTimeout => true,
+      _ => false,
+    };
+  }
+
+  /// 等待下一次网络尝试，并在等待期间轮询取消状态以阻止后续请求。
+  Future<void> _waitForRetry({
+    required HttpCancellationToken? externalToken,
+    required DioHttpCancellationToken internalToken,
+  }) async {
+    /// 尚需等待的时长；采用小间隔等待以避免取消后仍固定等待五秒。
+    Duration remaining = _retryDelay;
+    while (remaining > Duration.zero) {
+      if (_isCancelled(externalToken, internalToken)) {
+        throw const UnifiedHttpException(HttpFailureKind.cancelled, '请求已取消');
+      }
+      final Duration currentDelay = remaining < _retryCancellationCheckInterval
+          ? remaining
+          : _retryCancellationCheckInterval;
+      await Future<void>.delayed(currentDelay);
+      remaining -= currentDelay;
     }
   }
 

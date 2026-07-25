@@ -57,6 +57,8 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       saveBookChapters: widget.dependencies.saveBookChapters,
       downloadCoordinator: widget.dependencies.downloadCoordinator,
       cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
+      analyticsRecorder:
+          widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
@@ -238,6 +240,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
             books: <SearchBook>[searchBook],
           ),
           selectedBook: searchBook,
+          analyticsEntry: widget.arguments.analyticsEntry,
           initialMessage: resultMessage,
         ),
       ),

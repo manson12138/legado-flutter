@@ -2,6 +2,9 @@ import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/search_book.dart';
 
+/// 搜索结果与关键词的匹配范围；模糊模式保留既有全量结果行为。
+enum SearchMatchMode { contains, exact, fuzzy }
+
 /// 搜索页不可变状态，包含输入、结果、进度、错误、历史和书源筛选。
 final class SearchUiState {
   /// 创建搜索页状态。
@@ -13,6 +16,11 @@ final class SearchUiState {
     this.cancelled = false,
     List<BookSource> sources = const <BookSource>[],
     Set<String> selectedSourceUrls = const <String>{},
+    this.useAllSources = true,
+    this.selectedSourceGroup,
+    this.sourceQuery = '',
+    this.onlySuccessfulSources = false,
+    this.matchMode = SearchMatchMode.fuzzy,
     List<BookSearchResultGroup> results = const <BookSearchResultGroup>[],
     List<BookSearchSourceFailure> failures = const <BookSearchSourceFailure>[],
     List<String> history = const <String>[],
@@ -45,6 +53,21 @@ final class SearchUiState {
   /// 选中书源 URL；空集合表示全部启用书源。
   final Set<String> selectedSourceUrls;
 
+  /// 是否选择当前全部可用书源；false 时仅使用 [selectedSourceUrls]。
+  final bool useAllSources;
+
+  /// 本次搜索限定的书源分组；null 表示全部书源。
+  final String? selectedSourceGroup;
+
+  /// 书源选择面板中的临时搜索词。
+  final String sourceQuery;
+
+  /// 是否仅保留已有成功率记录的书源。
+  final bool onlySuccessfulSources;
+
+  /// 当前搜索结果匹配模式。
+  final SearchMatchMode matchMode;
+
   /// 已由 ViewModel 按书名作者去重的增量结果。
   final List<BookSearchResultGroup> results;
 
@@ -69,6 +92,12 @@ final class SearchUiState {
     bool? cancelled,
     List<BookSource>? sources,
     Set<String>? selectedSourceUrls,
+    bool? useAllSources,
+    String? selectedSourceGroup,
+    bool clearSelectedSourceGroup = false,
+    String? sourceQuery,
+    bool? onlySuccessfulSources,
+    SearchMatchMode? matchMode,
     List<BookSearchResultGroup>? results,
     List<BookSearchSourceFailure>? failures,
     List<String>? history,
@@ -83,7 +112,14 @@ final class SearchUiState {
       searching: searching ?? this.searching,
       cancelled: cancelled ?? this.cancelled,
       sources: sources ?? this.sources,
-      selectedSourceUrls: selectedSourceUrls ?? this.selectedSourceUrls,
+       selectedSourceUrls: selectedSourceUrls ?? this.selectedSourceUrls,
+       useAllSources: useAllSources ?? this.useAllSources,
+       selectedSourceGroup: clearSelectedSourceGroup
+           ? null
+           : selectedSourceGroup ?? this.selectedSourceGroup,
+       sourceQuery: sourceQuery ?? this.sourceQuery,
+       onlySuccessfulSources: onlySuccessfulSources ?? this.onlySuccessfulSources,
+       matchMode: matchMode ?? this.matchMode,
       results: results ?? this.results,
       failures: failures ?? this.failures,
       history: history ?? this.history,
@@ -139,6 +175,65 @@ final class ToggleSearchSourceIntent extends SearchIntent {
 final class SelectAllSearchSourcesIntent extends SearchIntent {
   /// 创建全选 Intent。
   const SelectAllSearchSourcesIntent();
+}
+
+/// 反选当前可用书源。
+final class InvertSearchSourcesIntent extends SearchIntent {
+  /// 创建反选意图。
+  const InvertSearchSourcesIntent();
+}
+
+/// 一次性保存搜索书源浮层中编辑完成的全部筛选草稿。
+final class ApplySearchSourceSelectionIntent extends SearchIntent {
+  /// 创建搜索书源筛选草稿提交意图。
+  const ApplySearchSourceSelectionIntent({
+    required this.selectedSourceUrls,
+    required this.useAllSources,
+    required this.selectedSourceGroup,
+    required this.sourceQuery,
+    required this.onlySuccessfulSources,
+  });
+
+  /// 最终选中的书源稳定 URL 集合。
+  final Set<String> selectedSourceUrls;
+  /// 是否表示全部启用书源都被选中。
+  final bool useAllSources;
+  /// 最终限定的书源分组；空值表示不限定分组。
+  final String? selectedSourceGroup;
+  /// 最终用于筛选书源名称的临时关键字。
+  final String sourceQuery;
+  /// 是否只保留已有成功率的书源。
+  final bool onlySuccessfulSources;
+}
+
+/// 按书源分组限定本次搜索。
+final class ChangeSearchSourceGroupIntent extends SearchIntent {
+  /// 创建书源分组筛选意图；null 表示全部。
+  const ChangeSearchSourceGroupIntent(this.group);
+  /// 目标分组。
+  final String? group;
+}
+
+/// 修改书源选择面板中的临时搜索词。
+final class ChangeSearchSourceQueryIntent extends SearchIntent {
+  /// 创建书源搜索意图。
+  const ChangeSearchSourceQueryIntent(this.query);
+  /// 临时搜索词。
+  final String query;
+}
+
+/// 切换仅选择有成功率书源。
+final class ToggleSuccessfulSearchSourcesIntent extends SearchIntent {
+  /// 创建成功率筛选意图。
+  const ToggleSuccessfulSearchSourcesIntent();
+}
+
+/// 切换结果匹配模式。
+final class ChangeSearchMatchModeIntent extends SearchIntent {
+  /// 创建匹配模式意图。
+  const ChangeSearchMatchModeIntent(this.mode);
+  /// 目标模式。
+  final SearchMatchMode mode;
 }
 
 /// 清空搜索历史。

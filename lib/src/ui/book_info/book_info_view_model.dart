@@ -41,6 +41,10 @@ final class BookInfoViewModel {
     required SaveBookChaptersUseCase saveBookChapters,
     required DownloadCoordinator downloadCoordinator,
     required BookInfoCancellationTokenFactory cancellationTokenFactory,
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
     required AppLogger logger,
   }) : _detailService = detailService,
        _bookGroupGateway = bookGroupGateway,
@@ -54,6 +58,8 @@ final class BookInfoViewModel {
        _saveBookChapters = saveBookChapters,
        _downloadCoordinator = downloadCoordinator,
        _cancellationTokenFactory = cancellationTokenFactory,
+       _analyticsRecorder = analyticsRecorder,
+       _analyticsEntry = arguments.analyticsEntry,
        _logger = logger,
        _state = BookInfoUiState(group: arguments.group, selectedBook: arguments.selectedBook) {
     _groupSubscription = _bookGroupGateway.watchGroups().listen(_handleGroupsChanged, onError: _handleGroupsError);
@@ -84,6 +90,13 @@ final class BookInfoViewModel {
   final DownloadCoordinator _downloadCoordinator;
   /// 网络取消令牌工厂。
   final BookInfoCancellationTokenFactory _cancellationTokenFactory;
+  /// 匿名分析事件写入边界。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
+  /// 首次详情展示的受控入口。
+  final String? _analyticsEntry;
   /// 【搜书诊断日志】项目统一日志接口，用于记录详情页 MVI 和持久化阶段。
   final AppLogger _logger;
   /// 当前详情状态。
@@ -106,6 +119,8 @@ final class BookInfoViewModel {
   bool _autoFallbackActive = false;
   /// 是否正在为目录进入阅读器执行持久化，防止重复点击产生并发写入。
   bool _openingReader = false;
+  /// 同一路由生命周期只报告一次详情真正可见。
+  bool _detailOpenReported = false;
 
   /// 当前状态。
   BookInfoUiState get state => _state;
@@ -286,6 +301,7 @@ final class BookInfoViewModel {
             clearTocError: true,
           ),
         );
+        _recordDetailOpened();
         _logger.info(
           tag: bookDetailLogTag,
           message: '详情页命中本地数据 generation=$generation bookId=$bookId '
@@ -336,6 +352,7 @@ final class BookInfoViewModel {
         /// 数据库中同 URL 书籍。
         final Book? storedBook = await _bookshelfGateway.getBook(snapshot.book.bookUrl);
         _emit(_state.copyWith(loadingInfo: false, book: snapshot.book, inBookshelf: storedBook != null));
+        _recordDetailOpened();
         _logger.info(
           tag: bookDetailLogTag,
           message: '详情页字段加载完成 generation=$generation bookId=$bookId '
@@ -608,6 +625,7 @@ final class BookInfoViewModel {
         switch (addResult) {
           case BookAddedToBookshelf():
             _emit(_state.copyWith(addingToShelf: false, inBookshelf: true));
+            _recordBookAddedToShelf();
             if (pendingChapterIndex == null) {
               _effectController.add(const ShowBookInfoMessageEffect('已加入书架'));
             }
@@ -690,12 +708,45 @@ final class BookInfoViewModel {
         _effectController.add(ShowBookInfoMessageEffect(error.message));
       case AppSuccess<void>():
         _emit(_state.copyWith(addingToShelf: false, inBookshelf: true));
+        _recordBookAddedToShelf();
         _effectController.add(const ShowBookInfoMessageEffect('已作为另一来源加入书架'));
         _continueAfterShelfConflict(conflict);
     }
   }
 
   /// 冲突解决后恢复用户原先从目录进入阅读器的动作。
+  /// 详情数据首次真正可见时报告受控入口，不携带书名、URL 或来源。
+  void _recordDetailOpened() {
+    final String? entry = _analyticsEntry;
+    if (_detailOpenReported ||
+        (entry != 'search' && entry != 'bookshelf')) {
+      return;
+    }
+    _detailOpenReported = true;
+    _recordAnalyticsEvent(
+      'book_detail_opened',
+      props: <String, Object?>{'entry': entry},
+    );
+  }
+
+  /// 仅在本轮事务真实新增一条书架记录时报告。
+  void _recordBookAddedToShelf() {
+    _recordAnalyticsEvent(
+      'book_added_to_shelf',
+      props: const <String, Object?>{'entry': 'detail'},
+    );
+  }
+
+  /// 埋点失败不覆盖详情、目录或书架事务结果。
+  void _recordAnalyticsEvent(
+    String eventName, {
+    required Map<String, Object?> props,
+  }) {
+    unawaited(
+      _analyticsRecorder(eventName, props: props).catchError((Object _) {}),
+    );
+  }
+
   void _continueAfterShelfConflict(BookInfoShelfConflictDialog conflict) {
     /// 冲突出现前用户选择的章节位置。
     final int? chapterIndex = conflict.pendingChapterIndex;

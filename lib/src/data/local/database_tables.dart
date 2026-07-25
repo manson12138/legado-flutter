@@ -1,16 +1,16 @@
 /// 集中定义 M2 数据库表名，避免 DAO 使用不可搜索的散落字符串。
 abstract final class DatabaseTables {
-  /// 书架书表，对应 Android `books`。
+  /// 按 `(userId, bookUrl)` 隔离的书架书表，对应 Android `books`。
   static const String books = 'books';
   /// 书源表，对应 Android `book_sources`。
   static const String bookSources = 'book_sources';
-  /// 章节表，对应 Android `chapters`。
+  /// 按用户与书籍复合外键隔离的章节表，对应 Android `chapters`。
   static const String chapters = 'chapters';
-  /// 阅读历史书籍快照表；成员资格与书架 `books` 完全独立。
+  /// 按用户隔离的阅读历史书籍快照表；成员资格与书架 `books` 完全独立。
   static const String readingHistoryBooks = 'reading_history_books';
-  /// 阅读历史目录快照表；供未加入书架的书继续恢复阅读。
+  /// 按用户隔离的阅读历史目录快照表；供未加入书架的书继续恢复阅读。
   static const String readingHistoryChapters = 'reading_history_chapters';
-  /// 书架分组表，对应 Android `book_groups`。
+  /// 按 `(userId, groupId)` 隔离的书架分组表，对应 Android `book_groups`。
   static const String bookGroups = 'book_groups';
   /// 搜索结果缓存表，对应 Android `searchBooks`。
   static const String searchBooks = 'searchBooks';
@@ -22,9 +22,9 @@ abstract final class DatabaseTables {
   static const String caches = 'caches';
   /// 净化规则表，对应 Android `replace_rules`。
   static const String replaceRules = 'replace_rules';
-  /// 离线下载队列表，Flutter 新增，Android 无对应持久表（队列状态只在内存）。
+  /// 按用户隔离的离线下载队列表，Flutter 新增，Android 无对应持久表。
   static const String downloadTasks = 'download_tasks';
-  /// 每本书的下载批次与自动换源状态，Flutter 新增。
+  /// 按用户隔离的每本书下载批次与自动换源状态，Flutter 新增。
   static const String downloadBookStates = 'download_book_states';
   /// 用户正文处理与标注表，对应 Android `book_content_processes`。
   static const String bookContentProcesses = 'book_content_processes';

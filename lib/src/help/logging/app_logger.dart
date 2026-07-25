@@ -7,6 +7,9 @@ const String appLogTag = 'LEGADO_APP';
 /// 应用启动、认证门恢复和主界面后台服务初始化使用的固定 Logcat Tag。
 const String appStartupLogTag = 'LEGADO_STARTUP';
 
+/// App 准入和版本更新检查使用的统一 Logcat Tag；只记录触发来源和受控结果摘要。
+const String appAccessCheckLogTag = 'APP_ACCESS_CHECK';
+
 /// App 账号登录、注册及会话生命周期使用的固定 Logcat Tag；不得记录认证凭据。
 const String authenticationLogTag = 'LEGADO_AUTH';
 
@@ -45,6 +48,9 @@ const String bookReaderContentLogTag = 'BOOK_READER_CONTENT';
 
 /// 服务器书源同步流程的统一诊断 Tag；不记录 Token、书源内容或远端地址。
 const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
+
+/// 内置书源启动导入流程的统一诊断 Tag；仅记录阶段、数量、耗时和错误类型。
+const String defaultBookSourceBootstrapLogTag = 'DEFAULT_BOOK_SOURCE_BOOTSTRAP';
 
 /// 【FLUTTER_JS_COMPAT_LOG】JavaScript 兼容诊断日志统一标识，问题解决后可按此标识完整移除。
 const String javaScriptCompatibilityDebugLogMarker = 'FLUTTER_JS_COMPAT_LOG';

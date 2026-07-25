@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 8;
+  static const int schemaVersion = 9;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -113,7 +113,7 @@ final class LegadoDatabase {
             'ALTER TABLE book_sources ADD COLUMN extraFieldsJson TEXT',
           );
         }
-        if (oldVersion < 3) {
+        if (oldVersion < 3 && newVersion < 9) {
           await _createSchemaV3(upgradedDatabase);
         }
         if (oldVersion < 4) {
@@ -129,7 +129,7 @@ final class LegadoDatabase {
           await _createSchemaV5(upgradedDatabase);
         }
         // v1/v2 升级会在上方直接创建已包含 v6 字段的下载表，不能再次追加同名列。
-        if (oldVersion >= 3 && oldVersion < 6) {
+        if (oldVersion >= 3 && oldVersion < 6 && newVersion < 9) {
           logOperation(operation: 'ALTER_TABLE', table: 'download_tasks');
           await upgradedDatabase.execute(
             'ALTER TABLE download_tasks ADD COLUMN errorMessage TEXT',
@@ -139,7 +139,7 @@ final class LegadoDatabase {
           );
         }
         // v1/v2 会直接创建当前下载任务字段；仅已有 v3～v6 表需要追加批次和书源归因列。
-        if (oldVersion >= 3 && oldVersion < 7) {
+        if (oldVersion >= 3 && oldVersion < 7 && newVersion < 9) {
           logOperation(operation: 'ALTER_TABLE', table: 'download_tasks');
           await upgradedDatabase.execute(
             'ALTER TABLE download_tasks ADD COLUMN generation INTEGER NOT NULL DEFAULT 0',
@@ -151,11 +151,14 @@ final class LegadoDatabase {
             'ALTER TABLE download_tasks ADD COLUMN successfulSourceUrl TEXT',
           );
         }
-        if (oldVersion < 7) {
+        if (oldVersion < 7 && newVersion < 9) {
           await _createSchemaV7(upgradedDatabase);
         }
-        if (oldVersion < 8) {
+        if (oldVersion < 8 && newVersion < 9) {
           await _createSchemaV8(upgradedDatabase);
+        }
+        if (oldVersion < 9) {
+          await _rebuildUserScopedSchemaV9(upgradedDatabase);
         }
       },
     );
@@ -169,6 +172,7 @@ final class LegadoDatabase {
 
     schemaBatch.execute('''
       CREATE TABLE books (
+        userId INTEGER NOT NULL,
         bookUrl TEXT NOT NULL DEFAULT '',
         tocUrl TEXT NOT NULL DEFAULT '',
         origin TEXT NOT NULL DEFAULT 'loc_book',
@@ -201,18 +205,21 @@ final class LegadoDatabase {
         variable TEXT,
         readConfig TEXT,
         syncTime INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (bookUrl)
+        PRIMARY KEY (userId, bookUrl)
       )
     ''');
     schemaBatch.execute(
-      'CREATE INDEX index_books_name_author ON books (name, author)',
+      'CREATE INDEX index_books_user_name_author '
+      'ON books (userId, name, author)',
     );
     schemaBatch.execute(
-      'CREATE INDEX index_books_durChapterTime ON books (durChapterTime)',
+      'CREATE INDEX index_books_user_read_time '
+      'ON books (userId, durChapterTime DESC)',
     );
 
     schemaBatch.execute('''
       CREATE TABLE book_groups (
+        userId INTEGER NOT NULL,
         groupId INTEGER NOT NULL,
         groupName TEXT NOT NULL,
         cover TEXT,
@@ -221,9 +228,13 @@ final class LegadoDatabase {
         show INTEGER NOT NULL DEFAULT 1,
         bookSort INTEGER NOT NULL DEFAULT -1,
         isPrivate INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (groupId)
+        PRIMARY KEY (userId, groupId)
       )
     ''');
+    schemaBatch.execute(
+      'CREATE INDEX index_book_groups_user_order '
+      'ON book_groups (userId, `order`)',
+    );
 
     schemaBatch.execute('''
       CREATE TABLE book_sources (
@@ -273,6 +284,7 @@ final class LegadoDatabase {
 
     schemaBatch.execute('''
       CREATE TABLE chapters (
+        userId INTEGER NOT NULL,
         url TEXT NOT NULL,
         title TEXT NOT NULL,
         isVolume INTEGER NOT NULL,
@@ -290,16 +302,18 @@ final class LegadoDatabase {
         endFragmentId TEXT,
         variable TEXT,
         reviewImg TEXT,
-        PRIMARY KEY (url, bookUrl),
-        FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
+        PRIMARY KEY (userId, url, bookUrl),
+        FOREIGN KEY (userId, bookUrl)
+          REFERENCES books (userId, bookUrl) ON DELETE CASCADE
       )
     ''');
     schemaBatch.execute(
-      'CREATE INDEX index_chapters_bookUrl ON chapters (bookUrl)',
+      'CREATE INDEX index_chapters_user_book '
+      'ON chapters (userId, bookUrl)',
     );
     schemaBatch.execute(
-      'CREATE UNIQUE INDEX index_chapters_bookUrl_index '
-      'ON chapters (bookUrl, `index`)',
+      'CREATE UNIQUE INDEX index_chapters_user_book_index '
+      'ON chapters (userId, bookUrl, `index`)',
     );
 
     schemaBatch.execute('''
@@ -403,6 +417,7 @@ final class LegadoDatabase {
     logOperation(operation: 'CREATE_SCHEMA', table: 'download_tasks');
     await database.execute('''
       CREATE TABLE IF NOT EXISTS download_tasks (
+        userId INTEGER NOT NULL,
         bookUrl TEXT NOT NULL,
         chapterIndex INTEGER NOT NULL,
         status TEXT NOT NULL,
@@ -413,12 +428,14 @@ final class LegadoDatabase {
         attemptedSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
         successfulSourceUrl TEXT,
         updatedAt INTEGER NOT NULL,
-        PRIMARY KEY (bookUrl, chapterIndex),
-        FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
+        PRIMARY KEY (userId, bookUrl, chapterIndex),
+        FOREIGN KEY (userId, bookUrl)
+          REFERENCES books (userId, bookUrl) ON DELETE CASCADE
       )
     ''');
     await database.execute(
-      'CREATE INDEX IF NOT EXISTS index_download_tasks_bookUrl ON download_tasks (bookUrl)',
+      'CREATE INDEX IF NOT EXISTS index_download_tasks_user_book '
+      'ON download_tasks (userId, bookUrl)',
     );
   }
 
@@ -427,6 +444,7 @@ final class LegadoDatabase {
     logOperation(operation: 'CREATE_SCHEMA', table: 'download_book_states');
     await database.execute('''
       CREATE TABLE IF NOT EXISTS download_book_states (
+        userId INTEGER NOT NULL,
         bookUrl TEXT NOT NULL,
         autoChangeSource INTEGER NOT NULL DEFAULT 0,
         generation INTEGER NOT NULL DEFAULT 0,
@@ -441,8 +459,9 @@ final class LegadoDatabase {
         triedSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
         scoredSourceUrlsJson TEXT NOT NULL DEFAULT '[]',
         updatedAt INTEGER NOT NULL,
-        PRIMARY KEY (bookUrl),
-        FOREIGN KEY (bookUrl) REFERENCES books (bookUrl) ON DELETE CASCADE
+        PRIMARY KEY (userId, bookUrl),
+        FOREIGN KEY (userId, bookUrl)
+          REFERENCES books (userId, bookUrl) ON DELETE CASCADE
       )
     ''');
   }
@@ -453,6 +472,7 @@ final class LegadoDatabase {
     final Batch historyBatch = database.batch();
     historyBatch.execute('''
       CREATE TABLE IF NOT EXISTS reading_history_books (
+        userId INTEGER NOT NULL,
         bookUrl TEXT NOT NULL DEFAULT '',
         tocUrl TEXT NOT NULL DEFAULT '',
         origin TEXT NOT NULL DEFAULT 'loc_book',
@@ -485,15 +505,16 @@ final class LegadoDatabase {
         variable TEXT,
         readConfig TEXT,
         syncTime INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (bookUrl)
+        PRIMARY KEY (userId, bookUrl)
       )
     ''');
     historyBatch.execute(
-      'CREATE INDEX IF NOT EXISTS index_reading_history_books_read_time '
-      'ON reading_history_books (durChapterTime DESC)',
+      'CREATE INDEX IF NOT EXISTS index_reading_history_books_user_read_time '
+      'ON reading_history_books (userId, durChapterTime DESC)',
     );
     historyBatch.execute('''
       CREATE TABLE IF NOT EXISTS reading_history_chapters (
+        userId INTEGER NOT NULL,
         url TEXT NOT NULL,
         title TEXT NOT NULL,
         isVolume INTEGER NOT NULL,
@@ -511,34 +532,139 @@ final class LegadoDatabase {
         endFragmentId TEXT,
         variable TEXT,
         reviewImg TEXT,
-        PRIMARY KEY (url, bookUrl),
-        FOREIGN KEY (bookUrl) REFERENCES reading_history_books (bookUrl)
-          ON DELETE CASCADE
+        PRIMARY KEY (userId, url, bookUrl),
+        FOREIGN KEY (userId, bookUrl)
+          REFERENCES reading_history_books (userId, bookUrl) ON DELETE CASCADE
       )
     ''');
     historyBatch.execute(
-      'CREATE INDEX IF NOT EXISTS index_reading_history_chapters_book '
-      'ON reading_history_chapters (bookUrl)',
+      'CREATE INDEX IF NOT EXISTS index_reading_history_chapters_user_book '
+      'ON reading_history_chapters (userId, bookUrl)',
     );
     historyBatch.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS '
-      'index_reading_history_chapters_book_index '
-      'ON reading_history_chapters (bookUrl, `index`)',
+      'index_reading_history_chapters_user_book_index '
+      'ON reading_history_chapters (userId, bookUrl, `index`)',
     );
-    /// 升级安装把既有书架中已经真实保存过阅读时间的书籍作为初始历史快照。
-    historyBatch.execute('''
-      INSERT OR IGNORE INTO reading_history_books
-      SELECT * FROM books
-      WHERE durChapterTime > 0
-    ''');
-    /// 只复制已迁移历史书籍的目录，未读书架书仍不会进入历史。
-    historyBatch.execute('''
-      INSERT OR IGNORE INTO reading_history_chapters
-      SELECT chapters.* FROM chapters
-      INNER JOIN reading_history_books
-        ON reading_history_books.bookUrl = chapters.bookUrl
-    ''');
     await historyBatch.commit(noResult: true);
+  }
+
+  /// 将 v8 及更早的设备级书架数据破坏式升级为按用户复合主键的 v9 结构。
+  ///
+  /// 用户已确认旧书架、目录、分组、阅读历史和下载状态不认领给任何账号，因此本迁移
+  /// 只按外键依赖顺序删除并重建表，不复制旧记录。
+  Future<void> _rebuildUserScopedSchemaV9(Database database) async {
+    logOperation(operation: 'REBUILD_SCHEMA', table: 'user_bookshelf');
+    /// 删除旧外键图并创建用户作用域基础表的原子 DDL 批次。
+    final Batch schemaBatch = database.batch();
+    schemaBatch.execute('DROP TABLE IF EXISTS download_tasks');
+    schemaBatch.execute('DROP TABLE IF EXISTS download_book_states');
+    schemaBatch.execute('DROP TABLE IF EXISTS chapters');
+    schemaBatch.execute('DROP TABLE IF EXISTS reading_history_chapters');
+    schemaBatch.execute('DROP TABLE IF EXISTS reading_history_books');
+    schemaBatch.execute('DROP TABLE IF EXISTS books');
+    schemaBatch.execute('DROP TABLE IF EXISTS book_groups');
+    schemaBatch.execute('''
+      CREATE TABLE books (
+        userId INTEGER NOT NULL,
+        bookUrl TEXT NOT NULL DEFAULT '',
+        tocUrl TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL DEFAULT 'loc_book',
+        originName TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        author TEXT NOT NULL DEFAULT '',
+        kind TEXT,
+        customTag TEXT,
+        coverUrl TEXT,
+        customCoverUrl TEXT,
+        intro TEXT,
+        customIntro TEXT,
+        remark TEXT,
+        charset TEXT,
+        type INTEGER NOT NULL DEFAULT 0,
+        `group` INTEGER NOT NULL DEFAULT 0,
+        latestChapterTitle TEXT,
+        latestChapterTime INTEGER NOT NULL DEFAULT 0,
+        lastCheckTime INTEGER NOT NULL DEFAULT 0,
+        lastCheckCount INTEGER NOT NULL DEFAULT 0,
+        totalChapterNum INTEGER NOT NULL DEFAULT 0,
+        durChapterTitle TEXT,
+        durChapterIndex INTEGER NOT NULL DEFAULT 0,
+        durChapterPos INTEGER NOT NULL DEFAULT 0,
+        durChapterTime INTEGER NOT NULL DEFAULT 0,
+        wordCount TEXT,
+        canUpdate INTEGER NOT NULL DEFAULT 1,
+        `order` INTEGER NOT NULL,
+        originOrder INTEGER NOT NULL DEFAULT 0,
+        variable TEXT,
+        readConfig TEXT,
+        syncTime INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (userId, bookUrl)
+      )
+    ''');
+    schemaBatch.execute(
+      'CREATE INDEX index_books_user_name_author '
+      'ON books (userId, name, author)',
+    );
+    schemaBatch.execute(
+      'CREATE INDEX index_books_user_read_time '
+      'ON books (userId, durChapterTime DESC)',
+    );
+    schemaBatch.execute('''
+      CREATE TABLE book_groups (
+        userId INTEGER NOT NULL,
+        groupId INTEGER NOT NULL,
+        groupName TEXT NOT NULL,
+        cover TEXT,
+        `order` INTEGER NOT NULL DEFAULT 0,
+        enableRefresh INTEGER NOT NULL DEFAULT 1,
+        show INTEGER NOT NULL DEFAULT 1,
+        bookSort INTEGER NOT NULL DEFAULT -1,
+        isPrivate INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (userId, groupId)
+      )
+    ''');
+    schemaBatch.execute(
+      'CREATE INDEX index_book_groups_user_order '
+      'ON book_groups (userId, `order`)',
+    );
+    schemaBatch.execute('''
+      CREATE TABLE chapters (
+        userId INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        isVolume INTEGER NOT NULL,
+        baseUrl TEXT NOT NULL,
+        bookUrl TEXT NOT NULL,
+        `index` INTEGER NOT NULL,
+        isVip INTEGER NOT NULL,
+        isPay INTEGER NOT NULL,
+        resourceUrl TEXT,
+        tag TEXT,
+        wordCount TEXT,
+        start INTEGER,
+        end INTEGER,
+        startFragmentId TEXT,
+        endFragmentId TEXT,
+        variable TEXT,
+        reviewImg TEXT,
+        PRIMARY KEY (userId, url, bookUrl),
+        FOREIGN KEY (userId, bookUrl)
+          REFERENCES books (userId, bookUrl) ON DELETE CASCADE
+      )
+    ''');
+    schemaBatch.execute(
+      'CREATE INDEX index_chapters_user_book '
+      'ON chapters (userId, bookUrl)',
+    );
+    schemaBatch.execute(
+      'CREATE UNIQUE INDEX index_chapters_user_book_index '
+      'ON chapters (userId, bookUrl, `index`)',
+    );
+    await schemaBatch.commit(noResult: true);
+    await _createSchemaV3(database);
+    await _createSchemaV7(database);
+    await _createSchemaV8(database);
   }
 
   /// 新增 Android 对齐的用户正文处理与标注表。

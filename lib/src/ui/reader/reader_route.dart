@@ -473,7 +473,10 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
             builder: (BuildContext context, AsyncSnapshot<ReaderUiState> snapshot) {
               /// 面板当前实时状态。
               final ReaderUiState state = snapshot.data ?? _viewModel.state;
-              return _buildSheet(sheet, state);
+              return Theme(
+                data: _readerSheetTheme(Theme.of(context), state.config),
+                child: _buildSheet(sheet, state),
+              );
             },
           );
         },
@@ -487,6 +490,22 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         }
       }
     });
+  }
+
+  /// 让目录、书签、设置及其他阅读器面板统一跟随当前阅读配色。
+  ThemeData _readerSheetTheme(ThemeData theme, ReaderDisplayConfig config) {
+    final Color background = Color(config.backgroundColorValue);
+    final Color foreground = Color(config.textColorValue);
+    return theme.copyWith(
+      canvasColor: background,
+      scaffoldBackgroundColor: background,
+      bottomSheetTheme: BottomSheetThemeData(backgroundColor: background),
+      iconTheme: IconThemeData(color: foreground),
+      textTheme: theme.textTheme.apply(
+        bodyColor: foreground,
+        displayColor: foreground,
+      ),
+    );
   }
 
   /// 构建目录、显示设置或书签面板内容。
@@ -532,9 +551,21 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
                 chapterIndex: chapterIndex,
                 chapterTitle: chapterTitle,
                 totalChapterCount: state.chapters.length,
-                onReplace: (int index, String content) {
+                onReplace: (
+                  int index,
+                  String content,
+                  int candidateCount,
+                  int startedAtMilliseconds,
+                ) {
                   Navigator.of(context).pop();
-                  _viewModel.onIntent(SaveReaderChapterSourceContentIntent(index, content));
+                  _viewModel.onIntent(
+                    SaveReaderChapterSourceContentIntent(
+                      index,
+                      content,
+                      candidateCount: candidateCount,
+                      startedAtMilliseconds: startedAtMilliseconds,
+                    ),
+                  );
                 },
                 onDismiss: () => Navigator.of(context).pop(),
               ),
@@ -858,7 +889,12 @@ final class _ChangeChapterSourceSheetHost extends StatefulWidget {
   final int totalChapterCount;
 
   /// 候选正文拉取完成后的回调，由外层阅读器负责保存和重新加载。
-  final void Function(int chapterIndex, String content) onReplace;
+  final void Function(
+    int chapterIndex,
+    String content,
+    int candidateCount,
+    int startedAtMilliseconds,
+  ) onReplace;
 
   /// 用户主动关闭面板且不替换任何正文时的回调。
   final VoidCallback onDismiss;
@@ -902,8 +938,15 @@ final class _ChangeChapterSourceSheetHostState extends State<_ChangeChapterSourc
       case ReplaceChangeChapterSourceContentEffect(
         chapterIndex: final int chapterIndex,
         content: final String content,
+        candidateCount: final int candidateCount,
+        startedAtMilliseconds: final int startedAtMilliseconds,
       ):
-        widget.onReplace(chapterIndex, content);
+        widget.onReplace(
+          chapterIndex,
+          content,
+          candidateCount,
+          startedAtMilliseconds,
+        );
       case DismissChangeChapterSourceEffect():
         widget.onDismiss();
     }

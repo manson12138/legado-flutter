@@ -192,6 +192,8 @@ final class RemoteBookSourceSyncService {
     _batchImporter = (String sourceJson) => importer.execute(
       sourceJson,
       conflictPolicy: BookSourceConflictPolicy.overwrite,
+      /// 服务器同步需要完整保留服务器数据；可见性与搜索调度阶段再过滤。
+      filterBlockedSources: false,
     );
   }
 
@@ -246,6 +248,10 @@ final class RemoteBookSourceSyncService {
     int batchCount = checkpoint.batchCount;
     int totalCount = checkpoint.displayedTotal ?? 0;
     int importedCount = 0;
+    int invalidCount = 0;
+    int blockedCount = 0;
+    int pageCount = 0;
+    int sourceCount = 0;
     final Stopwatch stopwatch = Stopwatch()..start();
     try {
       _logger.info(
@@ -263,6 +269,8 @@ final class RemoteBookSourceSyncService {
         final RemoteBookSourceCursorPage page =
             await _api.fetchBookSourceCursorPage(token, beforeId: beforeId);
         _validatePage(page, beforeId);
+        pageCount += 1;
+        sourceCount += page.items.length;
         totalCount = page.total;
         onProgress?.call(RemoteBookSourceSyncProgress(
           stage: RemoteBookSourceSyncStage.importingBatch,
@@ -278,6 +286,8 @@ final class RemoteBookSourceSyncService {
             AppFailure<BookSourceImportResult>(error: final Object error) => throw error,
           };
           importedCount += batchResult.imported;
+          invalidCount += batchResult.invalid;
+          blockedCount += batchResult.blockedAdult;
         }
         processedCount += page.items.length;
         batchCount = batchNumber;
@@ -286,6 +296,26 @@ final class RemoteBookSourceSyncService {
           _logger.info(
             tag: remoteBookSourceSyncLogTag,
             message: 'stage=cursor_completed batches=$batchCount processed=$processedCount imported=$importedCount elapsedMs=${stopwatch.elapsedMilliseconds}',
+          );
+          await _recordAnalyticsBestEffort(
+            'book_source_import_completed',
+            props: <String, Object?>{
+              'entry': 'remote_sync',
+              'importedCount': importedCount,
+              'blockedCount': blockedCount,
+              'invalidCount': invalidCount,
+            },
+          );
+          await _recordAnalyticsBestEffort(
+            'remote_book_source_sync_completed',
+            props: <String, Object?>{
+              'result': 'success',
+              'pageCount': pageCount,
+              'sourceCount': sourceCount,
+              'durationBucket': _durationBucket(
+                stopwatch.elapsedMilliseconds,
+              ),
+            },
           );
           return RemoteBookSourceCursorSyncResult(
             importedCount: importedCount,
@@ -312,6 +342,15 @@ final class RemoteBookSourceSyncService {
         message: 'stage=cursor_failed batches=$batchCount processed=$processedCount imported=$importedCount elapsedMs=${stopwatch.elapsedMilliseconds}',
         error: error,
         stackTrace: stackTrace,
+      );
+      await _recordAnalyticsBestEffort(
+        'remote_book_source_sync_completed',
+        props: <String, Object?>{
+          'result': 'failed',
+          'pageCount': pageCount,
+          'sourceCount': sourceCount,
+          'durationBucket': _durationBucket(stopwatch.elapsedMilliseconds),
+        },
       );
       rethrow;
     }
@@ -404,5 +443,34 @@ final class RemoteBookSourceSyncService {
   /// 上传已同意的分析事件；失败保留队列等待后续会话。
   Future<void> flushPendingAnalytics() async {
     await _analyticsRecorder.flush();
+  }
+
+  /// 埋点写入失败只丢弃当前旁路动作，不改变书源同步结果。
+  Future<void> _recordAnalyticsBestEffort(
+    String eventName, {
+    required Map<String, Object?> props,
+  }) async {
+    try {
+      await _analyticsRecorder.recordEvent(eventName, props: props);
+    } on Object {
+      // 同步断点和导入事务拥有更高优先级。
+    }
+  }
+
+  /// 将精确耗时转换为 API 固定分桶。
+  String _durationBucket(int elapsedMilliseconds) {
+    if (elapsedMilliseconds < 1000) {
+      return 'lt_1s';
+    }
+    if (elapsedMilliseconds < 3000) {
+      return '1_3s';
+    }
+    if (elapsedMilliseconds < 10000) {
+      return '3_10s';
+    }
+    if (elapsedMilliseconds < 30000) {
+      return '10_30s';
+    }
+    return 'gte_30s';
   }
 }

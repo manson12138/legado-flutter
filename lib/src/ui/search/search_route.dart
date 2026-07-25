@@ -52,6 +52,9 @@ final class _SearchRouteState extends State<SearchRoute> {
     _viewModel = SearchViewModel(
       coordinator: widget.dependencies.createBookSearchCoordinator(),
       historyGateway: widget.dependencies.searchHistoryGateway,
+      searchPreferences: widget.dependencies.searchPreferences,
+      analyticsRecorder:
+          widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
@@ -284,7 +287,11 @@ final class _SearchRouteState extends State<SearchRoute> {
         );
         Navigator.of(context).pushNamed(
           AppRoute.bookInfo,
-          arguments: BookInfoRouteArguments(group: group, selectedBook: book),
+          arguments: BookInfoRouteArguments(
+            group: group,
+            selectedBook: book,
+            analyticsEntry: 'search',
+          ),
         );
       case ShowSearchMessageEffect(message: final String message):
         ScaffoldMessenger.of(context)

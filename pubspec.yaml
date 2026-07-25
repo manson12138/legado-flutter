@@ -1,7 +1,7 @@
 name: legado_flutter
 description: "Legado Android 与 iOS 共用的 Flutter 重写工程。"
 publish_to: 'none'
-version: 1.0.0+6
+version: 1.0.0+7
 
 environment:
   sdk: '>=3.11.3 <4.0.0'

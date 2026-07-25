@@ -73,6 +73,9 @@ final class ChangeChapterSourceViewModel {
   /// 按“来源 URL + 书籍 URL”稳定键保存去重候选。
   final Map<(String, String), SearchBook> _candidateMap = <(String, String), SearchBook>{};
 
+  /// 面板创建时刻，只用于换源完成耗时分桶。
+  final int _startedAtMilliseconds = DateTime.now().millisecondsSinceEpoch;
+
   /// 是否已经释放面板资源。
   bool _disposed = false;
 
@@ -362,7 +365,12 @@ final class ChangeChapterSourceViewModel {
       }
       _emit(_state.copyWith(fetchingContent: false));
       _effectController.add(
-        ReplaceChangeChapterSourceContentEffect(_state.chapterIndex, content),
+        ReplaceChangeChapterSourceContentEffect(
+          _state.chapterIndex,
+          content,
+          candidateCount: _candidateMap.length,
+          startedAtMilliseconds: _startedAtMilliseconds,
+        ),
       );
     } on Object catch (error, stackTrace) {
       if (!_disposed && generation == _tocGeneration) {

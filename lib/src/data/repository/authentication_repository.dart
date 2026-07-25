@@ -33,9 +33,12 @@ final class AuthenticationRepository implements AuthenticationGateway {
   /// 当前 Refresh Token 的过期时刻。
   DateTime? _refreshExpiresAt;
   /// 防止启动与前台恢复并发覆盖最新会话的任务。
-  Future<void>? _restoreTask;
+  Future<AuthenticationRestoreStart>? _restoreTask;
   /// 已恢复本地会话后的后台远端校验任务；网络不能阻塞启动页，但同一会话只校验一次。
   Future<void>? _restoredSessionValidationTask;
+  /// 启动恢复后台校验的非敏感最终结果。
+  final ValueNotifier<AuthenticationRestoreResult?> _restoreResult =
+      ValueNotifier<AuthenticationRestoreResult?>(null);
   /// 每次替换或清除内存会话时递增，用于拒绝过期后台校验结果覆盖新登录。
   int _sessionGeneration = 0;
   /// 内存中缓存的服务端公钥，应用退出即释放。
@@ -47,6 +50,10 @@ final class AuthenticationRepository implements AuthenticationGateway {
 
   @override
   ValueListenable<AppAuthenticationSession?> get session => _session;
+
+  @override
+  ValueListenable<AuthenticationRestoreResult?> get restoreResult =>
+      _restoreResult;
 
   @override
   Future<AppAuthenticationSession> login({required String username, required String password}) async {
@@ -115,13 +122,16 @@ final class AuthenticationRepository implements AuthenticationGateway {
   }
 
   @override
-  Future<void> restoreSession() {
-    final Future<void>? existing = _restoreTask;
+  Future<AuthenticationRestoreStart> restoreSession() {
+    final Future<AuthenticationRestoreStart>? existing = _restoreTask;
     if (existing != null) {
       return existing;
     }
-    final Future<void> task = _restoreStoredSession();
-    final Future<void> trackedTask = task.whenComplete(() { _restoreTask = null; });
+    final Future<AuthenticationRestoreStart> task = _restoreStoredSession();
+    final Future<AuthenticationRestoreStart> trackedTask =
+        task.whenComplete(() {
+      _restoreTask = null;
+    });
     _restoreTask = trackedTask;
     return trackedTask;
   }
@@ -152,15 +162,30 @@ final class AuthenticationRepository implements AuthenticationGateway {
   String? currentToken() => _accessToken;
 
   /// 恢复未过期的本地安全会话，并在需要时由服务端刷新或校验权限。
-  Future<void> _restoreStoredSession() async {
+  Future<AuthenticationRestoreStart> _restoreStoredSession() async {
     try {
       final StoredAuthenticationSession? stored = await _sessionStore.read();
-      if (stored == null) { return; }
+      if (stored == null) {
+        return const AuthenticationRestoreStart(
+          state: AuthenticationRestoreState.none,
+          refreshAttempted: false,
+        );
+      }
       final DateTime now = DateTime.now().toUtc();
       if (!now.isBefore(stored.refreshExpiresAt)) {
         await _clearSession();
-        return;
+        _restoreResult.value = const AuthenticationRestoreResult(
+          kind: AuthenticationRestoreResultKind.expired,
+          refreshAttempted: false,
+        );
+        return const AuthenticationRestoreStart(
+          state: AuthenticationRestoreState.none,
+          refreshAttempted: false,
+        );
       }
+      final bool refreshAttempted =
+          !now.isBefore(stored.accessExpiresAt) ||
+          !now.isBefore(stored.refreshAfter);
       _accessToken = stored.accessToken;
       _accessExpiresAt = stored.accessExpiresAt;
       _refreshAfter = stored.refreshAfter;
@@ -170,25 +195,56 @@ final class AuthenticationRepository implements AuthenticationGateway {
       _sessionGeneration += 1;
       final int generation = _sessionGeneration;
       /// 本地安全快照决定认证门是否放行；远端校验改在后台进行，避免网络超时遮住首屏。
-      _startRestoredSessionValidation(stored, generation);
+      _startRestoredSessionValidation(
+        stored,
+        generation,
+        refreshAttempted: refreshAttempted,
+      );
+      return AuthenticationRestoreStart(
+        state: refreshAttempted
+            ? AuthenticationRestoreState.refreshRequired
+            : AuthenticationRestoreState.restored,
+        refreshAttempted: refreshAttempted,
+      );
     } on Object catch (error) {
       if (_isUnauthorized(error)) {
         await _clearSession();
-        return;
+        _restoreResult.value = const AuthenticationRestoreResult(
+          kind: AuthenticationRestoreResultKind.unauthorized,
+          refreshAttempted: false,
+        );
+        return const AuthenticationRestoreStart(
+          state: AuthenticationRestoreState.none,
+          refreshAttempted: false,
+        );
       }
       _logger.warning(tag: authenticationLogTag, message: 'stage=session_restore_degraded reason=remote_unavailable', error: error);
+      _restoreResult.value = const AuthenticationRestoreResult(
+        kind: AuthenticationRestoreResultKind.networkDegraded,
+        refreshAttempted: false,
+      );
+      return const AuthenticationRestoreStart(
+        state: AuthenticationRestoreState.none,
+        refreshAttempted: false,
+      );
     }
   }
 
   /// 单飞校验已恢复快照；网络失败保留未过期会话，401 仅在会话仍为同一代时清除。
   void _startRestoredSessionValidation(
     StoredAuthenticationSession stored,
-    int generation,
+    int generation, {
+    required bool refreshAttempted,
+  }
   ) {
     if (_restoredSessionValidationTask != null) {
       return;
     }
-    final Future<void> task = _validateRestoredSession(stored, generation);
+    final Future<void> task = _validateRestoredSession(
+      stored,
+      generation,
+      refreshAttempted: refreshAttempted,
+    );
     _restoredSessionValidationTask = task.whenComplete(() {
       _restoredSessionValidationTask = null;
     });
@@ -197,7 +253,9 @@ final class AuthenticationRepository implements AuthenticationGateway {
   /// 刷新或校验本地会话对应的服务端状态，不允许旧任务覆盖用户之后建立的新会话。
   Future<void> _validateRestoredSession(
     StoredAuthenticationSession stored,
-    int generation,
+    int generation, {
+    required bool refreshAttempted,
+  }
   ) async {
     try {
       final DateTime now = DateTime.now().toUtc();
@@ -214,6 +272,10 @@ final class AuthenticationRepository implements AuthenticationGateway {
         _logger.info(
           tag: authenticationLogTag,
           message: 'stage=session_restored action=token_refreshed',
+        );
+        _restoreResult.value = AuthenticationRestoreResult(
+          kind: AuthenticationRestoreResultKind.success,
+          refreshAttempted: refreshAttempted,
         );
         return;
       }
@@ -253,9 +315,17 @@ final class AuthenticationRepository implements AuthenticationGateway {
         tag: authenticationLogTag,
         message: 'stage=session_restored action=permissions_refreshed',
       );
+      _restoreResult.value = AuthenticationRestoreResult(
+        kind: AuthenticationRestoreResultKind.success,
+        refreshAttempted: refreshAttempted,
+      );
     } on Object catch (error) {
       if (_isUnauthorized(error) && _sessionGeneration == generation) {
         await _clearSession();
+        _restoreResult.value = AuthenticationRestoreResult(
+          kind: AuthenticationRestoreResultKind.unauthorized,
+          refreshAttempted: refreshAttempted,
+        );
         return;
       }
       _logger.warning(
@@ -263,6 +333,12 @@ final class AuthenticationRepository implements AuthenticationGateway {
         message: 'stage=session_restore_degraded reason=remote_unavailable',
         error: error,
       );
+      if (_sessionGeneration == generation) {
+        _restoreResult.value = AuthenticationRestoreResult(
+          kind: AuthenticationRestoreResultKind.networkDegraded,
+          refreshAttempted: refreshAttempted,
+        );
+      }
     }
   }
 

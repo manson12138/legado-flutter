@@ -15,6 +15,7 @@ final class BookChapterDao {
 
   /// 按章节索引升序读取一本书的完整目录。
   Future<List<BookChapter>> getChapterList(
+    int userId,
     String bookUrl, {
     DatabaseExecutor? executor,
   }) async {
@@ -24,14 +25,14 @@ final class BookChapterDao {
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.chapters,
-      where: 'bookUrl = ? orderBy=`index` ASC',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ? orderBy=`index` ASC',
+      argumentCount: 2,
     );
     /// 指定书籍的章节行。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.chapters,
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
       orderBy: '`index` ASC',
     );
     return rows.map(bookChapterFromMap).toList(growable: false);
@@ -39,6 +40,7 @@ final class BookChapterDao {
 
   /// 按书籍 URL 和章节索引读取单章。
   Future<BookChapter?> getChapter(
+    int userId,
     String bookUrl,
     int index, {
     DatabaseExecutor? executor,
@@ -49,21 +51,24 @@ final class BookChapterDao {
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.chapters,
-      where: 'bookUrl = ? AND `index` = ? limit=1',
-      argumentCount: 2,
+      where: 'userId = ? AND bookUrl = ? AND `index` = ? limit=1',
+      argumentCount: 3,
     );
     /// 最多包含一章的索引查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.chapters,
-      where: 'bookUrl = ? AND `index` = ?',
-      whereArgs: <Object?>[bookUrl, index],
+      where: 'userId = ? AND bookUrl = ? AND `index` = ?',
+      whereArgs: <Object?>[userId, bookUrl, index],
       limit: 1,
     );
     return rows.isEmpty ? null : bookChapterFromMap(rows.first);
   }
 
   /// 观察一本书的目录；章节表变化后重新读取并按索引排序。
-  Stream<List<BookChapter>> watchChapterList(String bookUrl) async* {
+  Stream<List<BookChapter>> watchChapterList(
+    int userId,
+    String bookUrl,
+  ) async* {
     /// 当前观察依赖的表集合。
     final Set<String> observedTables = <String>{DatabaseTables.chapters};
     /// 已消费的最近一次相关表提交版本。
@@ -71,7 +76,7 @@ final class BookChapterDao {
       observedTables,
     );
     while (true) {
-      yield await getChapterList(bookUrl);
+      yield await getChapterList(userId, bookUrl);
       observedRevision = await _database.changeNotifier.waitForTableChange(
         observedTables,
         observedRevision,
@@ -81,6 +86,7 @@ final class BookChapterDao {
 
   /// 批量替换写入章节；调用方可传入事务以和书籍写入组成闭环。
   Future<void> upsertAll(
+    int userId,
     List<BookChapter> chapters, {
     DatabaseExecutor? executor,
   }) async {
@@ -100,7 +106,7 @@ final class BookChapterDao {
     for (final BookChapter chapter in chapters) {
       batch.insert(
         DatabaseTables.chapters,
-        bookChapterToMap(chapter),
+        <String, Object?>{'userId': userId, ...bookChapterToMap(chapter)},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
@@ -112,6 +118,7 @@ final class BookChapterDao {
 
   /// 删除一本书的全部章节；用于目录整体替换。
   Future<void> deleteByBook(
+    int userId,
     String bookUrl, {
     DatabaseExecutor? executor,
   }) async {
@@ -121,13 +128,13 @@ final class BookChapterDao {
     _database.logOperation(
       operation: 'DELETE',
       table: DatabaseTables.chapters,
-      where: 'bookUrl = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
     );
     await writeExecutor.delete(
       DatabaseTables.chapters,
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
     );
     if (executor == null) {
       _database.changeNotifier.notifyTables(<String>{DatabaseTables.chapters});

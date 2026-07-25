@@ -85,6 +85,10 @@ final class _SettingsRouteState extends State<SettingsRoute> {
                       },
                       analyticsEnabled: analyticsSnapshot.data ?? false,
                       onChangeAnalyticsEnabled: (bool enabled) {
+                        if (!enabled) {
+                          widget.dependencies.downloadCoordinator
+                              .clearAnalyticsMeasurements();
+                        }
                         widget.dependencies.remoteBookSourceSyncService
                             .setAnalyticsEnabled(enabled);
                       },

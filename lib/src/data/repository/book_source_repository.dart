@@ -39,7 +39,11 @@ final class BookSourceRepository implements BookSourceGateway {
   /// 观察全部书源，不向上层暴露 sqflite 流或行对象。
   @override
   Stream<List<BookSource>> watchAll() {
-    return guardDataStream<List<BookSource>>(_bookSourceDao.watchAll());
+    /// 书源管理列表属于用户可见入口；同步落库不做拦截，但展示时统一
+    /// 依据屏蔽词与域名黑名单过滤，避免把策略散落到 Widget。
+    return guardDataStream<List<BookSource>>(
+      _bookSourceDao.watchAll().asyncMap(_filterVisibleSources),
+    );
   }
 
   /// 一次性读取全部书源，供启动默认数据导入等非观察场景使用。
@@ -83,6 +87,7 @@ final class BookSourceRepository implements BookSourceGateway {
   Future<BookSourceImportResult> importSourceJson(
     String sourceJson, {
     required BookSourceConflictPolicy conflictPolicy,
+    bool filterBlockedSources = true,
   }) async {
     try {
       /// 完成历史字段兼容和逐条必填字段校验的批次。
@@ -104,7 +109,7 @@ final class BookSourceRepository implements BookSourceGateway {
               skipped += 1;
               continue;
             }
-            if (await _adultContentGateway.isAdultSource(
+            if (filterBlockedSources && await _adultContentGateway.isAdultSource(
               name: source.bookSourceName,
               group: source.bookSourceGroup,
               comment: source.bookSourceComment,
@@ -282,6 +287,23 @@ final class BookSourceRepository implements BookSourceGateway {
         // 回流失败已由队列自行降级，不能改变本地评分结果。
       }
     });
+  }
+
+  /// 筛除命中屏蔽词或域名黑名单的书源；仅用于列表可见性，绝不删除已同步数据。
+  Future<List<BookSource>> _filterVisibleSources(List<BookSource> sources) async {
+    final List<BookSource> visible = <BookSource>[];
+    for (final BookSource source in sources) {
+      final bool blocked = await _adultContentGateway.isAdultSource(
+        name: source.bookSourceName,
+        group: source.bookSourceGroup,
+        comment: source.bookSourceComment,
+        url: source.bookSourceUrl,
+      );
+      if (!blocked) {
+        visible.add(source);
+      }
+    }
+    return List<BookSource>.unmodifiable(visible);
   }
 
   /// 设置或取消书源置顶。

@@ -126,6 +126,18 @@ final class BookSourceDebugItem {
 }
 
 /// 书源管理页面当前显示的对话框。
+/// 用户可触发的本地书源导入入口。
+enum BookSourceImportEntry {
+  /// 系统文件选择器。
+  file,
+
+  /// 手动输入或剪贴板。
+  text,
+
+  /// 二维码扫描。
+  qr,
+}
+
 sealed class BookSourceDialog {
   /// 限制对话框类型只能由本文件声明。
   const BookSourceDialog();
@@ -134,10 +146,16 @@ sealed class BookSourceDialog {
 /// 文本或剪贴板导入对话框。
 final class ImportTextDialog extends BookSourceDialog {
   /// 创建文本导入对话框。
-  const ImportTextDialog({required this.initialText});
+  const ImportTextDialog({
+    required this.initialText,
+    required this.entry,
+  });
 
   /// 剪贴板或空白初始文本。
   final String initialText;
+
+  /// 打开本对话框的受控导入入口。
+  final BookSourceImportEntry entry;
 }
 
 /// 新增或编辑书源对话框。
@@ -200,6 +218,7 @@ final class BookSourceManagementUiState {
     List<BookSource> sources = const <BookSource>[],
     this.query = '',
     this.filter = BookSourceFilter.all,
+    this.selectedGroup,
     Set<String> selectedUrls = const <String>{},
     this.dialog,
     this.errorMessage,
@@ -220,6 +239,9 @@ final class BookSourceManagementUiState {
 
   /// 当前筛选范围。
   final BookSourceFilter filter;
+
+  /// 当前书源分组筛选；null 表示“总书源”。
+  final String? selectedGroup;
 
   /// 选择模式中的书源 URL。
   final Set<String> selectedUrls;
@@ -243,8 +265,13 @@ final class BookSourceManagementUiState {
         BookSourceFilter.ungrouped => source.bookSourceGroup?.trim().isEmpty ?? true,
         BookSourceFilter.javaScript => _containsJavaScript(source),
       };
-      if (!matchesFilter || normalizedQuery.isEmpty) {
-        return matchesFilter;
+      final bool matchesGroup = selectedGroup == null ||
+          (source.bookSourceGroup ?? '')
+              .split(',')
+              .map((String value) => value.trim())
+              .contains(selectedGroup);
+      if (!matchesFilter || !matchesGroup || normalizedQuery.isEmpty) {
+        return matchesFilter && matchesGroup;
       }
       return source.bookSourceName.toLowerCase().contains(normalizedQuery) ||
           source.bookSourceUrl.toLowerCase().contains(normalizedQuery) ||
@@ -257,6 +284,18 @@ final class BookSourceManagementUiState {
         }
         return right.sourceScore.compareTo(left.sourceScore);
       });
+  }
+
+  /// 从当前可见数据派生书源分组，避免额外数据库查询与订阅。
+  List<String> get availableGroups {
+    final Set<String> groups = <String>{};
+    for (final BookSource source in sources) {
+      groups.addAll(
+        (source.bookSourceGroup ?? '').split(',').map((String value) => value.trim()).where((String value) => value.isNotEmpty),
+      );
+    }
+    final List<String> result = groups.toList(growable: false)..sort();
+    return result;
   }
 
   /// 判断书源核心字段是否包含 JavaScript 规则。
@@ -286,6 +325,8 @@ final class BookSourceManagementUiState {
     List<BookSource>? sources,
     String? query,
     BookSourceFilter? filter,
+    String? selectedGroup,
+    bool clearSelectedGroup = false,
     Set<String>? selectedUrls,
     BookSourceDialog? dialog,
     bool clearDialog = false,
@@ -298,6 +339,7 @@ final class BookSourceManagementUiState {
       sources: sources ?? this.sources,
       query: query ?? this.query,
       filter: filter ?? this.filter,
+      selectedGroup: clearSelectedGroup ? null : selectedGroup ?? this.selectedGroup,
       selectedUrls: selectedUrls ?? this.selectedUrls,
       dialog: clearDialog ? null : dialog ?? this.dialog,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
@@ -327,6 +369,14 @@ final class ChangeBookSourceFilterIntent extends BookSourceManagementIntent {
 
   /// 新筛选范围。
   final BookSourceFilter filter;
+}
+
+/// 切换书源列表分组；null 表示总书源。
+final class ChangeBookSourceGroupFilterIntent extends BookSourceManagementIntent {
+  /// 创建分组筛选意图。
+  const ChangeBookSourceGroupFilterIntent(this.group);
+  /// 目标分组。
+  final String? group;
 }
 
 /// 切换单个书源选择状态。
@@ -365,10 +415,16 @@ final class RequestBookSourceQrIntent extends BookSourceManagementIntent {
 /// 显示手动文本导入对话框。
 final class ShowBookSourceTextImportIntent extends BookSourceManagementIntent {
   /// 创建文本导入意图。
-  const ShowBookSourceTextImportIntent({this.initialText = ''});
+  const ShowBookSourceTextImportIntent({
+    this.initialText = '',
+    this.entry = BookSourceImportEntry.text,
+  });
 
   /// 对话框初始文本。
   final String initialText;
+
+  /// 本轮导入入口。
+  final BookSourceImportEntry entry;
 }
 
 /// 解析扫码取得的书源 JSON 或远程书源地址。
@@ -383,13 +439,20 @@ final class ResolveScannedBookSourceIntent extends BookSourceManagementIntent {
 /// 执行书源 JSON 导入。
 final class ImportBookSourceTextIntent extends BookSourceManagementIntent {
   /// 创建导入执行意图。
-  const ImportBookSourceTextIntent({required this.text, required this.conflictPolicy});
+  const ImportBookSourceTextIntent({
+    required this.text,
+    required this.conflictPolicy,
+    required this.entry,
+  });
 
   /// 未经信任的外部 JSON 文本。
   final String text;
 
   /// 同 URL 冲突策略。
   final BookSourceConflictPolicy conflictPolicy;
+
+  /// 本轮导入入口。
+  final BookSourceImportEntry entry;
 }
 
 /// 修改单个书源启用状态。

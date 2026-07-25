@@ -149,6 +149,80 @@ final class AnalyticsRecorder {
     'unknown',
   };
 
+  /// 后端协议中按事件进一步收紧的字符串枚举，防止合法字段名携带未约定值。
+  static const Map<String, Map<String, Set<String>>> _allowedStringValues =
+      <String, Map<String, Set<String>>>{
+        'app_session_started': <String, Set<String>>{
+          'restoreState': <String>{'none', 'restored', 'refresh_required'},
+        },
+        'app_session_restore_result': <String, Set<String>>{
+          'result': <String>{
+            'success',
+            'expired',
+            'unauthorized',
+            'network_degraded',
+          },
+        },
+        'search_completed': <String, Set<String>>{
+          'result': <String>{'success', 'partial', 'failed'},
+        },
+        'book_detail_opened': <String, Set<String>>{
+          'entry': <String>{'search', 'bookshelf'},
+        },
+        'book_added_to_shelf': <String, Set<String>>{
+          'entry': <String>{'detail', 'import'},
+        },
+        'reader_opened': <String, Set<String>>{
+          'entry': <String>{'bookshelf', 'detail', 'history'},
+          'contentKind': <String>{'network', 'local'},
+        },
+        'reader_open_failed': <String, Set<String>>{
+          'contentKind': <String>{'network', 'local'},
+        },
+        'book_source_import_completed': <String, Set<String>>{
+          'entry': <String>{'file', 'text', 'qr', 'remote_sync'},
+        },
+        'remote_book_source_sync_completed': <String, Set<String>>{
+          'result': <String>{'success', 'failed'},
+        },
+        'reader_download_completed': <String, Set<String>>{
+          'result': <String>{'success', 'partial', 'failed'},
+        },
+        'local_book_import_completed': <String, Set<String>>{
+          'format': <String>{'txt', 'epub', 'pdf', 'umd'},
+          'result': <String>{'imported', 'updated', 'failed'},
+        },
+        'crash_report_upload_result': <String, Set<String>>{
+          'result': <String>{'success', 'failed'},
+        },
+      };
+
+  /// 只能接收布尔值的属性。
+  static const Set<String> _booleanProps = <String>{
+    'refreshAttempted',
+    'historyUsed',
+    'migrationProgress',
+    'migrationReadConfig',
+    'enabled',
+    'duplicate',
+  };
+
+  /// 只能接收非负整数的计数属性。
+  static const Set<String> _numberProps = <String>{
+    'enabledSourceCount',
+    'resultCount',
+    'successSourceCount',
+    'failedSourceCount',
+    'importedCount',
+    'blockedCount',
+    'invalidCount',
+    'pageCount',
+    'sourceCount',
+    'warningCount',
+    'candidateCount',
+    'chapterCount',
+  };
+
   /// 返回用户是否主动允许匿名分析。
   Future<bool> isEnabled() async {
     if (!_legacyQueueCleared) {
@@ -319,12 +393,18 @@ final class AnalyticsRecorder {
     final Map<String, Object?> normalized = <String, Object?>{};
     for (final String key in keys) {
       final Object? value = props[key];
-      if (value is bool) {
+      if (_booleanProps.contains(key)) {
+        if (value is! bool) {
+          return null;
+        }
         normalized[key] = value;
         continue;
       }
-      if (value is num) {
-        if (!value.isFinite || value < 0) {
+      if (_numberProps.contains(key)) {
+        if (value is! num ||
+            !value.isFinite ||
+            value < 0 ||
+            value != value.toInt()) {
           return null;
         }
         normalized[key] = value.toInt().clamp(0, 9999);
@@ -338,6 +418,13 @@ final class AnalyticsRecorder {
         return null;
       }
       if (key == 'failureKind' && !_failureKinds.contains(value)) {
+        return null;
+      }
+      final Set<String>? eventValues =
+          _allowedStringValues[eventName]?[key];
+      if (key != 'durationBucket' &&
+          key != 'failureKind' &&
+          (eventValues == null || !eventValues.contains(value))) {
         return null;
       }
       normalized[key] = value;

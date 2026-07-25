@@ -11,7 +11,9 @@
 - ViewModel 使用递增运行编号隔离新旧搜索；即使底层取消回调迟到也不会写入新搜索状态。
 - 单书源异常转换为网络、规则或 JavaScript 摘要，其他书源继续运行，不展示响应正文、Header 或 Cookie。
 - 搜索结果按 Android 行为使用严格“书名 + 作者”键合并，并保留同组所有来源；精确匹配优先，其次按来源数量排序。
-- 搜索历史通过 `SearchHistoryGateway` 和缓存表持久化，最近使用项置顶，最多 20 条。
+- 搜索历史通过 `SearchHistoryGateway` 和缓存表按登录用户持久化，最近使用项置顶，
+  每个用户最多 20 条；现已使用用户派生缓存键，旧设备级公共键在首次访问时删除且不升级 Schema，详见
+  [`../m11/user_scoped_search_history_design.md`](../m11/user_scoped_search_history_design.md)。
 - BookInfo UiState、Intent、Effect、ViewModel、Route 与纯 Screen；打开后顺序加载详情和完整分页目录。
 - 详情保留搜索结果来源，合并书名、作者、封面、简介、分类、字数、最新章节和目录 URL。
 - 目录沿用 M3 服务的分页循环检测、章节 URL 去重和连续索引；解析仍在 isolate 中执行。

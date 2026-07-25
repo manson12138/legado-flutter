@@ -22,6 +22,7 @@ abstract interface class BookSourceGateway {
   Future<BookSourceImportResult> importSourceJson(
     String sourceJson, {
     required BookSourceConflictPolicy conflictPolicy,
+    bool filterBlockedSources = true,
   });
 
   /// 保存新增或编辑后的完整书源；URL 变化时删除旧主键但不删除书架书籍。

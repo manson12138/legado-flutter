@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sqflite/sqflite.dart';
 
 /// 成人内容屏蔽领域边界，供搜索、换源和书源导入复用同一套判定逻辑。
@@ -5,6 +7,11 @@ import 'package:sqflite/sqflite.dart';
 /// 对应 Android `help.AdultContentFilter`；默认屏蔽开启，判定粒度到“书籍”和
 /// “书源”两级，Flutter 端另外增加基于域名黑名单的书源判定。
 abstract interface class AdultContentGateway {
+  /// 屏蔽开关、关键词或域名规则成功变化后的单调修订流。
+  ///
+  /// 页面和运行时协调器只监听修订，不持有 Repository 内部缓存或数据库对象。
+  Stream<int> get ruleChanges;
+
   /// 是否启用成人内容屏蔽；默认开启。[executor] 用于在调用方已开启的事务内查询。
   Future<bool> isBlockingEnabled({DatabaseExecutor? executor});
 
@@ -41,4 +48,7 @@ abstract interface class AdultContentGateway {
     required Set<String> keywords,
     required Set<String> domains,
   });
+
+  /// 释放应用级规则修订通知资源。
+  Future<void> dispose();
 }

@@ -18,11 +18,16 @@ final class BookSourceManagementViewModel {
     required ImportBookSourcesUseCase importBookSources,
     required BookSourceImportTextResolver importTextResolver,
     required HttpCancellationToken Function() cancellationTokenFactory,
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
     required AppLogger logger,
   }) : _gateway = gateway,
        _importBookSources = importBookSources,
        _importTextResolver = importTextResolver,
        _cancellationTokenFactory = cancellationTokenFactory,
+       _analyticsRecorder = analyticsRecorder,
        _logger = logger {
     _subscribeSources();
   }
@@ -38,6 +43,12 @@ final class BookSourceManagementViewModel {
 
   /// 为每次远程扫码导入创建独立网络取消令牌的工厂。
   final HttpCancellationToken Function() _cancellationTokenFactory;
+
+  /// 匿名分析事件写入边界。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
 
   /// 不记录规则正文、Header 或 Cookie 的日志抽象。
   final AppLogger _logger;
@@ -78,6 +89,8 @@ final class BookSourceManagementViewModel {
         _emit(_state.copyWith(query: query));
       case ChangeBookSourceFilterIntent(filter: final BookSourceFilter filter):
         _emit(_state.copyWith(filter: filter));
+      case ChangeBookSourceGroupFilterIntent(group: final String? group):
+        _emit(_state.copyWith(selectedGroup: group, clearSelectedGroup: group == null));
       case ToggleBookSourceSelectionIntent(sourceUrl: final String sourceUrl):
         _toggleSelection(sourceUrl);
       case ClearBookSourceSelectionIntent():
@@ -90,15 +103,23 @@ final class BookSourceManagementViewModel {
         // 【扫码诊断日志】扫一扫添加书源全链路起点。
         _logger.info(message: '$bookSourceQrScanLogTag stage=flow_started');
         _effectController.add(const ScanBookSourceQrEffect());
-      case ShowBookSourceTextImportIntent(initialText: final String initialText):
-        _emit(_state.copyWith(dialog: ImportTextDialog(initialText: initialText)));
+      case ShowBookSourceTextImportIntent(
+        initialText: final String initialText,
+        entry: final BookSourceImportEntry entry,
+      ):
+        _emit(
+          _state.copyWith(
+            dialog: ImportTextDialog(initialText: initialText, entry: entry),
+          ),
+        );
       case ResolveScannedBookSourceIntent(scannedText: final String scannedText):
         _resolveScannedText(scannedText);
       case ImportBookSourceTextIntent(
         text: final String text,
         conflictPolicy: final BookSourceConflictPolicy conflictPolicy,
+        entry: final BookSourceImportEntry entry,
       ):
-        _importText(text, conflictPolicy);
+        _importText(text, conflictPolicy, entry);
       case SetSingleBookSourceEnabledIntent(
         sourceUrl: final String sourceUrl,
         enabled: final bool enabled,
@@ -198,6 +219,7 @@ final class BookSourceManagementViewModel {
   Future<void> _importText(
     String text,
     BookSourceConflictPolicy conflictPolicy,
+    BookSourceImportEntry entry,
   ) async {
     /// 【扫码诊断日志】当前导入是否来自刚完成解析的二维码。
     final bool isScannedImport = _awaitingScannedImportConfirmation;
@@ -220,6 +242,15 @@ final class BookSourceManagementViewModel {
     );
     switch (result) {
       case AppSuccess<BookSourceImportResult>(value: final BookSourceImportResult value):
+        _recordAnalyticsEvent(
+          'book_source_import_completed',
+          props: <String, Object?>{
+            'entry': entry.name,
+            'importedCount': value.imported,
+            'blockedCount': value.blockedAdult,
+            'invalidCount': value.invalid,
+          },
+        );
         if (isScannedImport) {
           _logger.info(
             message:
@@ -285,7 +316,10 @@ final class BookSourceManagementViewModel {
       _emit(
         _state.copyWith(
           busy: false,
-          dialog: ImportTextDialog(initialText: resolvedText),
+          dialog: ImportTextDialog(
+            initialText: resolvedText,
+            entry: BookSourceImportEntry.qr,
+          ),
         ),
       );
     } on FormatException catch (error) {
@@ -327,6 +361,16 @@ final class BookSourceManagementViewModel {
   }
 
   /// 发布扫码导入失败状态和不包含二维码原文、目标地址的安全提示。
+  /// 埋点失败不覆盖导入事务结果或二维码流程提示。
+  void _recordAnalyticsEvent(
+    String eventName, {
+    required Map<String, Object?> props,
+  }) {
+    unawaited(
+      _analyticsRecorder(eventName, props: props).catchError((Object _) {}),
+    );
+  }
+
   void _showScanImportError(String message) {
     _emit(_state.copyWith(busy: false, errorMessage: message));
     _effectController.add(ShowBookSourceMessageEffect(message));
@@ -425,7 +469,8 @@ final class BookSourceManagementViewModel {
       bookSourceType: sourceType,
       bookUrlPattern: original?.bookUrlPattern,
       customOrder: original?.customOrder ?? _state.sources.length,
-      enabled: draft.enabled,
+      /// 新建非文字书源默认关闭；已有书源和用户后续显式开关不被改写。
+      enabled: original == null && sourceType != 0 ? false : draft.enabled,
       enabledExplore: draft.enabledExplore,
       jsLib: _nullableText(draft.jsLib),
       enabledCookieJar: original?.enabledCookieJar ?? true,

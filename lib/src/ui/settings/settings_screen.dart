@@ -208,7 +208,7 @@ final class SettingsScreen extends StatelessWidget {
                 Text(session?.account.username ?? '本地读者', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: SpacingToken.xSmall),
                 Text(
-                  session == null ? '阅读数据保存在本机' : 'App 账号已登录，重启后需重新登录',
+                  session == null ? '阅读数据保存在本机' : '阅读数据保存在本机',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -378,24 +378,22 @@ final class _SettingsGroup extends StatelessWidget {
   /// 构建带轻边框和内部细分隔线的列表组。
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(RadiusToken.medium),
-        border: Border.all(
+        side: BorderSide(
           color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.55),
         ),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(RadiusToken.medium),
-        child: Column(
-          children: List<Widget>.generate(children.length * 2 - 1, (int index) {
-            if (index.isOdd) {
-              return const Divider(indent: 44);
-            }
-            return children[index ~/ 2];
-          }),
-        ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: List<Widget>.generate(children.length * 2 - 1, (int index) {
+          if (index.isOdd) {
+            return const Divider(indent: 44);
+          }
+          return children[index ~/ 2];
+        }),
       ),
     );
   }

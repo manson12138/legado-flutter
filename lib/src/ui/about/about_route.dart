@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_access_coordinator.dart';
 import 'about_contract.dart';
 import 'about_screen.dart';
 import 'about_view_model.dart';
@@ -77,11 +78,22 @@ final class _AboutRouteState extends State<AboutRoute> {
   /// 把当前状态和 Intent 入口传给无状态页面。
   @override
   Widget build(BuildContext context) {
-    return AboutScreen(
-      state: _state,
-      onIntent: _viewModel.onIntent,
-      onBack: () {
-        Navigator.of(context).pop();
+    return ValueListenableBuilder<AppAccessState>(
+      valueListenable: widget.dependencies.appAccessCoordinator.state,
+      builder: (BuildContext context, AppAccessState appAccessState, Widget? child) {
+        return AboutScreen(
+          state: _state,
+          appAccessState: appAccessState,
+          onIntent: _viewModel.onIntent,
+          onCheckUpdate: () {
+            widget.dependencies.appAccessCoordinator.refresh(
+              trigger: 'about_page_manual',
+            );
+          },
+          onBack: () {
+            Navigator.of(context).pop();
+          },
+        );
       },
     );
   }

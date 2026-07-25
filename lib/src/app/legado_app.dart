@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/model/app_account.dart';
+import '../domain/gateway/authentication_gateway.dart';
 import '../ui/theme/app_theme.dart';
 import '../ui/authentication/authentication_route.dart';
 import 'app_dependencies.dart';
@@ -180,6 +181,9 @@ final class _LegadoAppState extends State<LegadoApp> {
   /// 是否已经在登录成功后启动过主界面后台初始化，防止会话刷新重复触发导入和恢复。
   bool _hasStartedMainBackgroundServices = false;
 
+  /// 防止同一恢复结果被 ValueNotifier 重复发布时产生重复事件。
+  AuthenticationRestoreResult? _reportedAuthenticationRestoreResult;
+
   /// 首帧后启动前台准入轮询，避免在 build 中发起网络请求。
   @override
   void initState() {
@@ -187,6 +191,9 @@ final class _LegadoAppState extends State<LegadoApp> {
     _startupSplashStopwatch.start();
     widget.dependencies.authenticationGateway.session.addListener(
       _onAuthenticationSessionChanged,
+    );
+    widget.dependencies.authenticationGateway.restoreResult.addListener(
+      _onAuthenticationRestoreResultChanged,
     );
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       unawaited(_restoreAuthenticationSession());
@@ -209,7 +216,12 @@ final class _LegadoAppState extends State<LegadoApp> {
     widget.dependencies.authenticationGateway.session.removeListener(
       _onAuthenticationSessionChanged,
     );
+    widget.dependencies.authenticationGateway.restoreResult.removeListener(
+      _onAuthenticationRestoreResultChanged,
+    );
+    widget.dependencies.currentUserScope.dispose();
     widget.dependencies.appAccessCoordinator.dispose();
+    unawaited(widget.dependencies.adultContentGateway.dispose());
     _themeModeNotifier.dispose();
     _startupPhase.dispose();
     super.dispose();
@@ -228,26 +240,32 @@ final class _LegadoAppState extends State<LegadoApp> {
     final AppNavigationObserver navigationObserver = AppNavigationObserver(
       logger: widget.dependencies.logger,
     );
-    return MaterialApp(
-      title: 'Legado Flutter',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: _themeModeNotifier.value,
-      initialRoute: AppRoute.welcome,
-      onGenerateRoute: router.onGenerateRoute,
-      navigatorObservers: <NavigatorObserver>[navigationObserver],
-      builder: (BuildContext context, Widget? child) {
-        /// 透明系统导航栏可以让 edge-to-edge 内容在其后完整显示，因此每个页面
-        /// 底部会自动露出该页面自身的背景色，不需要逐页手动同步导航栏颜色。
-        return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: _systemOverlayStyleFor(Theme.of(context).brightness),
-          child: _AppAccessOverlay(
-            coordinator: widget.dependencies.appAccessCoordinator,
-            dependencies: widget.dependencies,
-            startupPhase: _startupPhase,
-            child: AppErrorBoundary(child: child),
-          ),
+    return ValueListenableBuilder<int?>(
+      valueListenable: widget.dependencies.currentUserScope.userId,
+      builder: (BuildContext context, int? userId, Widget? child) {
+        return MaterialApp(
+          key: ValueKey<String>('authenticated-user-$userId'),
+          title: 'Legado Flutter',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light(),
+          darkTheme: AppTheme.dark(),
+          themeMode: _themeModeNotifier.value,
+          initialRoute: AppRoute.welcome,
+          onGenerateRoute: router.onGenerateRoute,
+          navigatorObservers: <NavigatorObserver>[navigationObserver],
+          builder: (BuildContext context, Widget? routedChild) {
+            /// 透明系统导航栏可以让 edge-to-edge 内容在其后完整显示，因此每个页面
+            /// 底部会自动露出该页面自身的背景色，不需要逐页手动同步导航栏颜色。
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: _systemOverlayStyleFor(Theme.of(context).brightness),
+              child: _AppAccessOverlay(
+                coordinator: widget.dependencies.appAccessCoordinator,
+                dependencies: widget.dependencies,
+                startupPhase: _startupPhase,
+                child: AppErrorBoundary(child: routedChild),
+              ),
+            );
+          },
         );
       },
     );
@@ -271,12 +289,76 @@ final class _LegadoAppState extends State<LegadoApp> {
   void _onAuthenticationSessionChanged() {
     final AppAuthenticationSession? session =
         widget.dependencies.authenticationGateway.session.value;
+    final int? previousUserId =
+        widget.dependencies.currentUserScope.userId.value;
+    final int? nextUserId = session?.account.id;
+    if (previousUserId != nextUserId) {
+      widget.dependencies.bookshelfHistoryStartupPreloader.invalidate();
+      if (previousUserId != null) {
+        widget.dependencies.downloadCoordinator.invalidateUserSession();
+      }
+      _hasStartedMainBackgroundServices = false;
+    }
+    /// 会话变更必须先切换本地数据作用域，避免新页面读取到上一个账号的记录。
+    widget.dependencies.currentUserScope.applySession(session);
     if (session == null ||
         _hasStartedMainBackgroundServices) {
       return;
     }
     _hasStartedMainBackgroundServices = true;
+    /// 会话已存在或刚登录成功后，趁主界面启动遮罩可见预读本地书架与历史。
+    /// 失败由页面原有数据库流兜底，不能影响认证、准入或主界面进入。
+    unawaited(_preloadBookshelfHistory());
+    if (_isAdministrator(session)) {
+      widget.dependencies.logger.info(
+        tag: appAccessCheckLogTag,
+        message: 'stage=start_skipped reason=administrator_account',
+      );
+    } else {
+      /// 认证态建立后立即检查，不能等待书源导入和下载恢复完成。
+      widget.dependencies.appAccessCoordinator.start(
+        trigger: 'authenticated_session',
+      );
+    }
     unawaited(_initializeMainBackgroundServices(session));
+    unawaited(
+      widget.dependencies.remoteBookSourceSyncService.flushPendingAnalytics(),
+    );
+  }
+
+  /// 将认证边界发布的远端校验结果转换为固定枚举事件。
+  void _onAuthenticationRestoreResultChanged() {
+    final AuthenticationRestoreResult? result =
+        widget.dependencies.authenticationGateway.restoreResult.value;
+    if (result == null ||
+        identical(result, _reportedAuthenticationRestoreResult)) {
+      return;
+    }
+    _reportedAuthenticationRestoreResult = result;
+    unawaited(
+      _recordAnalyticsEvent(
+        'app_session_restore_result',
+        props: <String, Object?>{
+          'result': switch (result.kind) {
+            AuthenticationRestoreResultKind.success => 'success',
+            AuthenticationRestoreResultKind.expired => 'expired',
+            AuthenticationRestoreResultKind.unauthorized => 'unauthorized',
+            AuthenticationRestoreResultKind.networkDegraded =>
+              'network_degraded',
+          },
+          'refreshAttempted': result.refreshAttempted,
+        },
+      ),
+    );
+  }
+
+  /// 预加载失败时不改变认证或主界面启动流程，页面仍会通过既有数据库流读取数据。
+  Future<void> _preloadBookshelfHistory() async {
+    try {
+      await widget.dependencies.bookshelfHistoryStartupPreloader.preload();
+    } catch (_) {
+      // 预加载只优化首屏，不应把本地读取失败扩大为认证或启动失败。
+    }
   }
 
   /// 串行导入内置书源并恢复下载队列，避免两项工作并发占用同一 SQLite 连接。
@@ -305,39 +387,31 @@ final class _LegadoAppState extends State<LegadoApp> {
       );
       rethrow;
     } finally {
-      widget.dependencies.logger.info(
-        tag: appStartupLogTag,
-        message: 'stage=download_restore_started',
-      );
-      try {
-        await widget.dependencies.downloadCoordinator.start();
+      if (widget.dependencies.currentUserScope.userId.value ==
+          session.account.id) {
         widget.dependencies.logger.info(
           tag: appStartupLogTag,
-          message: 'stage=download_restore_ready',
+          message: 'stage=download_restore_started',
         );
-      } on Object catch (error) {
-        widget.dependencies.logger.error(
-          tag: appStartupLogTag,
-          message: 'stage=download_restore_failed',
-          error: error,
-        );
-        rethrow;
-      }
-      if (mounted && !_isAdministrator(session)) {
+        try {
+          await widget.dependencies.downloadCoordinator.start();
+          widget.dependencies.logger.info(
+            tag: appStartupLogTag,
+            message: 'stage=download_restore_ready',
+          );
+        } on Object catch (error) {
+          widget.dependencies.logger.error(
+            tag: appStartupLogTag,
+            message: 'stage=download_restore_failed',
+            error: error,
+          );
+          rethrow;
+        }
         widget.dependencies.logger.info(
           tag: appStartupLogTag,
-          message: 'stage=app_access_polling_started',
-        );
-        widget.dependencies.appAccessCoordinator.start();
-        widget.dependencies.logger.info(
-          tag: appStartupLogTag,
-          message: 'stage=app_access_polling_ready',
+          message: 'stage=main_background_services_ready',
         );
       }
-      widget.dependencies.logger.info(
-        tag: appStartupLogTag,
-        message: 'stage=main_background_services_ready',
-      );
     }
   }
 
@@ -354,9 +428,33 @@ final class _LegadoAppState extends State<LegadoApp> {
       message: 'stage=authentication_gate_restore_started',
     );
     try {
-      await widget.dependencies.authenticationGateway.restoreSession();
+      final AuthenticationRestoreStart restore =
+          await widget.dependencies.authenticationGateway.restoreSession();
+      await _recordAnalyticsEvent(
+        'app_session_started',
+        props: <String, Object?>{
+          'restoreState': switch (restore.state) {
+            AuthenticationRestoreState.none => 'none',
+            AuthenticationRestoreState.restored => 'restored',
+            AuthenticationRestoreState.refreshRequired => 'refresh_required',
+          },
+        },
+      );
     } finally {
       await _prepareAuthenticationInput();
+    }
+  }
+
+  /// 埋点读写失败只降级丢弃当前事件，不改变认证门和启动流程。
+  Future<void> _recordAnalyticsEvent(
+    String eventName, {
+    required Map<String, Object?> props,
+  }) async {
+    try {
+      await widget.dependencies.remoteBookSourceSyncService
+          .recordAnalyticsEvent(eventName, props: props);
+    } on Object {
+      // 匿名分析是可选旁路，不能延长或阻断认证门。
     }
   }
 
@@ -423,6 +521,8 @@ final class _AppAccessOverlay extends StatefulWidget {
 final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
   /// 本次运行期间用户已暂缓的版本名称。
   String? _dismissedVersion;
+  /// 已写入展示日志的更新状态，避免 Widget 重建产生重复诊断日志。
+  String? _loggedUpdatePresentation;
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<AppAccessState>(
     valueListenable: widget.coordinator.state,
@@ -430,6 +530,14 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
       /// 已规范化的服务端更新说明，避免在 UI 中使用强制空断言。
       final String changelog = state.changelog?.trim() ?? '';
       final bool showOptionalUpdate = state.hasUpdate && !state.forceUpdate && state.versionName != _dismissedVersion;
+      final String presentation = 'has_update=${state.hasUpdate} force_update=${state.forceUpdate} blocking=${state.isBlocking} latest_version=${state.versionName ?? 'none'} dismissed_version=${_dismissedVersion ?? 'none'} optional_visible=$showOptionalUpdate';
+      if (_loggedUpdatePresentation != presentation) {
+        _loggedUpdatePresentation = presentation;
+        widget.dependencies.logger.info(
+          tag: appAccessCheckLogTag,
+          message: 'stage=ui_presentation $presentation',
+        );
+      }
       return Stack(children: <Widget>[
         _AppStartupGate(
           dependencies: widget.dependencies,
@@ -437,21 +545,56 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
           child: child ?? const SizedBox.shrink(),
         ),
         if (showOptionalUpdate) _buildOptionalUpdate(context, state, changelog),
-        if (state.isBlocking) _buildBlockingPage(context, state),
+        if (state.isRestoring) _buildAccessStateRestorePage(context),
+        if (!state.isRestoring && state.isBlocking)
+          _buildBlockingPage(context, state),
       ]);
     },
     child: widget.child,
   );
 
-  /// 构建可暂缓的升级弹窗；仅 Android 且服务端提供安全地址时展示外部升级入口。
+  /// 构建仅等待本地准入缓存读取的不可交互遮罩，不等待网络请求。
+  Widget _buildAccessStateRestorePage(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surface,
+    child: const SafeArea(
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('正在检查本地准入状态…'),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  /// 构建可暂缓的升级弹窗；服务端提供安全地址时展示可打开和复制的下载地址。
   Widget _buildOptionalUpdate(BuildContext context, AppAccessState state, String changelog) => Stack(children: <Widget>[
     const ModalBarrier(dismissible: false, color: Color(0x66000000)),
     Center(child: AlertDialog(
       title: const Text('发现新版本'),
-      content: Text('已有新版本${state.versionName == null ? '' : ' ${state.versionName}'}可用。${changelog.isEmpty ? '' : '\n\n$changelog'}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('已有新版本${state.versionName == null ? '' : ' ${state.versionName}'}可用。${changelog.isEmpty ? '' : '\n\n$changelog'}'),
+          if (_canOpenDownload(state)) ...<Widget>[
+            const SizedBox(height: 16),
+            _buildDownloadAddress(context, state.downloadUrl),
+          ],
+        ],
+      ),
       actions: <Widget>[
         if (_canOpenDownload(state)) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
-        TextButton(onPressed: () => setState(() { _dismissedVersion = state.versionName; }), child: const Text('稍后再说')),
+        TextButton(onPressed: () {
+          widget.dependencies.logger.info(
+            tag: appAccessCheckLogTag,
+            message: 'stage=optional_update_dismissed latest_version=${state.versionName ?? 'none'}',
+          );
+          setState(() { _dismissedVersion = state.versionName; });
+        }, child: const Text('稍后再说')),
       ],
     )),
   ]);
@@ -469,23 +612,57 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
         Text(state.message ?? '请更新到最新版本后再继续使用。', textAlign: TextAlign.center),
         if (state.versionName != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('推荐版本：${state.versionName}')),
         if (state.changelog case final String value when value.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(value, textAlign: TextAlign.center)),
+        if (_canOpenDownload(state)) Padding(
+          padding: const EdgeInsets.only(top: 16),
+          child: _buildDownloadAddress(context, state.downloadUrl),
+        ),
         const SizedBox(height: 24),
         if (_canOpenDownload(state)) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
         if (_canOpenDownload(state)) const SizedBox(height: 8),
-        FilledButton.tonal(onPressed: widget.coordinator.refresh, child: const Text('重新检查')),
+        FilledButton.tonal(onPressed: () => widget.coordinator.refresh(trigger: 'blocking_page_retry'), child: const Text('重新检查')),
         const SizedBox(height: 8),
         if (defaultTargetPlatform == TargetPlatform.android) TextButton(onPressed: SystemNavigator.pop, child: const Text('退出应用')),
       ]),
     ))),
   );
 
-  /// 仅允许 Android 打开服务端下发的 HTTPS 外部下载地址。
+  /// 仅允许打开服务端下发的合法 HTTPS 外部下载地址。
   bool _canOpenDownload(AppAccessState state) {
-    if (defaultTargetPlatform != TargetPlatform.android) {
-      return false;
-    }
     final Uri? uri = Uri.tryParse(state.downloadUrl ?? '');
     return uri != null && uri.hasAuthority && uri.scheme == 'https';
+  }
+
+  /// 构建完整可见的下载地址；点击以外部浏览器打开，长按复制原始地址。
+  Widget _buildDownloadAddress(BuildContext context, String? rawUrl) {
+    final String address = rawUrl?.trim() ?? '';
+    if (address.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openDownload(address),
+      onLongPress: () => _copyDownloadAddress(address),
+      child: Semantics(
+        button: true,
+        label: '下载地址，点击打开外部浏览器，长按复制',
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('下载地址（点击打开，长按复制）', style: Theme.of(context).textTheme.labelMedium),
+              const SizedBox(height: 6),
+              Text(address, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 委托系统浏览器处理升级地址；失败时保留当前阻断状态并反馈给用户。
@@ -499,6 +676,21 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法打开升级地址，请稍后重试')));
+  }
+
+  /// 将经 HTTPS 校验的下载地址复制到系统剪贴板，并反馈操作结果。
+  Future<void> _copyDownloadAddress(String rawUrl) async {
+    final Uri? uri = Uri.tryParse(rawUrl);
+    if (uri == null || !uri.hasAuthority || uri.scheme != 'https') {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: rawUrl));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('下载地址已复制')),
+    );
   }
 }
 

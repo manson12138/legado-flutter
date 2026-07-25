@@ -20,6 +20,10 @@
   `reading_history_chapters`；`books`/`chapters` 继续只表示书架，`pubspec.yaml`
   build number 同步升为 `+6`。升级安装会把 `durChapterTime > 0` 的既有书架书和目录复制为
   初始历史快照，未读书架书不会被误加入历史。
+- 后续用户隔离专项已把数据库升级到 Schema v9、build number `+7`；上述 v8 初始复制仅是
+  历史实现记录。v8 到 v9 会按用户确认的破坏式方案清空旧书架、目录、分组、历史和下载状态，
+  新记录以 `(userId, bookUrl)` 等复合键隔离，详见
+  [按登录用户隔离设计](./user_scoped_bookshelf_and_history_design.md)。
 - 新增 `ReadingHistoryDao`、`ReadingHistoryRepository`、
   `ReadingHistoryGateway` 和 `RecordReadingHistoryUseCase`。网络书首次成功得到可读正文后写入
   独立书籍/目录快照；TXT/EPUB 复用同一文本链路，PDF 在文档真实打开后写入；后续保存阅读
@@ -39,14 +43,16 @@
 
 ## 现状与数据决策
 
-`books` 表目前只表示书架，`chapters`、下载状态等表通过外键依赖 `books(bookUrl)`。因此不能只加一个 UI 历史列表，也不能把未入架书写进 `books` 表，否则会违反“阅读不自动加入书架”。
+`books` 表只表示当前用户书架，`chapters`、下载状态等表通过复合外键依赖
+`books(userId, bookUrl)`。因此不能只加一个 UI 历史列表，也不能把未入架书写进 `books` 表，
+否则会违反“阅读不自动加入书架”。
 
 新增独立历史快照：
 
 | 数据 | 表/模型 | 职责 |
 |---|---|---|
-| 历史书籍 | `reading_history_books` / 复用领域 `Book` 快照 | `bookUrl` 主键；保存可阅读的书籍快照、最后阅读时间与进度。 |
-| 历史目录 | `reading_history_chapters` / 复用领域 `BookChapter` 快照 | `(url, bookUrl)` 主键；外键到历史书籍，保存未入架书的目录。 |
+| 历史书籍 | `reading_history_books` / 复用领域 `Book` 快照 | `(userId, bookUrl)` 主键；保存当前用户可阅读的书籍快照、最后阅读时间与进度。 |
+| 历史目录 | `reading_history_chapters` / 复用领域 `BookChapter` 快照 | `(userId, url, bookUrl)` 主键；复合外键到同一用户历史书籍，保存未入架书的目录。 |
 
 两张表保存 `Book`/`BookChapter` 阅读所需字段。正文缓存、稳定进度锚点、显示设置、书签和标注继续使用相同 `bookUrl` 作为书籍级共享键，避免重复缓存；书架与历史的成员资格则完全独立。
 

@@ -66,7 +66,21 @@ final class ReaderViewModel {
        _recordReadingHistory = recordReadingHistory,
        _addBookToBookshelf = addBookToBookshelf,
        _analyticsRecorder = analyticsRecorder,
-       _logger = logger;
+       _logger = logger {
+    _state = ReaderUiState(menuVisible: _claimInitialMenuVisibility());
+  }
+
+  /// 当前 App 进程是否已经至少打开过一次阅读器；不持久化，进程重启后重新首显。
+  static bool _hasOpenedReaderInProcess = false;
+
+  /// 仅为本进程第一个阅读器保留工具栏默认可见状态。
+  static bool _claimInitialMenuVisibility() {
+    if (_hasOpenedReaderInProcess) {
+      return false;
+    }
+    _hasOpenedReaderInProcess = true;
+    return true;
+  }
 
   /// 路由提供的稳定书籍 URL。
   final String bookUrl;
@@ -279,8 +293,17 @@ final class ReaderViewModel {
       case SaveReaderChapterSourceContentIntent(
         chapterIndex: final int chapterIndex,
         content: final String content,
+        candidateCount: final int candidateCount,
+        startedAtMilliseconds: final int startedAtMilliseconds,
       ):
-        unawaited(_saveChapterSourceContent(chapterIndex, content));
+        unawaited(
+          _saveChapterSourceContent(
+            chapterIndex,
+            content,
+            candidateCount: candidateCount,
+            startedAtMilliseconds: startedAtMilliseconds,
+          ),
+        );
       case CloseReaderIntent():
         unawaited(_close());
     }
@@ -1686,7 +1709,12 @@ final class ReaderViewModel {
 
   /// 把单章换源候选正文写入目标章节永久缓存，使其不再受 7 天普通缓存有效期约束；
   /// 目标章节正是当前可见章节时清除内存缓存并立即重新加载，让新正文马上显示。
-  Future<void> _saveChapterSourceContent(int chapterIndex, String content) async {
+  Future<void> _saveChapterSourceContent(
+    int chapterIndex,
+    String content, {
+    required int candidateCount,
+    required int startedAtMilliseconds,
+  }) async {
     /// 当前书籍事实。
     final Book? book = _state.book;
     if (book == null || chapterIndex < 0 || chapterIndex >= _state.chapters.length) {
@@ -1698,6 +1726,20 @@ final class ReaderViewModel {
     try {
       await _cacheGateway.saveChapterContent(book.bookUrl, chapter.url, content, 0);
       _coordinator.invalidateChapter(chapter.url);
+      try {
+        await _analyticsRecorder(
+          'chapter_source_change_completed',
+          props: <String, Object?>{
+            'candidateCount': candidateCount,
+            'durationBucket': _durationBucket(
+              DateTime.now().millisecondsSinceEpoch -
+                  startedAtMilliseconds,
+            ),
+          },
+        );
+      } on Object {
+        // 匿名分析失败不能覆盖永久正文缓存已经成功写入的事实。
+      }
       _logger.info(
         tag: bookSourceChangeLogTag,
         message: '单章换源正文已保存 bookId=${appLogDiagnosticId(bookUrl)} '

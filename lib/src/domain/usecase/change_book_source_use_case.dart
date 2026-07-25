@@ -82,13 +82,26 @@ final class ChangeBookSourceResult {
 /// 原子执行整书换源并迁移用户事实，对应 Android `ChangeBookSourceUseCase`。
 final class ChangeBookSourceUseCase {
   /// 创建整书换源业务动作。
-  const ChangeBookSourceUseCase(this._bookshelfGateway, this._readerCacheGateway);
+  const ChangeBookSourceUseCase(
+    this._bookshelfGateway,
+    this._readerCacheGateway, {
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
+  }) : _analyticsRecorder = analyticsRecorder;
 
   /// 提供书籍主键与目录原子替换能力的数据边界。
   final BookshelfGateway _bookshelfGateway;
 
   /// 提供稳定阅读锚点和单书显示配置复制能力的缓存边界。
   final ReaderCacheGateway _readerCacheGateway;
+
+  /// 整书换源成功后的匿名事件旁路。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
 
   /// 校验候选、映射阅读位置、提交事务并复制 URL 关联的阅读配置。
   Future<AppResult<ChangeBookSourceResult>> execute({
@@ -223,13 +236,24 @@ final class ChangeBookSourceUseCase {
         warnings.add('显示配置复制失败，目标书籍将使用默认显示配置');
       }
     }
-    return AppSuccess<ChangeBookSourceResult>(
-      ChangeBookSourceResult(
-        oldBookUrl: oldBook.bookUrl,
-        book: migratedBook,
-        warnings: warnings,
-      ),
+    final ChangeBookSourceResult result = ChangeBookSourceResult(
+      oldBookUrl: oldBook.bookUrl,
+      book: migratedBook,
+      warnings: warnings,
     );
+    try {
+      await _analyticsRecorder(
+        'book_source_change_completed',
+        props: <String, Object?>{
+          'migrationProgress': options.migrateReadingProgress,
+          'migrationReadConfig': options.migrateReadConfig,
+          'warningCount': warnings.length,
+        },
+      );
+    } on Object {
+      // 匿名分析失败不能回滚已经提交的整书换源事务。
+    }
+    return AppSuccess<ChangeBookSourceResult>(result);
   }
 
   /// 优先按旧章节标题匹配新目录，找不到时夹取旧索引。

@@ -75,6 +75,13 @@
 
 本设计不修改数据库 Schema，不需要修改 `LegadoDatabase.schemaVersion` 或 `pubspec.yaml` 的应用 build number。
 
+> 后续交接：本认证设计本身当时不改 Schema；用户书架隔离专项现已把数据库升到 v9 和构建号
+> `+7`。认证会话 `ValueListenable` 变化后，`LegadoApp` 会先失效旧用户预加载与下载调度，
+> 再把 `account.id` 写入不含 Token 的 `CurrentUserScope`，并以用户 key 重建业务导航树。
+> 书架、目录、分组、历史、进度和下载 Repository 只通过该作用域取得用户 ID；安全存储中的
+> Token 仍不会进入 SQLite 或 UI。详见
+> [`../user_scoped_bookshelf_and_history_design.md`](../user_scoped_bookshelf_and_history_design.md)。
+
 ## 5. 用户验收
 
 1. 登录成功后强制结束应用，重新打开可显示原账号并可使用受保护功能。

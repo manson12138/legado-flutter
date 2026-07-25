@@ -379,6 +379,27 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
     );
   }
 
+  /// 将生成的邀请码写入系统剪贴板，并用页面内提示反馈复制结果。
+  Future<void> _copyInvitationCode(String invitationCode) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: invitationCode));
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('邀请码复制失败')));
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('邀请码已复制')));
+  }
+
   /// 构建已登录账号的权限、邀请码和退出入口。
   Widget _buildAccount(BuildContext context, AuthenticationUiState state) {
     final AppAuthenticationSession? session = state.session;
@@ -428,7 +449,43 @@ final class _AuthenticationRouteState extends State<AuthenticationRoute>
         ],
         if (invitation != null) ...<Widget>[
           const SizedBox(height: 12),
-          SelectableText('邀请码：${invitation.code}\n有效至：${invitation.expiresAt.toLocal()}'),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Semantics(
+              button: true,
+              label: '邀请码 ${invitation.code}，长按复制',
+              child: InkWell(
+                onLongPress: () => unawaited(
+                  _copyInvitationCode(invitation.code),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Icon(Icons.content_copy_rounded),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              invitation.code,
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 4),
+                            const Text('长按复制邀请码'),
+                            const SizedBox(height: 4),
+                            Text('有效至：${invitation.expiresAt.toLocal()}'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
         if (state.message case final String message) ...<Widget>[
           const SizedBox(height: 16),

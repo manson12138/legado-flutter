@@ -14,7 +14,7 @@ final class ReadingHistoryUiState {
   ReadingHistoryUiState({
     this.loading = true,
     this.refreshing = false,
-    this.layoutMode = ReadingHistoryLayoutMode.list,
+    this.layoutMode = ReadingHistoryLayoutMode.grid,
     List<Book> books = const <Book>[],
     this.errorMessage,
   }) : books = List<Book>.unmodifiable(books);

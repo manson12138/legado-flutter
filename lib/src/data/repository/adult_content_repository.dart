@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -23,8 +24,9 @@ final class AdultContentRepository implements AdultContentGateway {
     this._cacheDao,
     this._assetBundle,
     this._httpClient,
-    this._logger,
-  );
+    this._logger, {
+    required void Function() notifySourceVisibilityChanged,
+  }) : _notifySourceVisibilityChanged = notifySourceVisibilityChanged;
 
   /// 通用缓存 DAO，只在数据层持有。
   final CacheDao _cacheDao;
@@ -37,6 +39,16 @@ final class AdultContentRepository implements AdultContentGateway {
 
   /// 词库更新失败原因使用应用统一日志记录。
   final AppLogger _logger;
+
+  /// 通知书源观察链重新计算可见性，不改变数据库中的书源数据。
+  final void Function() _notifySourceVisibilityChanged;
+
+  /// 屏蔽规则成功变化后的应用级广播流。
+  final StreamController<int> _ruleChangesController =
+      StreamController<int>.broadcast(sync: true);
+
+  /// 屏蔽规则的应用进程内单调修订号。
+  int _ruleRevision = 0;
 
   /// 是否屏蔽成人内容的开关缓存键。
   static const String _enabledCacheKey = 'flutter_adult_content_blocking_enabled';
@@ -71,9 +83,14 @@ final class AdultContentRepository implements AdultContentGateway {
   Set<String>? _domainCache;
 
   @override
+  Stream<int> get ruleChanges => _ruleChangesController.stream;
+
+  @override
   Future<bool> isBlockingEnabled({DatabaseExecutor? executor}) async {
-    if (_enabledCache != null) {
-      return _enabledCache!;
+    /// 已经读取过的开关值。
+    final bool? cached = _enabledCache;
+    if (cached != null) {
+      return cached;
     }
     /// 缓存表中保存的开关文本；不存在时按默认开启处理。
     final String? raw =
@@ -85,10 +102,16 @@ final class AdultContentRepository implements AdultContentGateway {
 
   @override
   Future<void> setBlockingEnabled(bool enabled) async {
+    /// 写入前的生效值，用于避免重复切换产生无意义刷新。
+    final bool previous = await isBlockingEnabled();
+    if (previous == enabled) {
+      return;
+    }
     await _cacheDao.upsert(
       Cache(key: _enabledCacheKey, value: enabled ? 'true' : 'false'),
     );
     _enabledCache = enabled;
+    _publishRulesChanged();
   }
 
   @override
@@ -131,7 +154,7 @@ final class AdultContentRepository implements AdultContentGateway {
     if (_hit(name, keywords) || _hit(group, keywords) || _hit(comment, keywords)) {
       return true;
     }
-    return _isAdultDomain(url, await _domains());
+    return _isAdultDomain(url, await _domains(executor: executor));
   }
 
   @override
@@ -155,10 +178,17 @@ final class AdultContentRepository implements AdultContentGateway {
       if (list.isEmpty) {
         throw const FormatException('远程词库为空或格式无效');
       }
+      /// 更新前最终生效的本地基线与远程扩展集合。
+      final Set<String> previous = await _keywords();
       await _cacheDao.upsert(Cache(key: _keywordOverrideCacheKey, value: body));
-      _keywordCache = list.toSet();
-      _logger.info(message: '成人内容词库更新成功 count=${list.length}');
-      return list.length;
+      _keywordCache = null;
+      /// 更新后最终生效的合并关键词集合。
+      final Set<String> effective = await _keywords();
+      if (!_sameSet(previous, effective)) {
+        _publishRulesChanged();
+      }
+      _logger.info(message: '成人内容词库更新成功 count=${effective.length}');
+      return effective.length;
     } catch (error, stackTrace) {
       _logger.error(
         message: '成人内容词库更新失败',
@@ -184,6 +214,10 @@ final class AdultContentRepository implements AdultContentGateway {
     required Set<String> keywords,
     required Set<String> domains,
   }) async {
+    /// 替换前最终生效的关键词集合。
+    final Set<String> previousKeywords = await _keywords();
+    /// 替换前最终生效的域名集合。
+    final Set<String> previousDomains = await _domains();
     final List<String> normalizedKeywords = keywords
         .map((String value) => value.trim())
         .where((String value) => value.isNotEmpty)
@@ -194,23 +228,36 @@ final class AdultContentRepository implements AdultContentGateway {
         .toList(growable: false);
     await _cacheDao.upsert(Cache(key: _keywordOverrideCacheKey, value: jsonEncode(normalizedKeywords)));
     await _cacheDao.upsert(Cache(key: _domainOverrideCacheKey, value: jsonEncode(normalizedDomains)));
-    _keywordCache = normalizedKeywords.toSet();
-    _domainCache = normalizedDomains.toSet();
+    _keywordCache = null;
+    _domainCache = null;
+    /// 替换后最终生效的本地基线与远程扩展关键词。
+    final Set<String> effectiveKeywords = await _keywords();
+    /// 替换后最终生效的域名规则。
+    final Set<String> effectiveDomains = await _domains();
+    if (!_sameSet(previousKeywords, effectiveKeywords) ||
+        !_sameSet(previousDomains, effectiveDomains)) {
+      _publishRulesChanged();
+    }
   }
 
-  /// 读取当前生效关键词库；优先使用远程更新覆盖（明文 JSON），否则回退内置 Base64 assets。
+  /// 读取当前生效关键词库；内置 Base64 词库是最低基线，远程规则只做并集扩展。
   /// [executor] 用于在调用方已开启的事务内查询，避免另开主连接查询导致自锁。
   Future<Set<String>> _keywords({DatabaseExecutor? executor}) async {
-    if (_keywordCache != null) {
-      return _keywordCache!;
+    /// 已经解码并合并的关键词缓存。
+    final Set<String>? cached = _keywordCache;
+    if (cached != null) {
+      return cached;
     }
     try {
       /// 缓存表中保存的远程更新覆盖 JSON 文本。
       final String? override =
           (await _cacheDao.get(_keywordOverrideCacheKey, executor: executor))?.value;
-      final Set<String> keywords = override != null
-          ? _decodeKeywordList(override).toSet()
-          : _decodeBase64Lines(await _assetBundle.loadString(_keywordAssetPath));
+      /// 内置最低屏蔽基线，远程规则不得移除用户明确要求的本地词。
+      final Set<String> keywords =
+          _decodeBase64Lines(await _assetBundle.loadString(_keywordAssetPath));
+      if (override != null) {
+        keywords.addAll(_decodeKeywordList(override));
+      }
       _keywordCache = keywords;
       return keywords;
     } catch (error, stackTrace) {
@@ -221,13 +268,16 @@ final class AdultContentRepository implements AdultContentGateway {
   }
 
   /// 读取内置 Base64 编码域名黑名单；解码失败的单行会被跳过，不影响其余判定。
-  Future<Set<String>> _domains() async {
-    if (_domainCache != null) {
-      return _domainCache!;
+  Future<Set<String>> _domains({DatabaseExecutor? executor}) async {
+    /// 已经解码的域名规则缓存。
+    final Set<String>? cached = _domainCache;
+    if (cached != null) {
+      return cached;
     }
     try {
       /// 远端覆盖规则优先于内置 Base64 域名黑名单。
-      final String? override = (await _cacheDao.get(_domainOverrideCacheKey))?.value;
+      final String? override =
+          (await _cacheDao.get(_domainOverrideCacheKey, executor: executor))?.value;
       final Set<String> domains = override == null
           ? _decodeBase64Lines(await _assetBundle.loadString(_domainAssetPath))
           : _decodeKeywordList(override).map((String value) => value.toLowerCase()).toSet();
@@ -318,5 +368,24 @@ final class AdultContentRepository implements AdultContentGateway {
     }
     final String baseDomain = '${parts[parts.length - 2]}.${parts[parts.length - 1]}';
     return domains.contains(baseDomain);
+  }
+
+  /// 判断两个无序规则集合是否完全一致，避免无变化更新触发页面重载。
+  bool _sameSet(Set<String> left, Set<String> right) {
+    return left.length == right.length && left.containsAll(right);
+  }
+
+  /// 发布规则修订并让书源观察链重新计算可见性。
+  void _publishRulesChanged() {
+    _ruleRevision += 1;
+    _notifySourceVisibilityChanged();
+    if (!_ruleChangesController.isClosed) {
+      _ruleChangesController.add(_ruleRevision);
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    await _ruleChangesController.close();
   }
 }

@@ -64,6 +64,8 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
       importBookSources: widget.dependencies.importBookSources,
       importTextResolver: widget.dependencies.bookSourceImportTextResolver,
       cancellationTokenFactory: widget.dependencies.createHttpCancellationToken,
+      analyticsRecorder:
+          widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
@@ -73,7 +75,10 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   Future<void> _handleEffect(BookSourceManagementEffect effect) async {
     switch (effect) {
       case PickBookSourceFileEffect():
-        await _readExternalText(widget.platformBridge.pickSourceText);
+        await _readExternalText(
+          widget.platformBridge.pickSourceText,
+          BookSourceImportEntry.file,
+        );
       case ReadBookSourceClipboardEffect():
         await _readClipboard();
       case ScanBookSourceQrEffect():
@@ -150,12 +155,17 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   }
 
   /// 调用文件边界并把结果送入文本导入对话框。
-  Future<void> _readExternalText(Future<String?> Function() reader) async {
+  Future<void> _readExternalText(
+    Future<String?> Function() reader,
+    BookSourceImportEntry entry,
+  ) async {
     try {
       /// 平台返回的外部书源文本。
       final String? text = await reader();
       if (text != null && text.trim().isNotEmpty) {
-        _viewModel.onIntent(ShowBookSourceTextImportIntent(initialText: text));
+        _viewModel.onIntent(
+          ShowBookSourceTextImportIntent(initialText: text, entry: entry),
+        );
       }
     } catch (error) {
       _showMessage(_platformErrorMessage(error));
@@ -221,12 +231,19 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   /// 构建与 Contract 对话框类型对应的 UI。
   Widget _buildDialog(BookSourceDialog dialog) {
     return switch (dialog) {
-      ImportTextDialog(initialText: final String initialText) => _ImportTextDialogView(
+      ImportTextDialog(
+        initialText: final String initialText,
+        entry: final BookSourceImportEntry entry,
+      ) => _ImportTextDialogView(
         initialText: initialText,
         onImport: (String text, BookSourceConflictPolicy policy) {
           Navigator.of(context).pop();
           _viewModel.onIntent(
-            ImportBookSourceTextIntent(text: text, conflictPolicy: policy),
+            ImportBookSourceTextIntent(
+              text: text,
+              conflictPolicy: policy,
+              entry: entry,
+            ),
           );
         },
       ),

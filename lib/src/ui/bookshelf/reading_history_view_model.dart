@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../app/bookshelf_layout_preferences.dart';
+import '../../app/bookshelf_history_startup_preloader.dart';
 import '../../domain/gateway/reading_history_gateway.dart';
 import '../../domain/model/book.dart';
 import 'reading_history_contract.dart';
@@ -8,8 +9,14 @@ import 'reading_history_contract.dart';
 /// 管理阅读历史实时快照、布局和刷新观察，以及阅读器导航。
 final class ReadingHistoryViewModel {
   /// 创建并立即订阅历史数据。
-  ReadingHistoryViewModel(this._gateway, this._layoutPreferences) {
+  ReadingHistoryViewModel(
+    this._gateway,
+    this._layoutPreferences,
+    this._startupPreloader,
+  ) {
     unawaited(_restoreLayout());
+    _applyCompletedStartupSnapshot();
+    unawaited(_applyPendingStartupSnapshot());
     _subscribe();
   }
 
@@ -17,6 +24,8 @@ final class ReadingHistoryViewModel {
   final ReadingHistoryGateway _gateway;
   /// 阅读历史列表/网格模式的持久化读取与写入边界。
   final BookshelfLayoutPreferences _layoutPreferences;
+  /// 登录后在主界面启动遮罩期间创建的本地首快照服务。
+  final BookshelfHistoryStartupPreloader _startupPreloader;
   /// 用户是否已在异步恢复完成前切换布局，避免旧值覆盖新选择。
   bool _layoutChangedByUser = false;
   /// 当前数据库快照。
@@ -31,6 +40,9 @@ final class ReadingHistoryViewModel {
       StreamController<ReadingHistoryEffect>.broadcast();
   /// 可被刷新流程替换的数据库历史流订阅。
   StreamSubscription<List<Book>>? _subscription;
+
+  /// 是否已经由数据库流收到历史首快照，避免旧预加载结果覆盖新数据。
+  bool _historyStreamReceived = false;
 
   /// 当前可同步读取的状态。
   ReadingHistoryUiState get state => _state;
@@ -83,6 +95,7 @@ final class ReadingHistoryViewModel {
   void _subscribe() {
     _subscription = _gateway.watchHistory().listen(
       (List<Book> books) {
+        _historyStreamReceived = true;
         _allBooks = List<Book>.unmodifiable(books);
         _emit(
           _state.copyWith(
@@ -102,6 +115,45 @@ final class ReadingHistoryViewModel {
           ),
         );
       },
+    );
+  }
+
+  /// 在路由创建前已完成预加载时同步应用历史首快照。
+  void _applyCompletedStartupSnapshot() {
+    final BookshelfHistoryStartupSnapshot? snapshot =
+        _startupPreloader.snapshot;
+    if (snapshot == null) {
+      return;
+    }
+    _applyStartupSnapshot(snapshot);
+  }
+
+  /// 预加载尚未完成时等待其结果；数据库流先到达时不再使用该旧快照。
+  Future<void> _applyPendingStartupSnapshot() async {
+    if (_startupPreloader.snapshot != null) {
+      return;
+    }
+    try {
+      final BookshelfHistoryStartupSnapshot snapshot =
+          await _startupPreloader.preload();
+      if (!_historyStreamReceived) {
+        _applyStartupSnapshot(snapshot);
+      }
+    } catch (_) {
+      // 预加载失败时保留既有数据库流的错误处理路径。
+    }
+  }
+
+  /// 将预加载历史首快照作为页面初值，后续仍由数据库流覆盖更新。
+  void _applyStartupSnapshot(BookshelfHistoryStartupSnapshot snapshot) {
+    _allBooks = snapshot.readingHistoryBooks;
+    _emit(
+      _state.copyWith(
+        loading: false,
+        refreshing: false,
+        books: _allBooks,
+        clearError: true,
+      ),
     );
   }
 

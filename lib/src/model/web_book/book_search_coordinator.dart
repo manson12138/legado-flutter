@@ -51,10 +51,15 @@ final class BookSearchCoordinator {
   /// 搜索成功时是否立即调整书源分数；自动下载换源关闭此项，改为整书批次统一评分。
   final bool recordSourceOutcomes;
 
+  /// 屏蔽开关或规则变化修订，供保活搜索页面刷新可用书源和清理旧结果。
+  Stream<int> get adultContentRuleChanges => _adultContentGateway.ruleChanges;
+
   /// 读取当前启用书源快照。
   Future<List<BookSource>> loadEnabledSources() async {
     /// 当前启用书源快照。
-    final List<BookSource> sources = await _sourceGateway.getEnabled();
+    final List<BookSource> sources = await _filterVisibleSources(
+      await _sourceGateway.getEnabled(),
+    );
     _logger.debug(
       tag: bookSearchSourceLogTag,
       message: '读取启用书源完成 sourceCount=${sources.length}',
@@ -69,7 +74,9 @@ final class BookSearchCoordinator {
     required void Function(BookSearchEvent event) onEvent,
   }) async {
     /// 本次开始时固定的启用书源快照，运行中管理页变更不影响当前任务。
-    final List<BookSource> enabled = await _sourceGateway.getEnabled();
+    final List<BookSource> enabled = await _filterVisibleSources(
+      await _sourceGateway.getEnabled(),
+    );
     /// 过滤后的执行书源；空选择表示全部启用书源；置顶优先，其余按成功率从高到低。
     final List<BookSource> sources = enabled.where((BookSource source) {
       return selectedSourceUrls.isEmpty || selectedSourceUrls.contains(source.bookSourceUrl);
@@ -89,12 +96,15 @@ final class BookSearchCoordinator {
     );
     /// 当前运行句柄。
     final BookSearchRun run = BookSearchRun();
+    run._adultContentSubscription = _adultContentGateway.ruleChanges.listen(
+      (int _) => run.cancel(),
+    );
     run._completion = _execute(
       run: run,
       keyword: keyword.trim(),
       sources: sources,
       onEvent: onEvent,
-    );
+    ).whenComplete(run._detachAdultContentSubscription);
     return run;
   }
 
@@ -307,6 +317,26 @@ final class BookSearchCoordinator {
     return filtered;
   }
 
+  /// 搜索调度前过滤命中屏蔽词或域名黑名单的书源；同步数据仍完整保留在本地。
+  Future<List<BookSource>> _filterVisibleSources(List<BookSource> sources) async {
+    if (!await _adultContentGateway.isBlockingEnabled()) {
+      return sources;
+    }
+    final List<BookSource> visible = <BookSource>[];
+    for (final BookSource source in sources) {
+      final bool blocked = await _adultContentGateway.isAdultSource(
+        name: source.bookSourceName,
+        group: source.bookSourceGroup,
+        comment: source.bookSourceComment,
+        url: source.bookSourceUrl,
+      );
+      if (!blocked) {
+        visible.add(source);
+      }
+    }
+    return List<BookSource>.unmodifiable(visible);
+  }
+
   /// 将异常转换为不泄漏请求数据的稳定分类。
   String _failureCategory(Object error) {
     if (error is JsEngineException) {
@@ -341,6 +371,9 @@ final class BookSearchRun {
   /// 当前仍在运行的书源取消令牌。
   final Set<HttpCancellationToken> _tokens = <HttpCancellationToken>{};
 
+  /// 成人内容规则变化监听；规则变化时当前固定书源快照立即失效。
+  StreamSubscription<int>? _adultContentSubscription;
+
   /// 整体运行完成 Future。
   Future<void> _completion = Future<void>.value();
 
@@ -356,9 +389,18 @@ final class BookSearchRun {
       return;
     }
     isCancelled = true;
+    unawaited(_detachAdultContentSubscription());
     for (final HttpCancellationToken token in List<HttpCancellationToken>.from(_tokens)) {
       token.cancel('用户取消搜索');
     }
     _tokens.clear();
+  }
+
+  /// 释放成人内容规则监听，避免已结束搜索继续持有应用级广播订阅。
+  Future<void> _detachAdultContentSubscription() async {
+    /// 当前需要释放的订阅；先置空以避免取消和完成路径重复等待同一对象。
+    final StreamSubscription<int>? subscription = _adultContentSubscription;
+    _adultContentSubscription = null;
+    await subscription?.cancel();
   }
 }

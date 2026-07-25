@@ -1,4 +1,5 @@
 import '../api/remote_app/remote_app_api.dart';
+import '../api/http/http_contract.dart';
 import '../data/repository/remote_app_configuration_repository.dart';
 import '../domain/gateway/adult_content_gateway.dart';
 import '../help/logging/app_logger.dart';
@@ -20,12 +21,27 @@ final class RemoteAppBootstrapper {
 
   /// 后台刷新服务端配置，网络或数据异常时保留本地规则。
   Future<RemoteAppBootstrapStatus?> refreshInBackground() async {
-    _logger.info(tag: appStartupLogTag, message: 'stage=bootstrap_started');
+    _logger.info(
+      tag: appAccessCheckLogTag,
+      message: 'stage=bootstrap_started endpoint=app_bootstrap',
+    );
     RemoteAppBootstrapStatus status;
     try {
       status = await _repository.refreshBootstrapStatus();
-    } catch (error) {
-      _logger.warning(tag: appStartupLogTag, message: 'stage=bootstrap_degraded reason=remote_unavailable', error: error);
+    } on UnifiedHttpException catch (error) {
+      /// 统一网络异常不携带认证凭据或响应正文，可记录分类、状态码和受控原因。
+      _logger.warning(
+        tag: appAccessCheckLogTag,
+        message: 'stage=bootstrap_failed endpoint=app_bootstrap failure_kind=${error.kind} status_code=${error.statusCode?.toString() ?? 'none'} reason=${error.message}',
+        error: error,
+      );
+      return null;
+    } on Object catch (error) {
+      _logger.warning(
+        tag: appAccessCheckLogTag,
+        message: 'stage=bootstrap_failed endpoint=app_bootstrap failure_kind=unexpected error_type=${error.runtimeType}',
+        error: error,
+      );
       return null;
     }
     try {

@@ -244,13 +244,24 @@ final class ShowChangeChapterSourceMessageEffect extends ChangeChapterSourceEffe
 /// 请求外层阅读器把目标章节正文替换为用户选定的候选正文并关闭面板。
 final class ReplaceChangeChapterSourceContentEffect extends ChangeChapterSourceEffect {
   /// 创建正文替换 Effect。
-  const ReplaceChangeChapterSourceContentEffect(this.chapterIndex, this.content);
+  const ReplaceChangeChapterSourceContentEffect(
+    this.chapterIndex,
+    this.content, {
+    required this.candidateCount,
+    required this.startedAtMilliseconds,
+  });
 
   /// 待替换正文的目标章节索引，与打开面板时的入参一致。
   final int chapterIndex;
 
   /// 候选来源已拉取到的章节正文。
   final String content;
+
+  /// 本轮搜索去重后的候选数量。
+  final int candidateCount;
+
+  /// 面板创建时刻，仅供外层在持久化成功后计算耗时分桶。
+  final int startedAtMilliseconds;
 }
 
 /// 请求路由关闭面板且不替换任何正文。

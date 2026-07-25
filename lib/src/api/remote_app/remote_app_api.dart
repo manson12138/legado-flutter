@@ -383,10 +383,10 @@ final class RemoteAppApi {
       cookieMode: HttpCookieMode.disabled,
       logContext: remoteAppApiLogTag,
     ));
-    if (data is! Map<Object?, Object?> || data['accepted'] != true || data['receiptId'] is! String || data['retentionDays'] is! num) {
+    if (data is! Map<Object?, Object?> || data['accepted'] != true || data['receiptId'] is! String || data['retentionDays'] is! num || data['duplicate'] is! bool) {
       throw const UnifiedHttpException(HttpFailureKind.decode, '崩溃报告上传响应无效');
     }
-    return RemoteCrashReportReceipt(receiptId: data['receiptId'] as String, retentionDays: (data['retentionDays'] as num).toInt());
+    return RemoteCrashReportReceipt(receiptId: data['receiptId'] as String, retentionDays: (data['retentionDays'] as num).toInt(), duplicate: data['duplicate'] as bool);
   }
 
   /// 发送同时需要 App HMAC 与登录会话的 JSON POST 请求。
@@ -634,13 +634,16 @@ final class RemoteAppInvitation {
 /// 服务端接受崩溃报告后返回的最小回执，不向 UI 暴露动态响应 Map。
 final class RemoteCrashReportReceipt {
   /// 创建已被服务端接收或幂等去重的回执。
-  const RemoteCrashReportReceipt({required this.receiptId, required this.retentionDays});
+  const RemoteCrashReportReceipt({required this.receiptId, required this.retentionDays, required this.duplicate});
 
   /// 服务端回执标识。
   final String receiptId;
 
   /// 原始报告在服务端的保留天数。
   final int retentionDays;
+
+  /// 本次请求是否命中服务端幂等去重。
+  final bool duplicate;
 }
 
 final class RemoteAppBootstrapStatus {

@@ -4,6 +4,7 @@ import '../../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import '../components/app_scaffold.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
+import 'book_grid_layout.dart';
 import 'bookshelf_contract.dart';
 import 'bookshelf_page_switcher.dart';
 
@@ -407,12 +408,11 @@ final class _BookshelfGrid extends StatelessWidget {
             : SpacingToken.medium;
         /// 根据实际内容宽度计算列数，至少两列且最多六列。
         final double contentWidth = constraints.maxWidth - horizontalPadding * 2;
-        /// 每个书籍卡片期望占用的宽度，在上一版紧凑值上继续缩小约 30%。
-        const double targetTileWidth = 88;
-        /// 通过卡片左右各 1.5px 留白，让书籍视觉宽度较原先约增加 5%，同时保持封面顶部继续铺满卡片。
-        const double cardHorizontalInset = 1.5;
-        /// 当前响应式网格列数，手机通常显示三列，宽屏最多显示十列。
-        final int columns = (contentWidth / targetTileWidth).floor().clamp(3, 10).toInt();
+        /// 当前响应式网格列数，与历史页使用相同的卡片规格。
+        final int columns = (contentWidth / BookGridLayout.targetTileWidth)
+            .floor()
+            .clamp(BookGridLayout.minimumColumns, BookGridLayout.maximumColumns)
+            .toInt();
         return GridView.builder(
           padding: EdgeInsets.symmetric(
             horizontal: horizontalPadding,
@@ -422,7 +422,7 @@ final class _BookshelfGrid extends StatelessWidget {
             crossAxisCount: columns,
             crossAxisSpacing: SpacingToken.small,
             mainAxisSpacing: SpacingToken.small,
-            childAspectRatio: 0.64,
+            childAspectRatio: BookGridLayout.childAspectRatio,
           ),
           itemCount: state.books.length,
           itemBuilder: (BuildContext context, int index) {
@@ -437,7 +437,7 @@ final class _BookshelfGrid extends StatelessWidget {
             /// 未读章节字号：比作者名小 2 号。
             final double unreadFontSize = authorFontSize - 2;
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: cardHorizontalInset),
+              padding: const EdgeInsets.symmetric(horizontal: BookGridLayout.cardHorizontalInset),
               child: Card(
                 key: ValueKey<String>(item.book.bookUrl),
                 color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,

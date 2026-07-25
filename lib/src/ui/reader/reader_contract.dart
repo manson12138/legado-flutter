@@ -456,13 +456,24 @@ final class DismissReaderSheetIntent extends ReaderIntent {
 /// 把单章换源面板拉取到的候选正文写入目标章节的永久缓存并重新加载当前章节。
 final class SaveReaderChapterSourceContentIntent extends ReaderIntent {
   /// 创建单章换源正文保存 Intent。
-  const SaveReaderChapterSourceContentIntent(this.chapterIndex, this.content);
+  const SaveReaderChapterSourceContentIntent(
+    this.chapterIndex,
+    this.content, {
+    required this.candidateCount,
+    required this.startedAtMilliseconds,
+  });
 
   /// 待替换正文的目标章节索引。
   final int chapterIndex;
 
   /// 候选来源已拉取到的章节正文。
   final String content;
+
+  /// 本轮搜索去重后的候选数量。
+  final int candidateCount;
+
+  /// 单章换源面板创建时刻。
+  final int startedAtMilliseconds;
 }
 
 /// 保存新的显示、替换或常亮配置。

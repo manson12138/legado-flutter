@@ -74,11 +74,13 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       replaceBooksGroup: widget.dependencies.replaceBooksGroup,
       refreshCoordinator: widget.dependencies.createBookshelfRefreshCoordinator(),
       layoutPreferences: widget.dependencies.bookshelfLayoutPreferences,
+      startupPreloader: widget.dependencies.bookshelfHistoryStartupPreloader,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _historyViewModel = ReadingHistoryViewModel(
       widget.dependencies.readingHistoryGateway,
       widget.dependencies.bookshelfLayoutPreferences,
+      widget.dependencies.bookshelfHistoryStartupPreloader,
     );
     _historyEffectSubscription =
         _historyViewModel.effects.listen(_handleHistoryEffect);
@@ -179,6 +181,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     }
     return AppBar(
       automaticallyImplyLeading: false,
+      centerTitle: false,
       leading: widget.embedded
           ? null
           : IconButton(
@@ -246,6 +249,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
               books: <SearchBook>[searchBook],
             ),
             selectedBook: searchBook,
+            analyticsEntry: 'bookshelf',
           ),
         );
       case ShowBookshelfMessageEffect(message: final String message):

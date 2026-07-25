@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../app/bookshelf_layout_preferences.dart';
+import '../../app/bookshelf_history_startup_preloader.dart';
 import '../../domain/gateway/book_group_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/model/book.dart';
@@ -23,14 +24,18 @@ final class BookshelfViewModel {
     required ReplaceBooksGroupUseCase replaceBooksGroup,
     required BookshelfRefreshCoordinator refreshCoordinator,
     required BookshelfLayoutPreferences layoutPreferences,
+    required BookshelfHistoryStartupPreloader startupPreloader,
   }) : _bookshelfGateway = bookshelfGateway,
        _bookGroupGateway = bookGroupGateway,
        _deleteBooks = deleteBooks,
        _createGroup = createGroup,
        _replaceBooksGroup = replaceBooksGroup,
        _refreshCoordinator = refreshCoordinator,
-       _layoutPreferences = layoutPreferences {
+       _layoutPreferences = layoutPreferences,
+       _startupPreloader = startupPreloader {
     unawaited(_restoreLayout());
+    _applyCompletedStartupSnapshot();
+    unawaited(_applyPendingStartupSnapshot());
     _subscribe();
   }
 
@@ -48,6 +53,8 @@ final class BookshelfViewModel {
   final BookshelfRefreshCoordinator _refreshCoordinator;
   /// 书架列表/网格模式的持久化读取与写入边界。
   final BookshelfLayoutPreferences _layoutPreferences;
+  /// 登录后在主界面启动遮罩期间创建的本地首快照服务。
+  final BookshelfHistoryStartupPreloader _startupPreloader;
   /// 用户是否已在异步恢复完成前切换布局，避免旧值覆盖新选择。
   bool _layoutChangedByUser = false;
   /// 当前状态。
@@ -72,6 +79,12 @@ final class BookshelfViewModel {
   bool _booksReady = false;
   /// 是否已收到首个分组快照。
   bool _groupsReady = false;
+
+  /// 是否已经由数据库流收到书架首快照，用于防止旧预加载结果回写覆盖新数据。
+  bool _booksStreamReceived = false;
+
+  /// 是否已经由数据库流收到分组首快照，用于防止旧预加载结果回写覆盖新数据。
+  bool _groupsStreamReceived = false;
 
   /// 当前状态。
   BookshelfUiState get state => _state;
@@ -144,6 +157,7 @@ final class BookshelfViewModel {
   void _subscribe() {
     _booksSubscription = _bookshelfGateway.watchBookshelf().listen(
       (List<Book> books) {
+        _booksStreamReceived = true;
         _allBooks = List<Book>.unmodifiable(books);
         _booksReady = true;
         _rebuild();
@@ -155,6 +169,7 @@ final class BookshelfViewModel {
     );
     _groupsSubscription = _bookGroupGateway.watchGroups().listen(
       (List<BookGroup> groups) {
+        _groupsStreamReceived = true;
         _userGroups = List<BookGroup>.unmodifiable(groups);
         _groupsReady = true;
         _rebuild();
@@ -411,6 +426,45 @@ final class BookshelfViewModel {
       _refreshGeneration += 1;
       _emit(_state.copyWith(refreshing: false, refreshCancelled: true, updatingBookUrls: <String>{}));
     }
+  }
+
+  /// 在路由创建前已完成预加载时，同步写入两个首快照以直接解除圆形加载。
+  void _applyCompletedStartupSnapshot() {
+    final BookshelfHistoryStartupSnapshot? snapshot =
+        _startupPreloader.snapshot;
+    if (snapshot == null) {
+      return;
+    }
+    _applyStartupSnapshot(snapshot);
+  }
+
+  /// 预加载仍在执行时等待其完成；若数据库流先到达则不回写旧快照。
+  Future<void> _applyPendingStartupSnapshot() async {
+    if (_startupPreloader.snapshot != null) {
+      return;
+    }
+    try {
+      final BookshelfHistoryStartupSnapshot snapshot =
+          await _startupPreloader.preload();
+      if (!_booksStreamReceived || !_groupsStreamReceived) {
+        _applyStartupSnapshot(snapshot);
+      }
+    } catch (_) {
+      // 预加载失败时由既有数据库流继续负责错误显示和重试。
+    }
+  }
+
+  /// 将未被数据库流覆盖的预加载首快照写入页面状态。
+  void _applyStartupSnapshot(BookshelfHistoryStartupSnapshot snapshot) {
+    if (!_booksStreamReceived) {
+      _allBooks = snapshot.bookshelfBooks;
+      _booksReady = true;
+    }
+    if (!_groupsStreamReceived) {
+      _userGroups = snapshot.bookGroups;
+      _groupsReady = true;
+    }
+    _rebuild();
   }
 
   /// 在首个数据快照到达前恢复上次选定的书架布局。

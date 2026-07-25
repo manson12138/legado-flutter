@@ -228,7 +228,15 @@ final class ReaderRepository
   Future<ReaderDisplayConfig> getDisplayConfig(String bookUrl) {
     return guardDataOperation<ReaderDisplayConfig>(() async {
       /// 持久化的显示配置 JSON。
-      final String? value = await _cacheDao.getValidValue(_configKey(bookUrl), DateTime.now().millisecondsSinceEpoch);
+      String? value = await _cacheDao.getValidValue(
+        _globalConfigKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      /// 兼容已按书籍保存的旧配置：仅在全局配置不存在时读取并迁移一次。
+      value ??= await _cacheDao.getValidValue(
+        _legacyConfigKey(bookUrl),
+        DateTime.now().millisecondsSinceEpoch,
+      );
       if (value == null || value.isEmpty) {
         return const ReaderDisplayConfig();
       }
@@ -410,7 +418,8 @@ final class ReaderRepository
         'orientationMode': config.orientationMode.name,
         'fullScreen': config.fullScreen,
       });
-      return _cacheDao.upsert(Cache(key: _configKey(bookUrl), value: value));
+      /// 阅读显示设置为全局偏好，切换书籍和重启 App 后仍应一致生效。
+      return _cacheDao.upsert(Cache(key: _globalConfigKey, value: value));
     });
   }
 
@@ -546,7 +555,11 @@ final class ReaderRepository
   String _anchorKey(String bookUrl) => 'reader:anchor:${_digest(bookUrl)}';
 
   /// 生成不泄漏原始 URL 的显示配置缓存键。
-  String _configKey(String bookUrl) => 'reader:config:${_digest(bookUrl)}';
+  /// 全局阅读显示配置缓存键，不包含书籍标识。
+  static const String _globalConfigKey = 'reader:config:global';
+
+  /// 旧版按书籍存储的配置键，仅用于首次迁移读取。
+  String _legacyConfigKey(String bookUrl) => 'reader:config:${_digest(bookUrl)}';
 
   /// 查找同一本书之前在任意页面成功显示过的封面地址；写入时用 deadline=0 永久保存，
   /// 应用重启后仍然可用。

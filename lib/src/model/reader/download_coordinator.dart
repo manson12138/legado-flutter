@@ -46,6 +46,11 @@ final class DownloadCoordinator {
     required AppLogger logger,
     required DownloadBackgroundService backgroundService,
     required CacheDao cacheDao,
+    required Future<bool> Function() analyticsEnabled,
+    required Future<void> Function(
+      String eventName, {
+      Map<String, Object?> props,
+    }) analyticsRecorder,
     this.maxRetryCount = 5,
     this.minimumRequestInterval = const Duration(milliseconds: 1500),
     this.chapterRequestTimeout = const Duration(seconds: 45),
@@ -59,7 +64,9 @@ final class DownloadCoordinator {
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger,
        _backgroundService = backgroundService,
-       _cacheDao = cacheDao;
+       _cacheDao = cacheDao,
+       _analyticsEnabled = analyticsEnabled,
+       _analyticsRecorder = analyticsRecorder;
 
   /// Android `CacheBook.maxDownloadConcurrency` 对齐的下载并发安全上限。
   static const int maximumConcurrencyLimit = 8;
@@ -141,6 +148,19 @@ final class DownloadCoordinator {
   /// 全局下载并发设置持久化访问；复用既有 `caches` 表，不改变下载任务 Schema。
   final CacheDao _cacheDao;
 
+  /// 只在用户已授权时创建批次计时器。
+  final Future<bool> Function() _analyticsEnabled;
+
+  /// 匿名下载完成事件写入边界。
+  final Future<void> Function(
+    String eventName, {
+    Map<String, Object?> props,
+  }) _analyticsRecorder;
+
+  /// 当前进程中新建批次的有界计时器；恢复批次不补造不准确耗时。
+  final Map<(String, int), Stopwatch> _analyticsBatchStopwatches =
+      <(String, int), Stopwatch>{};
+
   /// 当前有效的全局章节下载并发数；配置尚未读出时安全地采用默认值。
   int _maximumConcurrency = defaultMaximumConcurrency;
 
@@ -150,11 +170,49 @@ final class DownloadCoordinator {
   /// 应用启动期唯一的下载恢复任务，避免重试启动流程重复创建调度扫描。
   Future<void>? _startFuture;
 
+  /// 当前登录用户下载调度代次；账号切换时递增，使旧异步任务停止回写。
+  int _userSessionGeneration = 0;
+
+  /// 当前是否允许领取登录用户的下载任务。
+  bool _userSessionActive = false;
+
   /// 在内置书源导入等启动数据库任务完成后恢复残留下载并开始调度。
   ///
   /// 调用方可重复调用；同一进程中始终复用首次恢复任务，避免和启动事务竞争 SQLite 连接。
   Future<void> start() {
-    return _startFuture ??= _recoverAndStart();
+    _userSessionActive = true;
+    final int generation = _userSessionGeneration;
+    return _startFuture ??= _recoverAndStart(generation);
+  }
+
+  /// 取消旧账号的网络与自动换源任务，并允许下个账号重新执行队列恢复。
+  void invalidateUserSession() {
+    _userSessionGeneration += 1;
+    _userSessionActive = false;
+    _startFuture = null;
+    _pumping = false;
+    _pumpAgain = false;
+    _runningCount = 0;
+    clearAnalyticsMeasurements();
+    for (final MapEntry<String, HttpCancellationToken> entry
+        in _activeTokens.entries) {
+      _removedTaskKeys.add(entry.key);
+      entry.value.cancel('登录用户已切换');
+    }
+    for (final MapEntry<String, BookSearchRun> entry
+        in _activeSearchRuns.entries) {
+      _removedTaskKeys.add(entry.key);
+      entry.value.cancel();
+    }
+    unawaited(_backgroundService.stop());
+  }
+
+  /// 授权关闭或账号切换时立即释放尚未结算的批次计时器。
+  void clearAnalyticsMeasurements() {
+    for (final Stopwatch stopwatch in _analyticsBatchStopwatches.values) {
+      stopwatch.stop();
+    }
+    _analyticsBatchStopwatches.clear();
   }
 
   /// 当前正在运行的章节任务数。
@@ -291,6 +349,7 @@ final class DownloadCoordinator {
     final int generation = hasOpenBatch
         ? currentState.generation
         : currentState.generation + 1;
+    await _startAnalyticsMeasurement(bookUrl, generation);
     if (!hasOpenBatch) {
       _lockedPreviews.remove(bookUrl);
       await _downloadGateway.upsertBookState(
@@ -534,9 +593,12 @@ final class DownloadCoordinator {
   }
 
   /// 应用启动后把残留“运行中”任务重置为“等待”，随后开始调度。
-  Future<void> _recoverAndStart() async {
+  Future<void> _recoverAndStart(int generation) async {
     try {
       await loadMaximumConcurrency();
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       await _downloadGateway.resetRunningToWaiting(DateTime.now().millisecondsSinceEpoch);
     } on Object catch (error, stackTrace) {
       _logger.warning(
@@ -546,48 +608,56 @@ final class DownloadCoordinator {
       );
       _logger.debug(tag: bookReaderContentLogTag, message: stackTrace.toString());
     }
-    _kick();
-    unawaited(_refreshBackgroundService());
+    if (_isUserSessionCurrent(generation)) {
+      _kick();
+      unawaited(_refreshBackgroundService());
+    }
   }
 
   /// 请求调度器尝试领取更多等待中的任务。
   void _kick() {
+    if (!_userSessionActive) {
+      return;
+    }
     if (_pumping) {
       _pumpAgain = true;
       return;
     }
-    unawaited(_pump());
+    unawaited(_pump(_userSessionGeneration));
   }
 
   /// 在并发上限内持续领取等待中的任务并异步处理。
-  Future<void> _pump() async {
+  Future<void> _pump(int generation) async {
     _pumping = true;
     try {
       do {
         _pumpAgain = false;
-        while (_runningCount < _maximumConcurrency) {
+        while (_isUserSessionCurrent(generation) &&
+            _runningCount < _maximumConcurrency) {
           /// 本轮领取到的下一个任务；队列为空时为空。
-          final DownloadTask? task = await _claimNextTask();
+          final DownloadTask? task = await _claimNextTask(generation);
           if (task == null) {
             break;
           }
           _runningCount += 1;
           unawaited(_refreshBackgroundService());
           unawaited(
-            _processTask(task).whenComplete(() {
-              _runningCount -= 1;
-              unawaited(
-                _evaluateBookScoreIfSettled(
-                  task.bookUrl,
-                  task.generation,
-                ),
-              );
-              _kick();
-              unawaited(_refreshBackgroundService());
+            _processTask(task, generation).whenComplete(() {
+              if (_isUserSessionCurrent(generation)) {
+                _runningCount -= 1;
+                unawaited(
+                  _evaluateBookScoreIfSettled(
+                    task.bookUrl,
+                    task.generation,
+                  ),
+                );
+                _kick();
+                unawaited(_refreshBackgroundService());
+              }
             }),
           );
         }
-      } while (_pumpAgain);
+      } while (_pumpAgain && _isUserSessionCurrent(generation));
     } finally {
       _pumping = false;
     }
@@ -596,9 +666,12 @@ final class DownloadCoordinator {
   /// 从全部等待或运行中的任务里领取第一个仍处于等待状态的任务并标记为运行中。
   ///
   /// 领取过程中不产生额外 await，同一调度器实例内不会出现两次领取同一任务的竞争。
-  Future<DownloadTask?> _claimNextTask() async {
+  Future<DownloadTask?> _claimNextTask(int generation) async {
     /// 全部等待或运行中的任务快照。
     final List<DownloadTask> pending = await _downloadGateway.getPendingTasks();
+    if (!_isUserSessionCurrent(generation)) {
+      return null;
+    }
     for (final DownloadTask task in pending) {
       if (task.status != DownloadTaskStatus.waiting) {
         continue;
@@ -615,7 +688,7 @@ final class DownloadCoordinator {
   }
 
   /// 执行单个章节下载：跳过已缓存或卷标题，否则拉取正文并写入永久缓存。
-  Future<void> _processTask(DownloadTask task) async {
+  Future<void> _processTask(DownloadTask task, int generation) async {
     /// 【搜书诊断日志】当前下载任务不可逆标识。
     final String taskId =
         '${appLogDiagnosticId(task.bookUrl)}#${task.chapterIndex}';
@@ -624,8 +697,14 @@ final class DownloadCoordinator {
     /// 随真实来源尝试持续更新的任务副本，异常时也能保留书源归因。
     DownloadTask workingTask = task;
     try {
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       /// 目标书籍事实。
       final Book? book = await _bookshelfGateway.getBook(task.bookUrl);
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       if (book == null) {
         _logger.warning(tag: bookReaderContentLogTag, message: '离线下载终止 taskId=$taskId reason=bookMissing');
         await _downloadGateway.removeTask(task.bookUrl, task.chapterIndex);
@@ -633,6 +712,9 @@ final class DownloadCoordinator {
       }
       /// 目标书籍完整目录。
       final List<BookChapter> chapters = await _chapterGateway.getChapterList(task.bookUrl);
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       /// 目标章节；目录已变化导致索引失效时视为任务过期。
       BookChapter? chapter;
       for (final BookChapter candidate in chapters) {
@@ -647,22 +729,29 @@ final class DownloadCoordinator {
         return;
       }
       if (chapter.isVolume) {
-        await _markSuccess(task);
+        await _markSuccess(task, generation: generation);
         return;
       }
       /// 当前时间戳，用于缓存有效期判断。
       final int now = DateTime.now().millisecondsSinceEpoch;
       /// 已存在的正文缓存，无论普通 7 天缓存还是既有永久缓存都视为已下载。
       final String? existing = await _cacheGateway.getChapterContent(book.bookUrl, chapter.url, now);
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       if (existing != null) {
         /// 用户显式下载动作把既有缓存升级为永久缓存，不再受 7 天有效期约束。
         await _cacheGateway.saveChapterContent(book.bookUrl, chapter.url, existing, 0);
-        await _markSuccess(task, contentLength: existing.length);
+        await _markSuccess(
+          task,
+          generation: generation,
+          contentLength: existing.length,
+        );
         return;
       }
       if (book.origin == 'loc_book') {
         /// 本地书没有网络正文缓存概念，交给阅读器本地内容服务按需读取即可。
-        await _markSuccess(task);
+        await _markSuccess(task, generation: generation);
         return;
       }
       /// 本次下载取消令牌。
@@ -670,7 +759,13 @@ final class DownloadCoordinator {
       _activeTokens[taskKey] = token;
       /// 本次准备使用的锁定来源；未锁定时为书架当前主源。
       final DownloadBookState sourceState =
-          await _loadOrCreateBookState(book.bookUrl);
+          await _loadOrCreateBookState(
+        book.bookUrl,
+        generation: generation,
+      );
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       /// 在详情、目录或正文任一阶段失败时都可归因的预期书源 URL。
       final String expectedSourceUrl =
           sourceState.lockedSourceUrl ?? book.origin;
@@ -689,8 +784,15 @@ final class DownloadCoordinator {
         originalChapter: chapter,
         cancellationToken: token,
       );
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       if (sourceContext == null) {
-        await _markFailed(workingTask, reason: 'sourceMissing');
+        await _markFailed(
+          workingTask,
+          generation: generation,
+          reason: 'sourceMissing',
+        );
         return;
       }
       /// 加入本次实际使用书源后的来源归因集合。
@@ -708,8 +810,15 @@ final class DownloadCoordinator {
         context: sourceContext,
         cancellationToken: token,
       );
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       if (parsed.content.trim().isEmpty) {
-        await _markFailed(workingTask, reason: 'emptyContent');
+        await _markFailed(
+          workingTask,
+          generation: generation,
+          reason: 'emptyContent',
+        );
         return;
       }
       await _cacheGateway.saveChapterContent(book.bookUrl, chapter.url, parsed.content, 0);
@@ -719,6 +828,7 @@ final class DownloadCoordinator {
       );
       await _markSuccess(
         workingTask,
+        generation: generation,
         contentLength: parsed.content.length,
         successfulSourceUrl: sourceContext.source.bookSourceUrl,
       );
@@ -731,6 +841,7 @@ final class DownloadCoordinator {
       _logger.debug(tag: bookReaderContentLogTag, message: stackTrace.toString());
       await _markFailed(
         workingTask,
+        generation: generation,
         reason: error is TimeoutException ? 'timeout' : 'exception',
       );
     } finally {
@@ -741,9 +852,13 @@ final class DownloadCoordinator {
   /// 把任务标记为下载成功。
   Future<void> _markSuccess(
     DownloadTask task, {
+    required int generation,
     int contentLength = 0,
     String? successfulSourceUrl,
   }) {
+    if (!_isUserSessionCurrent(generation)) {
+      return Future<void>.value();
+    }
     /// 当前任务在取消映射中的稳定键。
     final String taskKey = _taskKey(task.bookUrl, task.chapterIndex);
     if (_removedTaskKeys.remove(taskKey)) {
@@ -772,7 +887,14 @@ final class DownloadCoordinator {
   }
 
   /// 按重试次数决定短延迟后重新排队，或在达到上限后标记为失败终态。
-  Future<void> _markFailed(DownloadTask task, {required String reason}) async {
+  Future<void> _markFailed(
+    DownloadTask task, {
+    required int generation,
+    required String reason,
+  }) async {
+    if (!_isUserSessionCurrent(generation)) {
+      return;
+    }
     /// 当前任务在取消映射中的稳定键。
     final String taskKey = _taskKey(task.bookUrl, task.chapterIndex);
     if (_removedTaskKeys.remove(taskKey)) {
@@ -795,6 +917,9 @@ final class DownloadCoordinator {
     if (nextRetryCount >= maxRetryCount) {
       /// 达到五次失败后，仅在用户开启策略时尝试一次受控自动换源。
       final bool changedSource = await _tryAutomaticSource(task);
+      if (!_isUserSessionCurrent(generation)) {
+        return;
+      }
       if (_removedTaskKeys.remove(taskKey)) {
         return;
       }
@@ -843,6 +968,9 @@ final class DownloadCoordinator {
     /// 指数退避秒数，限制在 2～10 秒，避免失败时快速重复访问书源。
     final int retryDelaySeconds = math.min(10, 2 << task.retryCount);
     await Future<void>.delayed(Duration(seconds: retryDelaySeconds));
+    if (!_isUserSessionCurrent(generation)) {
+      return;
+    }
     if (_removedTaskKeys.remove(taskKey)) {
       return;
     }
@@ -868,10 +996,16 @@ final class DownloadCoordinator {
   }
 
   /// 读取或创建一本书默认关闭自动换源的持久下载状态。
-  Future<DownloadBookState> _loadOrCreateBookState(String bookUrl) async {
+  Future<DownloadBookState> _loadOrCreateBookState(
+    String bookUrl, {
+    int? generation,
+  }) async {
     /// 数据库已有的下载书籍状态。
     final DownloadBookState? existing =
         await _downloadGateway.getBookState(bookUrl);
+    if (generation != null && !_isUserSessionCurrent(generation)) {
+      throw StateError('登录用户已切换，旧下载状态读取已失效');
+    }
     if (existing != null) {
       return existing;
     }
@@ -882,6 +1016,11 @@ final class DownloadCoordinator {
     );
     await _downloadGateway.upsertBookState(created);
     return created;
+  }
+
+  /// 判断异步下载工作是否仍属于当前已登录用户调度代次。
+  bool _isUserSessionCurrent(int generation) {
+    return _userSessionActive && _userSessionGeneration == generation;
   }
 
   /// 将原书源或已锁定替代来源解析为当前章节真实下载上下文。
@@ -1536,6 +1675,32 @@ final class DownloadCoordinator {
       if (state.generation != generation) {
         return;
       }
+      final Stopwatch? analyticsStopwatch =
+          _analyticsBatchStopwatches.remove((bookUrl, generation));
+      if (analyticsStopwatch != null) {
+        analyticsStopwatch.stop();
+        final int successCount = tasks
+            .where(
+              (DownloadTask task) =>
+                  task.status == DownloadTaskStatus.success,
+            )
+            .length;
+        final int failedCount = tasks
+            .where(
+              (DownloadTask task) =>
+                  task.status == DownloadTaskStatus.failed,
+            )
+            .length;
+        await _recordDownloadAnalytics(
+          result: successCount == 0
+              ? 'failed'
+              : failedCount == 0
+              ? 'success'
+              : 'partial',
+          chapterCount: tasks.length,
+          elapsedMilliseconds: analyticsStopwatch.elapsedMilliseconds,
+        );
+      }
       /// 本批所有任务真实尝试过的书源集合。
       final Set<String> attemptedSources = tasks.fold<Set<String>>(
         <String>{},
@@ -1586,6 +1751,66 @@ final class DownloadCoordinator {
         error: error,
       );
     }
+  }
+
+  /// 已授权时为用户新建或扩展的当前批次保留一个有界计时器。
+  Future<void> _startAnalyticsMeasurement(
+    String bookUrl,
+    int generation,
+  ) async {
+    try {
+      if (!await _analyticsEnabled()) {
+        return;
+      }
+      final (String, int) key = (bookUrl, generation);
+      if (_analyticsBatchStopwatches.containsKey(key)) {
+        return;
+      }
+      if (_analyticsBatchStopwatches.length >= 64) {
+        final (String, int) oldest = _analyticsBatchStopwatches.keys.first;
+        _analyticsBatchStopwatches.remove(oldest)?.stop();
+      }
+      _analyticsBatchStopwatches[key] = Stopwatch()..start();
+    } on Object {
+      // 授权读取失败不能阻止章节入队。
+    }
+  }
+
+  /// 下载批次结算事件失败不影响既有书源评分或任务状态。
+  Future<void> _recordDownloadAnalytics({
+    required String result,
+    required int chapterCount,
+    required int elapsedMilliseconds,
+  }) async {
+    try {
+      await _analyticsRecorder(
+        'reader_download_completed',
+        props: <String, Object?>{
+          'result': result,
+          'chapterCount': chapterCount,
+          'durationBucket': _durationBucket(elapsedMilliseconds),
+        },
+      );
+    } on Object {
+      // 下载任务事实已持久化，匿名分析保持旁路。
+    }
+  }
+
+  /// 将精确耗时转换为 API 固定分桶。
+  String _durationBucket(int elapsedMilliseconds) {
+    if (elapsedMilliseconds < 1000) {
+      return 'lt_1s';
+    }
+    if (elapsedMilliseconds < 3000) {
+      return '1_3s';
+    }
+    if (elapsedMilliseconds < 10000) {
+      return '3_10s';
+    }
+    if (elapsedMilliseconds < 30000) {
+      return '10_30s';
+    }
+    return 'gte_30s';
   }
 
   /// 等待全局请求间隔后记录本次真实书源请求开始时间。

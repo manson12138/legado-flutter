@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../domain/model/book.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
+import 'book_grid_layout.dart';
 import 'reading_history_contract.dart';
 
 /// 展示所有已成功阅读书籍的独立历史内容页。
@@ -99,32 +100,48 @@ final class _HistoryGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final int columns = (constraints.maxWidth / 108).floor().clamp(3, 8).toInt();
+        /// 宽屏下限制内容宽度，与书架保持相同的书籍卡片实际宽度。
+        final double horizontalPadding = constraints.maxWidth > LayoutToken.contentMaxWidth
+            ? (constraints.maxWidth - LayoutToken.contentMaxWidth) / 2
+            : SpacingToken.medium;
+        /// 扣除水平留白后用于计算统一网格列数的内容宽度。
+        final double contentWidth = constraints.maxWidth - horizontalPadding * 2;
+        /// 使用与书架一致的可用宽度和列数计算规则。
+        final int columns = (contentWidth / BookGridLayout.targetTileWidth)
+            .floor()
+            .clamp(BookGridLayout.minimumColumns, BookGridLayout.maximumColumns)
+            .toInt();
         return GridView.builder(
-          padding: const EdgeInsets.all(SpacingToken.medium),
+          padding: EdgeInsets.symmetric(
+            horizontal: horizontalPadding,
+            vertical: SpacingToken.medium,
+          ),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
             crossAxisSpacing: SpacingToken.small,
             mainAxisSpacing: SpacingToken.small,
-            childAspectRatio: 0.62,
+            childAspectRatio: BookGridLayout.childAspectRatio,
           ),
           itemCount: state.books.length,
           itemBuilder: (BuildContext context, int index) {
             final Book book = state.books[index];
-            return Card(
-              key: ValueKey<String>('history-grid-${book.bookUrl}'),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => onIntent(OpenReadingHistoryBookIntent(book.bookUrl)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Expanded(child: _HistoryCover(book: book)),
-                    Padding(
-                      padding: const EdgeInsets.all(SpacingToken.xSmall),
-                      child: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
-                  ],
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: BookGridLayout.cardHorizontalInset),
+              child: Card(
+                key: ValueKey<String>('history-grid-${book.bookUrl}'),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () => onIntent(OpenReadingHistoryBookIntent(book.bookUrl)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(child: _HistoryCover(book: book)),
+                      Padding(
+                        padding: const EdgeInsets.all(SpacingToken.xSmall),
+                        child: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );

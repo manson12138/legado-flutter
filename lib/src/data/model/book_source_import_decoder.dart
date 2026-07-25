@@ -91,7 +91,14 @@ final class BookSourceImportDecoder {
       bookSourceType: _intValue(json, 'bookSourceType', 0, location),
       bookUrlPattern: _nullableString(json, 'bookUrlPattern', location),
       customOrder: _intValue(json, 'customOrder', 0, location),
-      enabled: _boolValue(json, 'enabled', true, location),
+      /// 文字书源保持既有默认启用；视频、音乐、漫画等非文字书源在
+      /// 外部 JSON 未显式提供 enabled 时默认关闭，避免被搜索错误调度。
+      enabled: _boolValue(
+        json,
+        'enabled',
+        _intValue(json, 'bookSourceType', 0, location) == 0,
+        location,
+      ),
       enabledExplore: _boolValue(json, 'enabledExplore', true, location),
       jsLib: _nullableString(json, 'jsLib', location),
       enabledCookieJar: _nullableBoolValue(

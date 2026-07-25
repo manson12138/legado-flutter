@@ -15,6 +15,7 @@ final class ImportBookSourcesUseCase {
   Future<AppResult<BookSourceImportResult>> execute(
     String sourceJson, {
     BookSourceConflictPolicy conflictPolicy = BookSourceConflictPolicy.overwrite,
+    bool filterBlockedSources = true,
   }) {
     if (sourceJson.trim().isEmpty) {
       return Future<AppResult<BookSourceImportResult>>.value(
@@ -25,6 +26,7 @@ final class ImportBookSourcesUseCase {
       () => _gateway.importSourceJson(
         sourceJson,
         conflictPolicy: conflictPolicy,
+        filterBlockedSources: filterBlockedSources,
       ),
     );
   }

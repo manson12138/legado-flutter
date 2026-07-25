@@ -15,16 +15,22 @@ final class ReadingHistoryDao {
   final LegadoDatabase _database;
 
   /// 按最后阅读时间倒序读取全部历史书籍。
-  Future<List<Book>> getAllBooks({DatabaseExecutor? executor}) async {
+  Future<List<Book>> getAllBooks(
+    int userId, {
+    DatabaseExecutor? executor,
+  }) async {
     final DatabaseExecutor queryExecutor =
         executor ?? await _database.database;
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.readingHistoryBooks,
-      where: '<all> orderBy=durChapterTime DESC',
+      where: 'userId = ? orderBy=durChapterTime DESC',
+      argumentCount: 1,
     );
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.readingHistoryBooks,
+      where: 'userId = ?',
+      whereArgs: <Object?>[userId],
       orderBy: 'durChapterTime DESC, bookUrl ASC',
     );
     return rows.map(bookFromMap).toList(growable: false);
@@ -32,6 +38,7 @@ final class ReadingHistoryDao {
 
   /// 按主键读取历史书籍快照。
   Future<Book?> getBook(
+    int userId,
     String bookUrl, {
     DatabaseExecutor? executor,
   }) async {
@@ -40,13 +47,13 @@ final class ReadingHistoryDao {
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.readingHistoryBooks,
-      where: 'bookUrl = ? limit=1',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ? limit=1',
+      argumentCount: 2,
     );
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.readingHistoryBooks,
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
       limit: 1,
     );
     return rows.isEmpty ? null : bookFromMap(rows.first);
@@ -54,6 +61,7 @@ final class ReadingHistoryDao {
 
   /// 按索引读取一本历史书籍的完整目录。
   Future<List<BookChapter>> getChapters(
+    int userId,
     String bookUrl, {
     DatabaseExecutor? executor,
   }) async {
@@ -62,27 +70,27 @@ final class ReadingHistoryDao {
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.readingHistoryChapters,
-      where: 'bookUrl = ? orderBy=`index` ASC',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ? orderBy=`index` ASC',
+      argumentCount: 2,
     );
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.readingHistoryChapters,
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
       orderBy: '`index` ASC',
     );
     return rows.map(bookChapterFromMap).toList(growable: false);
   }
 
   /// 观察历史书籍表，提交变化后重新查询。
-  Stream<List<Book>> watchAllBooks() async* {
+  Stream<List<Book>> watchAllBooks(int userId) async* {
     final Set<String> observedTables = <String>{
       DatabaseTables.readingHistoryBooks,
     };
     int observedRevision =
         _database.changeNotifier.revisionForTables(observedTables);
     while (true) {
-      yield await getAllBooks();
+      yield await getAllBooks(userId);
       observedRevision = await _database.changeNotifier.waitForTableChange(
         observedTables,
         observedRevision,
@@ -92,6 +100,7 @@ final class ReadingHistoryDao {
 
   /// 在调用方事务中替换历史书籍快照。
   Future<void> upsertBook(
+    int userId,
     Book book, {
     required DatabaseExecutor executor,
   }) async {
@@ -102,31 +111,33 @@ final class ReadingHistoryDao {
     );
     await executor.insert(
       DatabaseTables.readingHistoryBooks,
-      bookToMap(book),
+      <String, Object?>{'userId': userId, ...bookToMap(book)},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
   /// 在调用方事务中删除一本书的旧历史目录。
   Future<void> deleteChapters(
+    int userId,
     String bookUrl, {
     required DatabaseExecutor executor,
   }) async {
     _database.logOperation(
       operation: 'DELETE',
       table: DatabaseTables.readingHistoryChapters,
-      where: 'bookUrl = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
     );
     await executor.delete(
       DatabaseTables.readingHistoryChapters,
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
     );
   }
 
   /// 在调用方事务中写入完整历史目录。
   Future<void> upsertChapters(
+    int userId,
     List<BookChapter> chapters, {
     required DatabaseExecutor executor,
   }) async {
@@ -142,7 +153,7 @@ final class ReadingHistoryDao {
     for (final BookChapter chapter in chapters) {
       batch.insert(
         DatabaseTables.readingHistoryChapters,
-        bookChapterToMap(chapter),
+        <String, Object?>{'userId': userId, ...bookChapterToMap(chapter)},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
@@ -151,6 +162,7 @@ final class ReadingHistoryDao {
 
   /// 原子更新历史阅读位置，返回受影响行数。
   Future<int> updateProgress({
+    required int userId,
     required String bookUrl,
     required int chapterIndex,
     required int chapterPos,
@@ -161,8 +173,8 @@ final class ReadingHistoryDao {
     _database.logOperation(
       operation: 'UPDATE',
       table: DatabaseTables.readingHistoryBooks,
-      where: 'bookUrl = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
     );
     final int changedRows = await database.update(
       DatabaseTables.readingHistoryBooks,
@@ -172,8 +184,8 @@ final class ReadingHistoryDao {
         'durChapterTime': readTime,
         'durChapterTitle': chapterTitle,
       },
-      where: 'bookUrl = ?',
-      whereArgs: <Object?>[bookUrl],
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
     );
     if (changedRows > 0) {
       _database.changeNotifier.notifyTables(

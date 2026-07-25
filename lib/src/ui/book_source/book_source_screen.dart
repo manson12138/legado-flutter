@@ -200,6 +200,51 @@ final class BookSourceManagementScreen extends StatelessWidget {
                 }).toList(growable: false),
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                SpacingToken.medium,
+                0,
+                SpacingToken.medium,
+                SpacingToken.small,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: PopupMenuButton<String>(
+                  tooltip: '筛选书源分类',
+                  onSelected: (String value) {
+                    onIntent(
+                      ChangeBookSourceGroupFilterIntent(
+                        value == '__all__' ? null : value,
+                      ),
+                    );
+                  },
+                  itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                    CheckedPopupMenuItem<String>(
+                      value: '__all__',
+                      checked: state.selectedGroup == null,
+                      child: Text('总书源（${state.sources.length}）'),
+                    ),
+                    ...state.availableGroups.map(
+                      (String group) => CheckedPopupMenuItem<String>(
+                        value: group,
+                        checked: state.selectedGroup == group,
+                        child: Text(group, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ],
+                  child: Chip(
+                    avatar: const Icon(Icons.folder_outlined, size: 18),
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(state.selectedGroup ?? '总书源'),
+                        const Icon(Icons.keyboard_arrow_down, size: 18),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
             Expanded(child: _buildContent(context)),
           ],
         ),

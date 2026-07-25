@@ -34,6 +34,7 @@ final class BookInfoRouteArguments {
     required this.group,
     required this.selectedBook,
     this.initialMessage,
+    this.analyticsEntry,
   });
   /// 同名作者候选来源组。
   final BookSearchResultGroup group;
@@ -42,6 +43,9 @@ final class BookInfoRouteArguments {
 
   /// 路由替换后由新详情页展示的一次性提示。
   final String? initialMessage;
+
+  /// 详情打开入口；仅允许 `search` 或 `bookshelf`，其他内部跳转保持为空。
+  final String? analyticsEntry;
 }
 
 /// 详情、目录、书架和换源入口的不可变页面状态。
