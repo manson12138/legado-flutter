@@ -813,7 +813,7 @@ final class ReaderViewModel {
         loadState: ReaderLoadState.loading,
         clearContent: !preserveCurrentContent,
         clearError: true,
-        menuVisible: preserveCurrentContent ? false : true,
+        menuVisible: preserveCurrentContent ? false : _state.menuVisible,
         clearPreviousChapterPreview: true,
         clearNextChapterPreview: true,
       ),
