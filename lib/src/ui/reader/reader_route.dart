@@ -230,9 +230,20 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         );
         unawaited(_platformService.setOrientation(config.orientationMode));
       case ExitReaderSystemEffect():
+        // FLUTTER_REWRITE_DEBUG_LOG：关闭链路第一步恢复阅读器进入前的系统状态。
+        widget.dependencies.logger.info(
+          tag: readerEdgeSwipeExitLogTag,
+          message: '$readerEdgeSwipeExitDebugLogMarker exitSystemEffect',
+        );
         unawaited(_platformService.exitReader());
         _stopSystemInfoTimer();
       case CloseReaderRouteEffect():
+        // FLUTTER_REWRITE_DEBUG_LOG：关闭链路第二步允许 Navigator 真正退出当前阅读路由。
+        widget.dependencies.logger.info(
+          tag: readerEdgeSwipeExitLogTag,
+          message: '$readerEdgeSwipeExitDebugLogMarker closeRouteEffect '
+              'allowPop=$_allowPop',
+        );
         widget.dependencies.logger.info(
           tag: bookReaderEntryLogTag,
           message: '阅读页面准备退出 bookId=${appLogDiagnosticId(widget.bookUrl)}',
@@ -685,6 +696,12 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     return PopScope<Object?>(
       canPop: _allowPop,
       onPopInvokedWithResult: (bool didPop, Object? result) {
+        // FLUTTER_REWRITE_DEBUG_LOG：区分系统边缘返回与 Flutter 阅读器边缘识别器发起的关闭。
+        widget.dependencies.logger.info(
+          tag: readerEdgeSwipeExitLogTag,
+          message: '$readerEdgeSwipeExitDebugLogMarker systemPop '
+              'didPop=$didPop allowPop=$_allowPop',
+        );
         if (!didPop) {
           _viewModel.onIntent(const CloseReaderIntent());
         }
@@ -707,6 +724,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
               state: state,
               onIntent: _viewModel.onIntent,
               scrollController: _scrollController,
+              logger: widget.dependencies.logger,
             ),
           );
         },

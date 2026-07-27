@@ -367,11 +367,19 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        value: _draft.edgeSwipeToCloseEnabled,
-        title: const Text('边缘滑动退出'),
-        subtitle: const Text('从左右屏幕边缘向内滑动，保存进度并退出阅读'),
+        value: _draft.leftEdgeSwipeToCloseEnabled,
+        title: const Text('左边缘滑动退出'),
+        subtitle: const Text('从屏幕左边缘向右滑动，保存进度并退出阅读'),
         onChanged: (bool value) =>
-            _update(_draft.copyWith(edgeSwipeToCloseEnabled: value)),
+            _update(_draft.copyWith(leftEdgeSwipeToCloseEnabled: value)),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        value: _draft.rightEdgeSwipeToCloseEnabled,
+        title: const Text('右边缘滑动退出'),
+        subtitle: const Text('从屏幕右边缘向左滑动，保存进度并退出阅读'),
+        onChanged: (bool value) =>
+            _update(_draft.copyWith(rightEdgeSwipeToCloseEnabled: value)),
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,

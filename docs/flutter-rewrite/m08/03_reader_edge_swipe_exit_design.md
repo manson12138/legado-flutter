@@ -10,13 +10,13 @@
 
 ## 1. 结论
 
-建议左右两侧都提供边缘滑动退出，并默认开启：
+左右两侧分别提供独立边缘滑动退出设置，默认左侧开启、右侧关闭：
 
 - 从左侧屏幕边缘向右滑动：保存阅读进度并退出阅读界面；
 - 从右侧屏幕边缘向左滑动：保存阅读进度并退出阅读界面；
 - 不是从边缘起手：继续交给当前阅读模式处理，不改变覆盖、仿真、滑动、无动画、
   上下分页或连续滚动的现有行为；
-- 设置页“系统”页签增加“边缘滑动退出”开关，默认开启；
+- 设置页“系统”页签增加左、右两个独立开关，左侧默认开启、右侧默认关闭；
 - 边缘退出只发送现有 `CloseReaderIntent`，继续经过
   `ReaderViewModel._close()` 保存进度、恢复阅读系统状态并关闭路由，不直接调用
   `Navigator.pop()`。
@@ -28,7 +28,7 @@
 
 本专项唯一目标：
 
-> 为小说文本阅读器增加可持久化、默认开启的双侧边缘滑动退出，并与所有现有翻页方式、
+> 为小说文本阅读器增加可分别持久化的左右边缘滑动退出，并与所有现有翻页方式、
 > 文字选择、菜单和系统返回行为建立明确的手势优先级。
 
 本专项不包含：
@@ -82,15 +82,14 @@
 ### 3.3 配置持久化
 
 `ReaderDisplayConfig` 当前由 `ReaderRepository` 以全局 JSON 缓存在 `caches` 表中持久化，
-旧的按书配置只在全局配置不存在时迁移一次。新增布尔字段可继续进入同一 JSON：
+旧的按书配置只在全局配置不存在时迁移一次。两个布尔字段继续进入同一 JSON：
 
-- 新安装默认值为 `true`；
-- 旧缓存缺少字段时读取为 `true`；
-- 用户关闭后保存为 `false`，后续打开其他书也保持用户选择；
+- `leftEdgeSwipeToCloseEnabled` 新安装默认值为 `true`；
+- `rightEdgeSwipeToCloseEnabled` 新安装默认值为 `false`；
+- 旧缓存只有 `edgeSwipeToCloseEnabled` 时，仅用旧值迁移左侧设置，右侧按新默认关闭；
+- 用户分别修改后保存独立值，后续打开其他书也保持用户选择；
 - 不新增缓存键，不修改表结构，不升级 `LegadoDatabase.schemaVersion`；
 - 不修改 `pubspec.yaml` build number。
-
-字段建议命名为 `edgeSwipeToCloseEnabled`。
 
 ## 4. 推荐手势架构
 
@@ -143,7 +142,7 @@ lib/src/ui/reader/reader_edge_swipe_exit.dart
 ```text
 距离阈值 = clamp(屏幕宽度 × 18%, 56, 96 logical px)
 或
-正确方向速度 >= 700 logical px/s 且距离 >= Flutter kTouchSlop
+正确方向速度 >= 500 logical px/s 且距离 >= Flutter kTouchSlop
 ```
 
 边缘候选一旦开始，不能在同一指针序列中改判为普通翻页。未达到退出阈值时只取消本次退出，
@@ -191,7 +190,8 @@ Timer、Stream、历史轨迹或全屏位图。
 
 ### 6.1 覆盖和仿真翻页
 
-- 边缘起手由边缘识别器先取得水平手势，`ReaderPagedContent` 不创建翻页目标页；
+- 边缘起手由边缘识别器先取得水平手势；覆盖或仿真分页的横向识别器按相同物理边缘宽度
+  拒绝加入本次指针竞技场，`ReaderPagedContent` 不创建翻页目标页；
 - 非边缘起手继续执行当前 `22% / 500 px/s` 的覆盖或仿真提交规则；
 - 已经开始的覆盖/仿真动画期间忽略新的边缘退出；
 - 已有有效文字选区或选择手柄正在拖动时，由系统选区 Overlay 优先；
@@ -213,7 +213,8 @@ Timer、Stream、历史轨迹或全屏位图。
 
 ### 6.4 菜单、设置和其他面板
 
-- 阅读菜单显示时禁用边缘退出，用户可使用顶栏返回按钮；
+- 阅读菜单显示时仍允许从未被顶栏或底栏控件占用的物理边缘退出，避免首次进入阅读器时
+  `menuVisible=true` 让边缘手势退化成正文翻页；顶栏返回按钮继续可用；
 - 设置、目录、书签、搜索、换源和下载等 Modal Sheet 位于更高 Overlay，自身优先处理手势；
 - 活跃 Sheet 关闭后恢复边缘退出；
 - 加载或错误状态仍允许边缘退出，避免正文请求失败时只能依赖系统返回。
@@ -232,35 +233,39 @@ Timer、Stream、历史轨迹或全屏位图。
 在“显示设置 → 系统”增加：
 
 ```text
-边缘滑动退出                     [开关]
-从左右屏幕边缘向内滑动，保存进度并退出阅读
+左边缘滑动退出                   [默认开启]
+从屏幕左边缘向右滑动，保存进度并退出阅读
+
+右边缘滑动退出                   [默认关闭]
+从屏幕右边缘向左滑动，保存进度并退出阅读
 ```
 
 规则：
 
-- 默认开启；
+- 左侧默认开启，右侧默认关闭；
 - 应用按钮提交完整 `ReaderDisplayConfig`；
-- 关闭后不注册边缘退出识别器，所有边缘触摸恢复为原正文手势；
+- 某一侧关闭后，该侧不加入边缘退出识别器，触摸恢复为原正文手势；
 - 设置是设备级全局阅读偏好，与现有阅读显示配置作用域一致；
-- 不增加左右侧独立开关，避免设置复杂化；两侧行为固定镜像。
+- 两侧方向保持镜像，但开关和持久值彼此独立。
 
 ## 8. 计划修改文件
 
 | 文件 | 计划改动 |
 |---|---|
-| `lib/src/domain/model/reader_content.dart` | 增加默认 `true` 的 `edgeSwipeToCloseEnabled`，同步字段、中文注释和 `copyWith` |
-| `lib/src/data/repository/reader_repository.dart` | 配置 JSON 读取缺省为 `true`，保存新字段；不改缓存键和数据库 |
-| `lib/src/ui/reader/reader_settings_sheet.dart` | “系统”页增加开关和说明 |
+| `lib/src/domain/model/reader_content.dart` | 增加左侧默认 `true`、右侧默认 `false` 的独立字段，同步中文注释和 `copyWith` |
+| `lib/src/data/repository/reader_repository.dart` | 配置 JSON 分别读写左右字段并兼容旧总开关；不改缓存键和数据库 |
+| `lib/src/ui/reader/reader_settings_sheet.dart` | “系统”页增加左右两个独立开关和说明 |
 | `lib/src/ui/reader/reader_edge_swipe_exit.dart` | 新增边缘限定水平识别器、双侧方向判定、阈值状态机和轻量反馈 |
-| `lib/src/ui/reader/reader_screen.dart` | 在物理屏幕范围接入边缘退出容器，菜单显示时禁用，提交时发送 `CloseReaderIntent` |
+| `lib/src/ui/reader/reader_page_layout.dart` | 覆盖或仿真翻页在边缘退出启用时主动拒绝物理边缘起手，普通正文手势保持原逻辑 |
+| `lib/src/ui/reader/reader_screen.dart` | 在物理屏幕范围接入边缘退出容器，业务 Sheet 显示时禁用，提交时发送 `CloseReaderIntent` |
 | `lib/src/ui/reader/reader_view_model.dart` | 关闭流程增加单飞保护，避免系统返回与边缘手势重复保存/退出 |
 | `docs/flutter-rewrite/m08/README.md` | 记录代码实施状态和用户待验收项 |
 | `docs/flutter-rewrite/m08/01_reader_ui_rebuild_priority.md` | 补充 P0 返回手势实施快照和兼容边界 |
 | `docs/flutter-rewrite/AI_PROJECT_INDEX.md` | 索引新增手势文件、配置与专项文档 |
 
-预计不修改：
+预计不改变以下业务行为：
 
-- `reader_page_layout.dart` 的普通翻页距离、速度、动画和分页状态；
+- `reader_page_layout.dart` 的普通非边缘翻页距离、速度、动画和分页状态；
 - `reader_selection_region.dart` 的原生选区实现；
 - `reader_route.dart` 的 `PopScope` 和 Effect 导航结构；
 - Android/iOS 宿主、数据库 Schema、路由参数和 `pubspec.yaml`。
@@ -299,12 +304,12 @@ Timer、Stream、历史轨迹或全屏位图。
 
 ### 11.1 基础行为
 
-1. 打开阅读设置“系统”，确认“边缘滑动退出”默认开启。
-2. 从右侧物理边缘向左滑动，确认保存进度后只退出一次。
-3. 从左侧物理边缘向右滑动，确认行为与右侧一致。
-4. 从正文内部向左或向右滑动，确认仍执行当前翻页，不退出。
-5. 关闭开关并应用，确认两侧边缘恢复原正文手势；重新打开书后仍保持关闭。
-6. 再次开启，确认打开其他书也保持开启。
+1. 打开阅读设置“系统”，确认左侧开关默认开启、右侧开关默认关闭。
+2. 从左侧物理边缘向右滑动，确认保存进度后只退出一次。
+3. 保持右侧关闭，从右侧物理边缘向左滑动，确认继续执行正文手势而不退出。
+4. 开启右侧后再次从右侧向左滑动，确认保存进度后退出。
+5. 从正文内部向左或向右滑动，确认仍执行当前翻页，不退出。
+6. 分别关闭、开启左右开关并重新打开书，确认两侧设置独立持久化。
 
 ### 11.2 阈值和误触
 
@@ -341,12 +346,22 @@ IN_PROGRESS / 双侧边缘滑动退出代码已实现，等待用户 Android、i
 
 2026-07-27 实施快照：
 
-- `ReaderDisplayConfig` 已增加默认开启的 `edgeSwipeToCloseEnabled`，旧 JSON 缺字段时回退为开启；
-- 设置面板“系统”页已增加“边缘滑动退出”开关，继续使用全局阅读配置缓存；
+- `ReaderDisplayConfig` 已拆成左侧默认开启、右侧默认关闭的两个字段；旧 JSON 总开关仅迁移
+  到左侧，右侧缺少新字段时回退为关闭；
+- 设置面板“系统”页已增加左右两个独立开关，继续使用全局阅读配置缓存；
 - 新增 `reader_edge_swipe_exit.dart`，通过祖先级边缘限定水平识别器区分双侧向内退出和普通正文手势；
 - 左边缘向右、右边缘向左使用统一距离/速度阈值，未提交时不补做翻页；
+- 真机日志确认原实现使用移动后的 `DragStartDetails.localPosition` 判断起手侧，快速左边缘手势
+  可能在回调时已经越过 24px 而被误判为右边缘；现已固定使用原始按下坐标；
+- 覆盖或仿真翻页识别器在边缘退出启用时按相同的 24～32px 物理宽度主动让出边缘指针，
+  避免快速甩动在同一事件中由正文翻页抢先赢得竞技场；
+- 快速退出速度阈值调整为与正文翻页一致的 500 logical px/s，并继续要求至少超过
+  `kTouchSlop`，避免达到翻页手感却无法退出；
+- 初始阅读菜单默认显示不再关闭边缘识别器，避免第一次边缘滑动先触发翻页并隐藏菜单后
+  才启用返回；
 - 边缘拖动只显示小范围返回箭头反馈，不平移或重建正文；
-- `ReaderScreen` 在物理屏幕范围接入手势，菜单或 Sheet 活跃时禁用；
+- `ReaderScreen` 在物理屏幕范围接入手势，业务 Sheet 活跃时禁用；普通阅读菜单显示时
+  仍允许未被控件占用的物理边缘返回；
 - 提交后只发送 `CloseReaderIntent`，`ReaderViewModel` 已增加关闭单飞保护；
 - 未运行构建、分析、测试、格式化或应用启动，功能仍等待用户真机验证。
 

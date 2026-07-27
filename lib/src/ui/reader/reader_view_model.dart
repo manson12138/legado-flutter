@@ -310,6 +310,12 @@ final class ReaderViewModel {
           ),
         );
       case CloseReaderIntent():
+        // FLUTTER_REWRITE_DEBUG_LOG：所有系统返回、按钮返回和边缘返回都会进入同一关闭意图。
+        _logger.info(
+          tag: readerEdgeSwipeExitLogTag,
+          message: '$readerEdgeSwipeExitDebugLogMarker closeIntentReceived '
+              'closing=$_closing disposed=$_disposed',
+        );
         unawaited(_close());
     }
   }
@@ -1787,13 +1793,37 @@ final class ReaderViewModel {
   /// 正常退出前立即保存进度并恢复平台窗口状态。
   Future<void> _close() async {
     if (_closing || _disposed) {
+      // FLUTTER_REWRITE_DEBUG_LOG：确认重复返回是否被关闭单飞保护拦截。
+      _logger.info(
+        tag: readerEdgeSwipeExitLogTag,
+        message: '$readerEdgeSwipeExitDebugLogMarker closeIgnored '
+            'closing=$_closing disposed=$_disposed',
+      );
       return;
     }
     _closing = true;
+    // FLUTTER_REWRITE_DEBUG_LOG：边缘手势提交后看到该日志说明 Intent 已被 ViewModel 接受。
+    _logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker closeIntentAccepted '
+          'chapterIndex=${_state.currentChapterIndex} '
+          'characterOffset=$_pendingCharacterOffset',
+    );
     await _saveProgress();
     if (_disposed) {
+      // FLUTTER_REWRITE_DEBUG_LOG：保存期间路由被释放时不再派发关闭 Effect。
+      _logger.info(
+        tag: readerEdgeSwipeExitLogTag,
+        message: '$readerEdgeSwipeExitDebugLogMarker closeStopped '
+            'reason=disposedAfterSave',
+      );
       return;
     }
+    // FLUTTER_REWRITE_DEBUG_LOG：保存结束后按既有顺序恢复系统状态并关闭阅读路由。
+    _logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker closeEffectsEmitted',
+    );
     _effectController.add(const ExitReaderSystemEffect());
     _effectController.add(const CloseReaderRouteEffect());
   }

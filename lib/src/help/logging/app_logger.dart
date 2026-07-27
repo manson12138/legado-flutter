@@ -58,6 +58,12 @@ const String defaultBookSourceBootstrapLogTag = 'DEFAULT_BOOK_SOURCE_BOOTSTRAP';
 /// 【FLUTTER_JS_COMPAT_LOG】JavaScript 兼容诊断日志统一标识，问题解决后可按此标识完整移除。
 const String javaScriptCompatibilityDebugLogMarker = 'FLUTTER_JS_COMPAT_LOG';
 
+/// 【FLUTTER_REWRITE_DEBUG_LOG】阅读器边缘侧滑返回与翻页竞争排查使用的统一 Logcat Tag。
+const String readerEdgeSwipeExitLogTag = 'READER_EDGE_SWIPE_EXIT';
+
+/// 【FLUTTER_REWRITE_DEBUG_LOG】阅读器边缘侧滑诊断日志统一标识，问题解决后按此标识完整移除。
+const String readerEdgeSwipeExitDebugLogMarker = 'FLUTTER_REWRITE_DEBUG_LOG';
+
 /// 【扫码诊断日志】Dio 请求 `extra` 中传递业务日志上下文的固定键。
 const String networkRequestLogContextExtraKey = '_legadoNetworkLogContext';
 

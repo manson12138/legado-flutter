@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
+import '../../help/logging/app_logger.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
@@ -19,6 +20,7 @@ final class ReaderScreen extends StatelessWidget {
     required this.state,
     required this.onIntent,
     required this.scrollController,
+    required this.logger,
     super.key,
   });
 
@@ -30,6 +32,9 @@ final class ReaderScreen extends StatelessWidget {
 
   /// 路由层持有的瞬时滚动控制器，不进入业务 UiState。
   final ScrollController scrollController;
+
+  /// 【FLUTTER_REWRITE_DEBUG_LOG】记录边缘返回与正文翻页手势竞争结果的统一日志接口。
+  final AppLogger logger;
 
   /// 构建可隐藏菜单、惰性正文和章节控制栏。
   @override
@@ -45,10 +50,14 @@ final class ReaderScreen extends StatelessWidget {
         children: <Widget>[
           Positioned.fill(
             child: ReaderEdgeSwipeExitRegion(
-              enabled: state.config.edgeSwipeToCloseEnabled &&
-                  !state.menuVisible &&
+              leftEnabled:
+                  state.config.leftEdgeSwipeToCloseEnabled &&
+                  state.activeSheet == null,
+              rightEnabled:
+                  state.config.rightEdgeSwipeToCloseEnabled &&
                   state.activeSheet == null,
               onExit: () => onIntent(const CloseReaderIntent()),
+              logger: logger,
               child: ColoredBox(
                 color: backgroundColor,
                 child: SafeArea(
@@ -114,6 +123,7 @@ final class ReaderScreen extends StatelessWidget {
       key: ValueKey<String>(content.chapterUrl),
       state: state,
       onIntent: onIntent,
+      logger: logger,
     );
     /// 当前是否启用由阅读器接管的左右覆盖或仿真翻页。
     final bool usesCustomHorizontalTurn =
