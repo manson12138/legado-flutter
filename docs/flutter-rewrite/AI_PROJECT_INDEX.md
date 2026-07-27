@@ -84,7 +84,8 @@ Flutter 只正确修正 X、没有像 Android 一样使用更新后的 X 联动�
 未引入全屏快照，等待同手势真机验证。
 小说阅读器双侧边缘滑动退出的手势命中顺序、翻页/选区兼容、配置持久化、系统返回单飞和验收方案见
 [`m08/03_reader_edge_swipe_exit_design.md`](./m08/03_reader_edge_swipe_exit_design.md)；该专项当前为
-`IN_PROGRESS`，左右边缘镜像向内滑动退出、默认开启和关闭单飞代码已写入，等待用户双端真机验证。
+`IN_PROGRESS`，左右边缘镜像向内滑动退出、左侧默认开启、右侧默认关闭、独立持久化和关闭单飞
+代码已写入，等待用户双端真机验证。
 书源、搜索、详情/目录、阅读和换源核心主流程与原生 Android 的差距及建议实施顺序见
 [`CORE_READING_FLOW_GAP_PRIORITY.md`](./CORE_READING_FLOW_GAP_PRIORITY.md)。该文档以真实书源成功率、
 阅读稳定性、进度安全和换源数据安全为 P0，状态为 `PROPOSED`，需用户确认后再作为后续领取顺序。
@@ -178,7 +179,7 @@ lib/main.dart
 | `/book-info` | `ui/book_info/book_info_route.dart` / `book_info_screen.dart` | `BookInfoViewModel` | 必须传 `BookInfoRouteArguments`；主操作区提供显式“更新目录”按钮并复用详情与完整目录刷新链路 |
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` / `reading_history_screen.dart` / `book_grid_layout.dart` / `app/bookshelf_layout_preferences.dart` | `BookshelfViewModel`、`ReadingHistoryViewModel` | 内部书架/历史 `PageView`；实时书架、独立阅读历史、分组、排序、批量操作；书架与历史共用封面网格规格，列表/网格排版通过 `caches` 持久化并在重启后恢复，历史默认网格；书架失去可见性时退出选择模式 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
-| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；未入架详情/历史入口可附带 `initialBook`、`initialChapters` 和 `entry` 快照；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart`，正文短按由不参与手势竞技场的 `reader_tap_region.dart` 识别，避免与长按选词冲突；`reader_simulation_page_turn.dart` 提供纯 Flutter 仿真卷页几何、页背和阴影；`reader_edge_swipe_exit.dart` 提供默认开启的双侧物理边缘向内滑动退出并复用统一保存关闭链路；顶部信息图标打开书籍详情的待执行方案见 [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md) |
+| `/reader` | `ui/reader/book_reader_route.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；未入架详情/历史入口可附带 `initialBook`、`initialChapters` 和 `entry` 快照；PDF 分流到 `PdfReaderRoute`，其余进入 `ReaderRoute`；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart`，正文短按由不参与手势竞技场的 `reader_tap_region.dart` 识别，避免与长按选词冲突；`reader_simulation_page_turn.dart` 提供纯 Flutter 仿真卷页几何、页背和阴影；`reader_edge_swipe_exit.dart` 提供左侧默认开启、右侧默认关闭且可独立配置的双侧物理边缘向内滑动退出，并复用统一保存关闭链路；顶部信息图标打开书籍详情的待执行方案见 [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md) |
 | `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
@@ -481,7 +482,7 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 | 书架、书架分组与阅读历史本地首快照的启动期预加载；默认书源与下载恢复后按 URL 去重、限两个 worker 自动更新书架和历史目录；账号切换取消、独立快照回写及不阻塞首屏约束 | [`m11/bookshelf_history_startup_preload_design.md`](./m11/bookshelf_history_startup_preload_design.md)、[`m11/bookshelf_history_startup_auto_toc_refresh_design.md`](./m11/bookshelf_history_startup_auto_toc_refresh_design.md)、[`m11/user_scoped_bookshelf_and_history_design.md`](./m11/user_scoped_bookshelf_and_history_design.md) |
 | 书架已读完书籍显示目录总章数；书籍详情完整目录和阅读界面目录提供默认正序的正倒序切换，并保持原始章节索引、当前章节定位及长目录性能；代码已写入，等待用户验证 | [`m11/bookshelf_chapter_count_and_toc_order_design.md`](./m11/bookshelf_chapter_count_and_toc_order_design.md) |
 | 游客书源管理不显示账号云同步按钮；“更多”增加游客专用 URL 输入，HTTP/HTTPS 返回 JSON 复用现有导入确认，非 URL 邀请码兑换内存态游客凭证并按 50 条游标分页导入；登录账号旧逻辑保持不变；代码已写入，等待用户验证 | [`m11/guest_book_source_url_and_invitation_import_design.md`](./m11/guest_book_source_url_and_invitation_import_design.md) |
-| 小说阅读器左右物理边缘镜像向内滑动退出；默认开启并复用保存进度后的统一关闭链路，普通正文起手继续翻页；与原生选区、菜单、系统返回和全部阅读模式的手势分流代码已写入，等待用户双端真机验证 | [`m08/03_reader_edge_swipe_exit_design.md`](./m08/03_reader_edge_swipe_exit_design.md) |
+| 小说阅读器左右物理边缘镜像向内滑动退出；左侧默认开启、右侧默认关闭并可独立持久化，复用保存进度后的统一关闭链路，普通正文起手继续翻页；与原生选区、菜单、系统返回和全部阅读模式的手势分流代码已写入，等待用户双端真机验证 | [`m08/03_reader_edge_swipe_exit_design.md`](./m08/03_reader_edge_swipe_exit_design.md) |
 | 搜索书名/作者/其他分类栏使用 PageView 连续位置驱动单块滑动背景，消除独立背景交叉淡入淡出的闪烁；阅读器顶部增加书籍详情图标，并处理进度保存、阅读系统状态恢复和重复阅读器路由；代码已写入，等待用户运行验证 | [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md) |
 | 搜索关键字历史按登录用户隔离；代码已写入待用户验收，复用 `caches` 用户派生键、旧设备级历史删除、不升级 Schema，并保持搜索偏好为设备级 | [`m11/user_scoped_search_history_design.md`](./m11/user_scoped_search_history_design.md) |
 | 首帧前控制台降级、首帧后切换文件日志与日志管理入口 | `help/logging/deferred_app_log_service.dart`；启动编排见 [`m11/backend_api_integration/09_startup_initialization_performance_design.md`](./m11/backend_api_integration/09_startup_initialization_performance_design.md) |

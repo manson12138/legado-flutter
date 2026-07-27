@@ -33,7 +33,8 @@ final class ReaderScreen extends StatelessWidget {
   /// 路由层持有的瞬时滚动控制器，不进入业务 UiState。
   final ScrollController scrollController;
 
-  /// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页临时诊断日志使用的统一应用日志器。
+  /// 【FLUTTER_READER_SIMULATION_LOG】【FLUTTER_REWRITE_DEBUG_LOG】
+  /// 仿真翻页与边缘返回手势诊断共用的应用日志器。
   final AppLogger logger;
 
   /// 构建可隐藏菜单、惰性正文和章节控制栏。
@@ -50,10 +51,14 @@ final class ReaderScreen extends StatelessWidget {
         children: <Widget>[
           Positioned.fill(
             child: ReaderEdgeSwipeExitRegion(
-              enabled: state.config.edgeSwipeToCloseEnabled &&
-                  !state.menuVisible &&
+              leftEnabled:
+                  state.config.leftEdgeSwipeToCloseEnabled &&
+                  state.activeSheet == null,
+              rightEnabled:
+                  state.config.rightEdgeSwipeToCloseEnabled &&
                   state.activeSheet == null,
               onExit: () => onIntent(const CloseReaderIntent()),
+              logger: logger,
               child: ColoredBox(
                 color: backgroundColor,
                 child: SafeArea(

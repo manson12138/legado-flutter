@@ -258,7 +258,8 @@ final class ReaderDisplayConfig {
     this.readerBrightness = 0.5,
     this.orientationMode = ReaderOrientationMode.portrait,
     this.fullScreen = false,
-    this.edgeSwipeToCloseEnabled = true,
+    this.leftEdgeSwipeToCloseEnabled = true,
+    this.rightEdgeSwipeToCloseEnabled = false,
   });
 
   /// 正文字号，单位为逻辑像素。
@@ -384,8 +385,11 @@ final class ReaderDisplayConfig {
   /// 是否隐藏系统状态栏和导航栏进入沉浸式全屏阅读；默认关闭，由用户在设置中主动开启。
   final bool fullScreen;
 
-  /// 是否允许从左右物理屏幕边缘向内滑动并保存进度后退出阅读器。
-  final bool edgeSwipeToCloseEnabled;
+  /// 是否允许从左侧物理屏幕边缘向右滑动并保存进度后退出阅读器；默认开启。
+  final bool leftEdgeSwipeToCloseEnabled;
+
+  /// 是否允许从右侧物理屏幕边缘向左滑动并保存进度后退出阅读器；默认关闭。
+  final bool rightEdgeSwipeToCloseEnabled;
 
   /// 复制显示配置并只覆盖用户本次修改的字段。
   ReaderDisplayConfig copyWith({
@@ -430,7 +434,8 @@ final class ReaderDisplayConfig {
     double? readerBrightness,
     ReaderOrientationMode? orientationMode,
     bool? fullScreen,
-    bool? edgeSwipeToCloseEnabled,
+    bool? leftEdgeSwipeToCloseEnabled,
+    bool? rightEdgeSwipeToCloseEnabled,
   }) {
     return ReaderDisplayConfig(
       fontSize: fontSize ?? this.fontSize,
@@ -474,8 +479,10 @@ final class ReaderDisplayConfig {
       readerBrightness: readerBrightness ?? this.readerBrightness,
       orientationMode: orientationMode ?? this.orientationMode,
       fullScreen: fullScreen ?? this.fullScreen,
-      edgeSwipeToCloseEnabled:
-          edgeSwipeToCloseEnabled ?? this.edgeSwipeToCloseEnabled,
+      leftEdgeSwipeToCloseEnabled:
+          leftEdgeSwipeToCloseEnabled ?? this.leftEdgeSwipeToCloseEnabled,
+      rightEdgeSwipeToCloseEnabled:
+          rightEdgeSwipeToCloseEnabled ?? this.rightEdgeSwipeToCloseEnabled,
     );
   }
 }

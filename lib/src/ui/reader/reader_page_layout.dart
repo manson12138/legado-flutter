@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -751,12 +752,78 @@ final class ReaderPagedContent extends StatefulWidget {
   /// 阅读器 Intent 入口。
   final ValueChanged<ReaderIntent> onIntent;
 
-  /// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页临时诊断日志使用的统一应用日志器。
+  /// 【FLUTTER_READER_SIMULATION_LOG】【FLUTTER_REWRITE_DEBUG_LOG】
+  /// 仿真翻页与边缘返回手势诊断共用的应用日志器。
   final AppLogger logger;
 
   /// 创建分页组件瞬时状态。
   @override
   State<ReaderPagedContent> createState() => _ReaderPagedContentState();
+}
+
+/// 在边缘退出启用时拒绝物理边缘起手，只让正文内部指针参与覆盖或仿真翻页。
+///
+/// 该识别器只负责当前指针的竞技场分流，不保存翻页状态；非边缘手势继续复用
+/// [_ReaderPagedContentState] 原有的拖动、提交和回弹逻辑。
+final class _ReaderPageHorizontalDragGestureRecognizer
+    extends HorizontalDragGestureRecognizer {
+  /// 创建正文横向翻页识别器，并接入统一手势诊断日志。
+  _ReaderPageHorizontalDragGestureRecognizer({
+    required this.logger,
+    super.debugOwner,
+  });
+
+  /// 【FLUTTER_REWRITE_DEBUG_LOG】记录正文翻页主动让出边缘指针的统一日志接口。
+  final AppLogger logger;
+
+  /// 当前分页正文的完整物理视口宽度。
+  double viewportWidth = 0;
+
+  /// 左侧由边缘退出保留的候选宽度。
+  double leftEdgeWidth = 24;
+
+  /// 右侧由边缘退出保留的候选宽度。
+  double rightEdgeWidth = 24;
+
+  /// 当前是否需要把左侧边缘指针完整交给阅读器退出识别器。
+  bool excludeLeftEdgePointers = true;
+
+  /// 当前是否需要把右侧边缘指针完整交给阅读器退出识别器。
+  bool excludeRightEdgePointers = false;
+
+  /// 边缘退出启用时拒绝边缘按下，避免与祖先识别器在同一移动事件中抢先接受。
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    /// 指针相对当前分页视口的原始水平按下位置。
+    final double x = event.localPosition.dx;
+    /// 本次按下是否位于需要交给边缘退出识别器的左侧物理边缘。
+    final bool isReservedLeftEdgePointer =
+        excludeLeftEdgePointers && x <= leftEdgeWidth;
+    /// 本次按下是否位于需要交给边缘退出识别器的右侧物理边缘。
+    final bool isReservedRightEdgePointer =
+        excludeRightEdgePointers &&
+        x >= viewportWidth - rightEdgeWidth;
+    /// 本次按下是否位于任一当前已开启的退出边缘。
+    final bool isReservedEdgePointer =
+        viewportWidth > 0 &&
+        (isReservedLeftEdgePointer || isReservedRightEdgePointer);
+    if (isReservedEdgePointer) {
+      // FLUTTER_REWRITE_DEBUG_LOG：该日志证明覆盖或仿真翻页已主动退出本次边缘竞争。
+      logger.info(
+        tag: readerEdgeSwipeExitLogTag,
+        message: '$readerEdgeSwipeExitDebugLogMarker '
+            'simulationPointerExcluded '
+            'pointer=${event.pointer} x=${x.toStringAsFixed(1)} '
+            'viewportWidth=${viewportWidth.toStringAsFixed(1)} '
+            'edgeWidths=${leftEdgeWidth.toStringAsFixed(1)}/'
+            '${rightEdgeWidth.toStringAsFixed(1)} '
+            'excludedSides=$excludeLeftEdgePointers/'
+            '$excludeRightEdgePointers',
+      );
+      return;
+    }
+    super.addAllowedPointer(event);
+  }
 }
 
 /// 持有仅与当前布局有关的 PageController 和恢复请求编号。
@@ -1083,6 +1150,71 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           );
         }
         if (_usesInteractiveHorizontalPaging) {
+          /// 系统手势区域，用于让正文翻页与祖先边缘退出使用相同的物理边缘宽度。
+          final EdgeInsets systemGestureInsets =
+              MediaQuery.of(context).systemGestureInsets;
+          /// 左侧由边缘退出保留的候选命中宽度。
+          final double leftEdgeWidth =
+              (systemGestureInsets.left + 6).clamp(24, 32).toDouble();
+          /// 右侧由边缘退出保留的候选命中宽度。
+          final double rightEdgeWidth =
+              (systemGestureInsets.right + 6).clamp(24, 32).toDouble();
+          /// Sheet 关闭且用户开启左侧设置时，正文翻页必须让出左边缘指针。
+          final bool excludesLeftEdgePointers =
+              widget.state.config.leftEdgeSwipeToCloseEnabled &&
+              widget.state.activeSheet == null;
+          /// Sheet 关闭且用户开启右侧设置时，正文翻页必须让出右边缘指针。
+          final bool excludesRightEdgePointers =
+              widget.state.config.rightEdgeSwipeToCloseEnabled &&
+              widget.state.activeSheet == null;
+          /// 当前覆盖或仿真分页使用的横向手势识别器工厂。
+          final Map<Type, GestureRecognizerFactory> horizontalGestures =
+              _selectionActive
+              ? <Type, GestureRecognizerFactory>{}
+              : <Type, GestureRecognizerFactory>{
+                  _ReaderPageHorizontalDragGestureRecognizer:
+                      GestureRecognizerFactoryWithHandlers<
+                        _ReaderPageHorizontalDragGestureRecognizer
+                      >(
+                        () => _ReaderPageHorizontalDragGestureRecognizer(
+                          logger: widget.logger,
+                          debugOwner: this,
+                        ),
+                        (
+                          _ReaderPageHorizontalDragGestureRecognizer recognizer,
+                        ) {
+                          recognizer
+                            ..viewportWidth = constraints.maxWidth
+                            ..leftEdgeWidth = leftEdgeWidth
+                            ..rightEdgeWidth = rightEdgeWidth
+                            ..excludeLeftEdgePointers =
+                                excludesLeftEdgePointers
+                            ..excludeRightEdgePointers =
+                                excludesRightEdgePointers
+                            ..dragStartBehavior = DragStartBehavior.start
+                            ..onStart = (DragStartDetails details) {
+                              if (widget.state.menuVisible) {
+                                widget.onIntent(
+                                  const HideReaderMenuIntent(),
+                                );
+                              }
+                              _handleHorizontalDragStart(
+                                constraints.maxWidth,
+                                constraints.maxHeight,
+                                details,
+                              );
+                            }
+                            ..onUpdate = (DragUpdateDetails details) {
+                              _handleHorizontalDragUpdate(
+                                details,
+                                constraints.maxHeight,
+                              );
+                            }
+                            ..onEnd = _handleHorizontalDragEnd
+                            ..onCancel = _handleHorizontalDragCancel;
+                        },
+                      ),
+                };
           return ReaderTapRegion(
             onTapUp: (Offset position) {
               _handleTap(
@@ -1093,32 +1225,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
               );
             },
             onSelectionActiveChanged: _handleSelectionActiveChanged,
-            child: GestureDetector(
+            child: RawGestureDetector(
               behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: _selectionActive
-                  ? null
-                  : (DragStartDetails details) {
-                      if (widget.state.menuVisible) {
-                        widget.onIntent(const HideReaderMenuIntent());
-                      }
-                      _handleHorizontalDragStart(
-                        constraints.maxWidth,
-                        constraints.maxHeight,
-                        details,
-                      );
-                    },
-              onHorizontalDragUpdate: _selectionActive
-                  ? null
-                  : (DragUpdateDetails details) {
-                      _handleHorizontalDragUpdate(
-                        details,
-                        constraints.maxHeight,
-                      );
-                    },
-              onHorizontalDragEnd:
-                  _selectionActive ? null : _handleHorizontalDragEnd,
-              onHorizontalDragCancel:
-                  _selectionActive ? null : _handleHorizontalDragCancel,
+              gestures: horizontalGestures,
               child: _usesSimulationPaging
                   ? _buildSimulationPager(
                       content,
@@ -1137,6 +1246,17 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         }
         return NotificationListener<ScrollStartNotification>(
           onNotification: (ScrollStartNotification notification) {
+            // FLUTTER_REWRITE_DEBUG_LOG：PageView 收到拖动表示边缘识别器未接管本次指针。
+            if (notification.dragDetails != null) {
+              widget.logger.info(
+                tag: readerEdgeSwipeExitLogTag,
+                message: '$readerEdgeSwipeExitDebugLogMarker pageViewDragStart '
+                    'mode=${widget.state.config.readingMode.name} '
+                    'style=${widget.state.config.pageTurnStyle.name} '
+                    'axis=${notification.metrics.axis.name} '
+                    'pageIndex=$_currentPageIndex',
+              );
+            }
             if (notification.dragDetails != null && widget.state.menuVisible) {
               widget.onIntent(const HideReaderMenuIntent());
             }
@@ -2188,6 +2308,14 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 保存翻页后的字符位置，并在越过末页时自动进入下一章。
   void _handlePageChanged(int index) {
+    // FLUTTER_REWRITE_DEBUG_LOG：确认未被边缘返回接管的指针最终是否触发了正文翻页。
+    widget.logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker pageChanged '
+          'mode=${widget.state.config.readingMode.name} '
+          'style=${widget.state.config.pageTurnStyle.name} '
+          'from=$_currentPageIndex to=$index pageCount=${_pages.length}',
+    );
     if (index >= _pages.length) {
       if (_isLayoutComplete) {
         widget.onIntent(const OpenNextChapterIntent());
@@ -2344,6 +2472,17 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         !_selectionActive &&
         !_coverController.isAnimating &&
         !_boundaryTurnCommitted;
+    // FLUTTER_REWRITE_DEBUG_LOG：该回调出现表示覆盖或仿真翻页赢得了本次横向手势竞技场。
+    widget.logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker simulationDragStart '
+          'style=${widget.state.config.pageTurnStyle.name} '
+          'x=${details.localPosition.dx.toStringAsFixed(1)} '
+          'y=${details.localPosition.dy.toStringAsFixed(1)} '
+          'width=${width.toStringAsFixed(1)} '
+          'enabled=$_horizontalDragEnabled selection=$_selectionActive '
+          'animating=${_coverController.isAnimating}',
+    );
     if (!_horizontalDragEnabled) {
       return;
     }
@@ -2448,6 +2587,14 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 系统取消当前横向手势时按原方向回弹，并保留当前字符锚点。
   void _handleHorizontalDragCancel() {
+    // FLUTTER_REWRITE_DEBUG_LOG：记录仿真或覆盖翻页被竞技场或系统取消时的累计位移。
+    widget.logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker simulationDragCancel '
+          'enabled=$_horizontalDragEnabled '
+          'distance=${_horizontalDragDistance.toStringAsFixed(1)} '
+          'target=$_coverToIndex',
+    );
     if (!_horizontalDragEnabled) {
       return;
     }
@@ -2465,6 +2612,12 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 按当前策略决定完成、回弹，或在章节边界进入相邻章节。
   void _handleHorizontalDragEnd(DragEndDetails details) {
     if (!_horizontalDragEnabled || _pages.isEmpty) {
+      // FLUTTER_REWRITE_DEBUG_LOG：保留翻页结束被忽略的原因，避免只看到动画侧结果。
+      widget.logger.info(
+        tag: readerEdgeSwipeExitLogTag,
+        message: '$readerEdgeSwipeExitDebugLogMarker simulationDragEndIgnored '
+            'enabled=$_horizontalDragEnabled pages=${_pages.length}',
+      );
       return;
     }
     _horizontalDragEnabled = false;
@@ -2509,6 +2662,16 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     }
     /// 当前章节内已经准备好的目标页。
     final int? targetIndex = _coverToIndex;
+    // FLUTTER_REWRITE_DEBUG_LOG：记录正文翻页最终提交判断，与边缘返回提交阈值形成对照。
+    widget.logger.info(
+      tag: readerEdgeSwipeExitLogTag,
+      message: '$readerEdgeSwipeExitDebugLogMarker simulationDragEnd '
+          'style=${widget.state.config.pageTurnStyle.name} '
+          'distance=${_horizontalDragDistance.toStringAsFixed(1)} '
+          'width=${_horizontalDragWidth.toStringAsFixed(1)} '
+          'velocity=${velocity.toStringAsFixed(1)} direction=$direction '
+          'target=$targetIndex commit=$shouldCommit',
+    );
     if (targetIndex != null) {
       if (shouldCommit) {
         _finishCoverAnimation(targetIndex);
