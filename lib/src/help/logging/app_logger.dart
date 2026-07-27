@@ -46,6 +46,13 @@ const String bookReaderEntryLogTag = 'BOOK_READER_ENTRY';
 /// 【搜书诊断日志】章节缓存、网络正文、处理和预加载使用的 Logcat Tag。
 const String bookReaderContentLogTag = 'BOOK_READER_CONTENT';
 
+/// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页手势、几何和路径诊断使用的统一 Logcat Tag。
+const String readerSimulationPageTurnLogTag = 'READER_SIMULATION_TURN';
+
+/// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页临时诊断日志统一移除标识。
+const String readerSimulationPageTurnDebugLogMarker =
+    'FLUTTER_READER_SIMULATION_LOG';
+
 /// 服务器书源同步流程的统一诊断 Tag；不记录 Token、书源内容或远端地址。
 const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
 

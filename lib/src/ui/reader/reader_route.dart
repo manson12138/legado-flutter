@@ -707,6 +707,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
               state: state,
               onIntent: _viewModel.onIntent,
               scrollController: _scrollController,
+              logger: widget.dependencies.logger,
             ),
           );
         },

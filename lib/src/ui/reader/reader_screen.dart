@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
+import '../../help/logging/app_logger.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
@@ -19,6 +20,7 @@ final class ReaderScreen extends StatelessWidget {
     required this.state,
     required this.onIntent,
     required this.scrollController,
+    required this.logger,
     super.key,
   });
 
@@ -30,6 +32,9 @@ final class ReaderScreen extends StatelessWidget {
 
   /// 路由层持有的瞬时滚动控制器，不进入业务 UiState。
   final ScrollController scrollController;
+
+  /// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页临时诊断日志使用的统一应用日志器。
+  final AppLogger logger;
 
   /// 构建可隐藏菜单、惰性正文和章节控制栏。
   @override
@@ -114,6 +119,7 @@ final class ReaderScreen extends StatelessWidget {
       key: ValueKey<String>(content.chapterUrl),
       state: state,
       onIntent: onIntent,
+      logger: logger,
     );
     /// 当前是否启用由阅读器接管的左右覆盖或仿真翻页。
     final bool usesCustomHorizontalTurn =
@@ -133,6 +139,7 @@ final class ReaderScreen extends StatelessWidget {
       readableContent = _ReaderChapterPageTurnSwitch(
         chapterUrl: content.chapterUrl,
         direction: state.chapterTransitionDirection,
+        animateTransition: state.animateChapterTransition,
         pageTurnStyle: state.config.pageTurnStyle,
         paperColor: Color(state.config.backgroundColorValue),
         child: pagedContent,
@@ -166,6 +173,7 @@ final class _ReaderChapterPageTurnSwitch extends StatefulWidget {
   const _ReaderChapterPageTurnSwitch({
     required this.chapterUrl,
     required this.direction,
+    required this.animateTransition,
     required this.pageTurnStyle,
     required this.paperColor,
     required this.child,
@@ -176,6 +184,9 @@ final class _ReaderChapterPageTurnSwitch extends StatefulWidget {
 
   /// 章节切换方向；正数移走旧章进入下一章，负数从左侧覆盖进入上一章。
   final int direction;
+
+  /// 新章节就绪后是否播放跨章动画；边界手势已经展示目标页时关闭。
+  final bool animateTransition;
 
   /// 当前左右分页使用的覆盖或仿真动画策略。
   final ReaderPageTurnStyle pageTurnStyle;
@@ -235,6 +246,11 @@ final class _ReaderChapterPageTurnSwitchState
     _previousChild = _currentChild;
     _currentChild = widget.child;
     _currentChapterUrl = widget.chapterUrl;
+    if (!widget.animateTransition) {
+      _previousChild = null;
+      _controller.value = 1;
+      return;
+    }
     _direction = widget.direction < 0 ? -1 : 1;
     _controller.value = 0;
     /// 当前跨章节覆盖动画任务。
@@ -269,18 +285,36 @@ final class _ReaderChapterPageTurnSwitchState
         animation: _controller,
         builder: (BuildContext context, Widget? child) {
           if (widget.pageTurnStyle == ReaderPageTurnStyle.simulation) {
-            return ExcludeSemantics(
-              child: IgnorePointer(
-                child: ReaderSimulationPageTurnFrame(
-                  currentPage: previousChild,
-                  targetPage: _currentChild,
-                  direction: _direction,
-                  progress: _controller.value,
-                  touchYRatio: 0.86,
-                  useUpperCorner: false,
-                  paperColor: widget.paperColor,
-                ),
-              ),
+            return LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                /// 当前跨章节仿真页面宽度。
+                final double width = constraints.maxWidth;
+                /// 当前跨章节仿真页面高度。
+                final double height = constraints.maxHeight;
+                /// 当前跨章节程序化动画进度。
+                final double progress = _controller.value;
+                /// 下一章从右下卷到左侧屏外，上一章从左侧展开到右下页角。
+                final Offset touch = _direction > 0
+                    ? Offset(
+                        width * 0.9 +
+                            (-width - width * 0.9) * progress,
+                        height * 0.9 + height * 0.1 * progress,
+                      )
+                    : Offset(width * progress, height);
+                return ExcludeSemantics(
+                  child: IgnorePointer(
+                    child: ReaderSimulationPageTurnFrame(
+                      currentPage: previousChild,
+                      targetPage: _currentChild,
+                      direction: _direction,
+                      progress: progress,
+                      touch: touch,
+                      corner: Offset(width, height),
+                      paperColor: widget.paperColor,
+                    ),
+                  ),
+                );
+              },
             );
           }
           /// 当前可用页面宽度。

@@ -199,6 +199,9 @@ final class ReaderViewModel {
   /// 整书搜索世代，避免旧搜索结果覆盖用户最新关键词。
   int _searchGeneration = 0;
 
+  /// 相邻章节预览世代，切章、配置变化或内存压力后拒绝旧预加载回调。
+  int _adjacentPreloadGeneration = 0;
+
   /// 当前可同步读取的状态。
   ReaderUiState get state => _state;
 
@@ -219,6 +222,15 @@ final class ReaderViewModel {
         unawaited(_openRelativeChapter(-1));
       case OpenNextChapterIntent():
         unawaited(_openRelativeChapter(1));
+      case CommitReaderAdjacentPageTurnIntent(
+        direction: final int direction,
+      ):
+        unawaited(
+          _openRelativeChapter(
+            direction,
+            animateTransition: false,
+          ),
+        );
       case OpenReaderChapterIntent(
         chapterIndex: final int chapterIndex,
         characterOffset: final int characterOffset,
@@ -276,7 +288,14 @@ final class ReaderViewModel {
       case PauseReaderIntent():
         unawaited(_saveProgress());
       case ReaderMemoryPressureIntent():
+        _adjacentPreloadGeneration += 1;
         _coordinator.handleMemoryPressure();
+        _emit(
+          _state.copyWith(
+            clearPreviousChapterPreview: true,
+            clearNextChapterPreview: true,
+          ),
+        );
       case OpenReaderBookSourceChangeIntent():
         unawaited(_requestBookSourceChange());
       case OpenReaderBookInfoIntent():
@@ -770,6 +789,7 @@ final class ReaderViewModel {
       );
       return;
     }
+    _adjacentPreloadGeneration += 1;
     _loadGeneration += 1;
     /// 本次章节加载世代。
     final int generation = _loadGeneration;
@@ -788,6 +808,8 @@ final class ReaderViewModel {
         clearContent: !preserveCurrentContent,
         clearError: true,
         menuVisible: preserveCurrentContent ? false : true,
+        clearPreviousChapterPreview: true,
+        clearNextChapterPreview: true,
       ),
     );
     try {
@@ -829,13 +851,10 @@ final class ReaderViewModel {
             'restoredOffset=$restoredOffset elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
       unawaited(_cacheGateway.savePositionAnchor(bookUrl, anchor));
-      unawaited(
-        _coordinator.preloadAdjacent(
-          book: book,
-          chapters: _state.chapters,
-          currentIndex: _state.currentChapterIndex,
-          config: _state.config,
-        ),
+      _startAdjacentPreviewPreload(
+        book: book,
+        currentIndex: _state.currentChapterIndex,
+        config: _state.config,
       );
       await _recordSuccessfulReaderOpen(stopwatch.elapsedMilliseconds);
     } on ReadBookException catch (error) {
@@ -860,6 +879,61 @@ final class ReaderViewModel {
         _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '加载章节正文失败'));
       }
     }
+  }
+
+  /// 启动有限相邻章节预加载，并把最接近的前后章正文快照发布到 UiState。
+  void _startAdjacentPreviewPreload({
+    required Book book,
+    required int currentIndex,
+    required ReaderDisplayConfig config,
+  }) {
+    _adjacentPreloadGeneration += 1;
+    /// 本轮相邻章节预览任务的稳定世代。
+    final int generation = _adjacentPreloadGeneration;
+    /// 当前目录中最接近的上一可阅读章节索引。
+    final int? previousIndex = _state.previousReadableChapterIndex;
+    /// 当前目录中最接近的下一可阅读章节索引。
+    final int? nextIndex = _state.nextReadableChapterIndex;
+    _emit(
+      _state.copyWith(
+        clearPreviousChapterPreview: true,
+        clearNextChapterPreview: true,
+      ),
+    );
+    unawaited(
+      _coordinator.preloadAdjacent(
+        book: book,
+        chapters: _state.chapters,
+        currentIndex: currentIndex,
+        config: config,
+        onChapterReady: (
+          int chapterIndex,
+          ReaderChapterContent content,
+        ) {
+          if (_disposed ||
+              generation != _adjacentPreloadGeneration ||
+              _state.currentChapterIndex != currentIndex ||
+              _state.book?.bookUrl != book.bookUrl) {
+            return;
+          }
+          if (chapterIndex == previousIndex) {
+            _emit(
+              _state.copyWith(
+                previousChapterPreview: content,
+              ),
+            );
+            return;
+          }
+          if (chapterIndex == nextIndex) {
+            _emit(
+              _state.copyWith(
+                nextChapterPreview: content,
+              ),
+            );
+          }
+        },
+      ),
+    );
   }
 
   /// 用锚点附近正文在变化后的章节中重新定位，否则使用受控字符位置。
@@ -924,7 +998,10 @@ final class ReaderViewModel {
   }
 
   /// 切换到指定方向的下一可阅读章节。
-  Future<void> _openRelativeChapter(int direction) async {
+  Future<void> _openRelativeChapter(
+    int direction, {
+    bool animateTransition = true,
+  }) async {
     if (_changingRelativeChapter) {
       return;
     }
@@ -946,6 +1023,7 @@ final class ReaderViewModel {
             characterOffset: characterOffset,
             preserveCurrentContent: true,
             transitionDirection: direction,
+            animateChapterTransition: animateTransition,
           );
           return;
         }
@@ -965,6 +1043,7 @@ final class ReaderViewModel {
     int characterOffset = 0,
     bool preserveCurrentContent = false,
     int transitionDirection = 0,
+    bool animateChapterTransition = true,
   }) async {
     if (chapterIndex < 0 || chapterIndex >= _state.chapters.length) {
       _logger.warning(
@@ -1004,6 +1083,9 @@ final class ReaderViewModel {
         searchState: const ReaderSearchState(),
         contentProcesses: const <BookContentProcess>[],
         chapterTransitionDirection: transitionDirection,
+        animateChapterTransition: animateChapterTransition,
+        clearPreviousChapterPreview: true,
+        clearNextChapterPreview: true,
         clearSheet: true,
       ),
     );
@@ -1376,13 +1458,10 @@ final class ReaderViewModel {
       /// 当前书籍事实。
       final Book? book = _state.book;
       if (book != null && _state.loadState == ReaderLoadState.ready) {
-        unawaited(
-          _coordinator.preloadAdjacent(
-            book: book,
-            chapters: _state.chapters,
-            currentIndex: _state.currentChapterIndex,
-            config: config,
-          ),
+        _startAdjacentPreviewPreload(
+          book: book,
+          currentIndex: _state.currentChapterIndex,
+          config: config,
         );
       }
     }
@@ -1824,6 +1903,7 @@ final class ReaderViewModel {
     _contentProcessSubscription?.cancel();
     _refreshGeneration += 1;
     _searchGeneration += 1;
+    _adjacentPreloadGeneration += 1;
     _coordinator.dispose();
     _stateController.close();
     _effectController.close();

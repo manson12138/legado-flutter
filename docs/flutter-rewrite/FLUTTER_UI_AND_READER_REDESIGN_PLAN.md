@@ -493,7 +493,11 @@ ReaderPrefetchState
 4. 淡入翻页；
 5. 无动画翻页。
 
-仿真卷页已在稳定页面模型之后以纯 Flutter 贝塞尔路径、反射页背和折痕阴影写入代码，当前等待 Android/iOS 真机验证。不能用普通滑动改名冒充仿真通过。
+仿真卷页已在稳定页面模型之后以纯 Flutter 贝塞尔路径、反射页背和折痕阴影写入代码；对照本地
+Android `SimulationPageDelegate` 复核后的第一阶段又补入真实二维触点、方向/页角锁定、X/Y 同步
+完成与回弹、控制点连线反射和四组方向性阴影；第二阶段又接入有限前后章正文快照、相邻首页/
+末页分页、章首章末同一次手势和动画完成后的无重复补播提交，当前等待 Android/iOS 真机验证。
+不能在相邻目标页未就绪时用空白页，或用加载完成后的第二次补播冒充同一次手势通过。
 
 Flutter `PageView` 可用于稳定逐页手势和相邻页承载，参考：[PageView](https://api.flutter.dev/flutter/widgets/PageView-class.html)。分页内容、章节边界和稳定锚点仍由阅读状态机控制。
 

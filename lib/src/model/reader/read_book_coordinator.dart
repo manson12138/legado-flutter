@@ -152,6 +152,8 @@ final class ReadBookCoordinator {
     required List<BookChapter> chapters,
     required int currentIndex,
     required ReaderDisplayConfig config,
+    void Function(int chapterIndex, ReaderChapterContent content)?
+        onChapterReady,
   }) async {
     _cancelPreloads('开始新的相邻章节预加载');
     /// 本轮预下载队列的稳定世代。
@@ -161,8 +163,27 @@ final class ReadBookCoordinator {
     if (preDownloadCount == 0) {
       return;
     }
-    /// 按下一章、上一章、后续范围和前序范围顺序保存候选章节。
-    final List<int> candidateIndices = <int>[currentIndex + 1, currentIndex - 1];
+    /// 跳过卷标题后最接近当前章的下一可阅读章节索引。
+    int? nextReadableIndex;
+    for (int index = currentIndex + 1; index < chapters.length; index += 1) {
+      if (!chapters[index].isVolume) {
+        nextReadableIndex = index;
+        break;
+      }
+    }
+    /// 跳过卷标题后最接近当前章的上一可阅读章节索引。
+    int? previousReadableIndex;
+    for (int index = currentIndex - 1; index >= 0; index -= 1) {
+      if (!chapters[index].isVolume) {
+        previousReadableIndex = index;
+        break;
+      }
+    }
+    /// 按下一可读章、上一可读章、后续范围和前序范围顺序保存候选章节。
+    final List<int> candidateIndices = <int>[
+      if (nextReadableIndex != null) nextReadableIndex,
+      if (previousReadableIndex != null) previousReadableIndex,
+    ];
     /// 从当前章加二开始的向后预下载偏移。
     int forwardOffset = 2;
     while (forwardOffset <= preDownloadCount) {
@@ -212,7 +233,8 @@ final class ReadBookCoordinator {
         final HttpCancellationToken token = _cancellationTokenFactory();
         _preloadTokens.add(token);
         try {
-          await _load(
+          /// 当前预加载成功得到的处理后正文。
+          final ReaderChapterContent content = await _load(
             book: book,
             chapter: chapters[index],
             config: config,
@@ -221,6 +243,10 @@ final class ReadBookCoordinator {
                 ? chapters[index + 1].url
                 : chapters.firstOrNull?.url,
           );
+          if (!token.isCancelled &&
+              preloadGeneration == _preloadGeneration) {
+            onChapterReady?.call(index, content);
+          }
           _preloadFailureCounts.remove(chapters[index].url);
         } on Object catch (error) {
           if (token.isCancelled || preloadGeneration != _preloadGeneration) {

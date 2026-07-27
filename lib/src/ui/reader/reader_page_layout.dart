@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../domain/model/book_content_process.dart';
 import '../../domain/model/reader_content.dart';
+import '../../help/logging/app_logger.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
@@ -737,13 +738,21 @@ final class _ReaderIncrementalPageLayoutJob {
 /// 使用 PageView 渲染动态分页正文并处理点击区域和章节边界。
 final class ReaderPagedContent extends StatefulWidget {
   /// 创建逐页阅读内容。
-  const ReaderPagedContent({required this.state, required this.onIntent, super.key});
+  const ReaderPagedContent({
+    required this.state,
+    required this.onIntent,
+    required this.logger,
+    super.key,
+  });
 
   /// 当前阅读器业务状态。
   final ReaderUiState state;
 
   /// 阅读器 Intent 入口。
   final ValueChanged<ReaderIntent> onIntent;
+
+  /// 【FLUTTER_READER_SIMULATION_LOG】仿真翻页临时诊断日志使用的统一应用日志器。
+  final AppLogger logger;
 
   /// 创建分页组件瞬时状态。
   @override
@@ -820,14 +829,47 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 本次横向手势是否成功取得覆盖翻页控制权。
   bool _horizontalDragEnabled = false;
 
+  /// 本次横向手势超过松弛值后锁定的翻页方向，正数下一页、负数上一页。
+  int _horizontalDragDirection = 0;
+
+  /// 手指最后一次移动是否背离锁定翻页方向；仿真模式据此按 Android 语义回弹。
+  bool _horizontalDragCancelRequested = false;
+
   /// 当前分页正文是否存在有效原生文字选区；激活时禁止横向翻页抢占手柄拖动。
   bool _selectionActive = false;
 
-  /// 仿真卷页触点在页面高度中的受控比例。
-  double _simulationTouchYRatio = 0.86;
+  /// 当前仿真页面尺寸，用于生成 Android 同类程序化起点、终点和动画时长。
+  Size _simulationPageSize = Size.zero;
 
-  /// 仿真下一页是否从右上角卷起；上一页固定从左下侧展开。
-  bool _simulationUpperCorner = false;
+  /// 本次仿真手势或点击的起点；无用户起点时默认从页面下方启动。
+  Offset _simulationGestureStart = const Offset(0, double.infinity);
+
+  /// 当前仿真帧直接消费的真实二维触点。
+  Offset _simulationTouch = Offset.zero;
+
+  /// 本次仿真翻页锁定的右上或右下页角。
+  Offset _simulationCorner = Offset.zero;
+
+  /// 收尾动画开始时的二维触点。
+  Offset _simulationMotionStartTouch = Offset.zero;
+
+  /// 收尾动画完成时的二维触点。
+  Offset _simulationMotionEndTouch = Offset.zero;
+
+  /// 收尾二维插值对应的控制器起始值。
+  double _simulationMotionStartValue = 0;
+
+  /// 收尾二维插值对应的控制器结束值。
+  double _simulationMotionEndValue = 1;
+
+  /// 当前控制器是否正在驱动仿真触点的二维收尾轨迹。
+  bool _simulationMotionActive = false;
+
+  /// 【FLUTTER_READER_SIMULATION_LOG】上一条逐帧几何日志的毫秒时间戳，用于限制文件日志写入频率。
+  int _simulationDebugLastFrameLogAtMs = 0;
+
+  /// 【FLUTTER_READER_SIMULATION_LOG】当前分页组件产生的仿真诊断日志递增序号。
+  int _simulationDebugSequence = 0;
 
   /// 卷页手势期间暂缓应用的完整分页结果。
   List<ReaderTextPage>? _pendingCompletePages;
@@ -837,6 +879,36 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 暂缓分页结果所属的布局代次。
   int? _pendingCompleteGeneration;
+
+  /// 已完成分页的上一可阅读章节末页预览。
+  _ReaderAdjacentPagePreview? _previousChapterPagePreview;
+
+  /// 已完成分页的下一可阅读章节首页预览。
+  _ReaderAdjacentPagePreview? _nextChapterPagePreview;
+
+  /// 上一章节页面预览对应的布局签名。
+  int? _previousChapterPreviewSignature;
+
+  /// 下一章节页面预览对应的布局签名。
+  int? _nextChapterPreviewSignature;
+
+  /// 上一章节页面预览异步任务世代。
+  int _previousChapterPreviewGeneration = 0;
+
+  /// 下一章节页面预览异步任务世代。
+  int _nextChapterPreviewGeneration = 0;
+
+  /// 上一章节完整末页是否正在后台分批计算。
+  bool _previousChapterPreviewLoading = false;
+
+  /// 下一章节首屏是否正在首帧后计算。
+  bool _nextChapterPreviewLoading = false;
+
+  /// 当前边界手势使用的相邻章节目标页。
+  _ReaderAdjacentPagePreview? _boundaryTargetPreview;
+
+  /// 边界卷页是否已经完成并正在等待 ViewModel 提交新章节。
+  bool _boundaryTurnCommitted = false;
 
   /// 初始化覆盖翻页动画控制器。
   @override
@@ -856,6 +928,8 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 释放页面控制器。
   @override
   void dispose() {
+    _previousChapterPreviewGeneration += 1;
+    _nextChapterPreviewGeneration += 1;
     _coverController.dispose();
     _keyboardFocusNode.dispose();
     _pageController.dispose();
@@ -917,34 +991,12 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         /// 当前系统文字缩放策略。
         final TextScaler textScaler = MediaQuery.textScalerOf(context);
         /// 会影响分页边界的全部稳定输入签名。
-        final int layoutSignature = Object.hashAll(<Object?>[
-          content.chapterUrl,
-          content.title,
-          content.text,
-          ...content.images.map(
-            (ReaderContentImage image) => '${image.characterOffset}:${image.url}',
-          ),
-          widget.state.config.fontSize,
-          widget.state.config.fontWeightValue,
-          widget.state.config.textItalic,
-          widget.state.config.letterSpacing,
-          widget.state.config.textShadow,
-          widget.state.config.textUnderline,
-          widget.state.config.lineHeight,
-          widget.state.config.paragraphSpacing,
-          widget.state.config.verticalPadding,
-          widget.state.config.showHeaderFooter,
-          widget.state.config.titleMode,
-          widget.state.config.titleFontSizeOffset,
-          widget.state.config.titleFontWeightValue,
-          widget.state.config.titleTopSpacing,
-          widget.state.config.titleBottomSpacing,
-          widget.state.config.paragraphIndent,
-          widget.state.config.textFullJustify,
-          contentWidth,
-          contentHeight,
-          textScaler.scale(10),
-        ]);
+        final int layoutSignature = _pageLayoutSignature(
+          content: content,
+          contentWidth: contentWidth,
+          contentHeight: contentHeight,
+          textScaler: textScaler,
+        );
         if (_layoutSignature != layoutSignature) {
           _layoutSignature = layoutSignature;
           _layoutGeneration += 1;
@@ -953,8 +1005,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           _pendingCompleteGeneration = null;
           _coverController.stop();
           _horizontalDragEnabled = false;
+          _horizontalDragDirection = 0;
+          _horizontalDragCancelRequested = false;
           _coverFromIndex = null;
           _coverToIndex = null;
+          _boundaryTargetPreview = null;
+          _boundaryTurnCommitted = false;
+          _resetSimulationMotion();
           /// 当前签名已经缓存的完整分页结果。
           final List<ReaderTextPage>? cachedPages =
               ReaderPageLayoutCache.get(layoutSignature);
@@ -1010,7 +1067,21 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             _currentPageIndex = _pages.length - 1;
           }
         }
+        _syncAdjacentPagePreviews(
+          bodyStyle: textStyle,
+          titleStyle: titleStyle,
+          contentWidth: contentWidth,
+          contentHeight: contentHeight,
+          textDirection: Directionality.of(context),
+          textScaler: textScaler,
+        );
         _restorePage(widget.state);
+        if (_usesSimulationPaging) {
+          _simulationPageSize = Size(
+            constraints.maxWidth,
+            constraints.maxHeight,
+          );
+        }
         if (_usesInteractiveHorizontalPaging) {
           return ReaderTapRegion(
             onTapUp: (Offset position) {
@@ -1135,16 +1206,20 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     final LogicalKeyboardKey logicalKey = event.logicalKey;
     if (logicalKey == LogicalKeyboardKey.audioVolumeUp) {
       if (_usesSimulationPaging) {
-        _simulationTouchYRatio = 0.86;
-        _simulationUpperCorner = false;
+        _simulationGestureStart = Offset(
+          _simulationPageSize.width * 0.9,
+          _simulationPageSize.height * 0.9,
+        );
       }
       _performTapAction(ReaderTapAction.previousPage);
       return;
     }
     if (logicalKey == LogicalKeyboardKey.audioVolumeDown) {
       if (_usesSimulationPaging) {
-        _simulationTouchYRatio = 0.86;
-        _simulationUpperCorner = false;
+        _simulationGestureStart = Offset(
+          _simulationPageSize.width * 0.9,
+          _simulationPageSize.height * 0.9,
+        );
       }
       _performTapAction(ReaderTapAction.nextPage);
     }
@@ -1167,6 +1242,357 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 当前是否使用由阅读器自己接管的水平跟手动画，而不是 PageView 默认手势。
   bool get _usesInteractiveHorizontalPaging {
     return _usesCoverPaging || _usesSimulationPaging;
+  }
+
+  /// 生成与当前完整分页缓存一致的签名，供当前章和相邻章预览共同复用。
+  int _pageLayoutSignature({
+    required ReaderChapterContent content,
+    required double contentWidth,
+    required double contentHeight,
+    required TextScaler textScaler,
+  }) {
+    return Object.hashAll(<Object?>[
+      content.chapterUrl,
+      content.title,
+      content.text,
+      ...content.images.map(
+        (ReaderContentImage image) =>
+            '${image.characterOffset}:${image.url}',
+      ),
+      widget.state.config.fontSize,
+      widget.state.config.fontWeightValue,
+      widget.state.config.textItalic,
+      widget.state.config.letterSpacing,
+      widget.state.config.textShadow,
+      widget.state.config.textUnderline,
+      widget.state.config.lineHeight,
+      widget.state.config.paragraphSpacing,
+      widget.state.config.verticalPadding,
+      widget.state.config.showHeaderFooter,
+      widget.state.config.titleMode,
+      widget.state.config.titleFontSizeOffset,
+      widget.state.config.titleFontWeightValue,
+      widget.state.config.titleTopSpacing,
+      widget.state.config.titleBottomSpacing,
+      widget.state.config.paragraphIndent,
+      widget.state.config.textFullJustify,
+      contentWidth,
+      contentHeight,
+      textScaler.scale(10),
+    ]);
+  }
+
+  /// 同步前后章正文快照对应的有限页面预览；非仿真模式立即释放可重建结果。
+  void _syncAdjacentPagePreviews({
+    required TextStyle bodyStyle,
+    required TextStyle titleStyle,
+    required double contentWidth,
+    required double contentHeight,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+  }) {
+    if (!_usesSimulationPaging) {
+      _clearAdjacentPagePreviews();
+      return;
+    }
+    _syncNextChapterPagePreview(
+      content: widget.state.nextChapterPreview,
+      bodyStyle: bodyStyle,
+      titleStyle: titleStyle,
+      contentWidth: contentWidth,
+      contentHeight: contentHeight,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    );
+    _syncPreviousChapterPagePreview(
+      content: widget.state.previousChapterPreview,
+      bodyStyle: bodyStyle,
+      titleStyle: titleStyle,
+      contentWidth: contentWidth,
+      contentHeight: contentHeight,
+      textDirection: textDirection,
+      textScaler: textScaler,
+    );
+  }
+
+  /// 为下一可阅读章节生成首个目标页；只测量一页，避免与当前章完整分页竞争。
+  void _syncNextChapterPagePreview({
+    required ReaderChapterContent? content,
+    required TextStyle bodyStyle,
+    required TextStyle titleStyle,
+    required double contentWidth,
+    required double contentHeight,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+  }) {
+    /// 下一章正文当前布局下的稳定签名。
+    final int? signature = content == null
+        ? null
+        : _pageLayoutSignature(
+            content: content,
+            contentWidth: contentWidth,
+            contentHeight: contentHeight,
+            textScaler: textScaler,
+          );
+    if (_nextChapterPreviewSignature != signature) {
+      _nextChapterPreviewSignature = signature;
+      _nextChapterPagePreview = null;
+      _nextChapterPreviewLoading = false;
+      _nextChapterPreviewGeneration += 1;
+    }
+    if (content == null ||
+        signature == null ||
+        _nextChapterPagePreview != null ||
+        _nextChapterPreviewLoading) {
+      return;
+    }
+    _nextChapterPreviewLoading = true;
+    /// 本次下一章首屏预览任务世代。
+    final int generation = _nextChapterPreviewGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+      Future<void>.delayed(Duration.zero).then((_) {
+        if (!mounted ||
+            generation != _nextChapterPreviewGeneration ||
+            _nextChapterPreviewSignature != signature) {
+          return;
+        }
+        try {
+          /// 下一章第一页纯文本分页结果。
+          final List<ReaderTextPage> textPages =
+              ReaderPageLayoutEngine.paginate(
+            title: widget.state.config.titleMode == ReaderTitleMode.hidden
+                ? ''
+                : content.title,
+            text: content.text,
+            bodyStyle: bodyStyle,
+            titleStyle: titleStyle,
+            maxWidth: contentWidth,
+            maxHeight: contentHeight,
+            titleTopSpacing: widget.state.config.titleTopSpacing,
+            titleBottomSpacing: widget.state.config.titleBottomSpacing,
+            paragraphSpacing: widget.state.config.paragraphSpacing,
+            paragraphIndent: widget.state.config.paragraphIndent,
+            textFullJustify: widget.state.config.textFullJustify,
+            textDirection: textDirection,
+            textScaler: textScaler,
+            maximumPageCount: 1,
+          );
+          /// 插入首屏范围图片后的下一章有限页面。
+          final List<ReaderTextPage> pages =
+              ReaderPageLayoutEngine.insertImagePages(
+            pages: textPages,
+            images: content.images.where((ReaderContentImage image) {
+              if (textPages.isEmpty) {
+                return true;
+              }
+              return image.characterOffset <= textPages.last.endOffset;
+            }).toList(growable: false),
+            pageHeight: contentHeight,
+          );
+          if (!mounted ||
+              generation != _nextChapterPreviewGeneration ||
+              _nextChapterPreviewSignature != signature) {
+            return;
+          }
+          setState(() {
+            _nextChapterPreviewLoading = false;
+            if (pages.isEmpty) {
+              _nextChapterPagePreview = null;
+              return;
+            }
+            /// 下一章实时卷页使用的第一页。
+            final ReaderTextPage page = pages.first;
+            _nextChapterPagePreview = _ReaderAdjacentPagePreview(
+              content: content,
+              page: page,
+              pageIndex: 0,
+              footerText: _adjacentPreviewFooterText(
+                content: content,
+                page: page,
+                pageIndex: 0,
+                pageCount: null,
+              ),
+            );
+          });
+        } on Object {
+          if (mounted &&
+              generation == _nextChapterPreviewGeneration &&
+              _nextChapterPreviewSignature == signature) {
+            setState(() {
+              _nextChapterPreviewLoading = false;
+              _nextChapterPagePreview = null;
+            });
+          }
+        }
+      });
+    });
+  }
+
+  /// 为上一可阅读章节取得完整分页末页；优先命中三套 LRU，未命中时在当前章完成后分批计算。
+  void _syncPreviousChapterPagePreview({
+    required ReaderChapterContent? content,
+    required TextStyle bodyStyle,
+    required TextStyle titleStyle,
+    required double contentWidth,
+    required double contentHeight,
+    required TextDirection textDirection,
+    required TextScaler textScaler,
+  }) {
+    /// 上一章正文当前布局下的稳定签名。
+    final int? signature = content == null
+        ? null
+        : _pageLayoutSignature(
+            content: content,
+            contentWidth: contentWidth,
+            contentHeight: contentHeight,
+            textScaler: textScaler,
+          );
+    if (_previousChapterPreviewSignature != signature) {
+      _previousChapterPreviewSignature = signature;
+      _previousChapterPagePreview = null;
+      _previousChapterPreviewLoading = false;
+      _previousChapterPreviewGeneration += 1;
+    }
+    if (content == null || signature == null) {
+      return;
+    }
+    if (_previousChapterPagePreview == null) {
+      /// 上一章已经存在的完整分页 LRU。
+      final List<ReaderTextPage>? cachedPages =
+          ReaderPageLayoutCache.get(signature);
+      if (cachedPages != null && cachedPages.isNotEmpty) {
+        /// 上一章末页在完整页集中的索引。
+        final int pageIndex = cachedPages.length - 1;
+        /// 上一章实时卷页使用的末页。
+        final ReaderTextPage page = cachedPages[pageIndex];
+        _previousChapterPagePreview = _ReaderAdjacentPagePreview(
+          content: content,
+          page: page,
+          pageIndex: pageIndex,
+          footerText: _adjacentPreviewFooterText(
+            content: content,
+            page: page,
+            pageIndex: pageIndex,
+            pageCount: cachedPages.length,
+          ),
+        );
+      }
+    }
+    if (_previousChapterPagePreview != null ||
+        _previousChapterPreviewLoading ||
+        !_isLayoutComplete) {
+      return;
+    }
+    _previousChapterPreviewLoading = true;
+    /// 本次上一章末页后台任务世代。
+    final int generation = _previousChapterPreviewGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+      Future<void>.delayed(Duration.zero).then((_) async {
+        if (!mounted ||
+            generation != _previousChapterPreviewGeneration ||
+            _previousChapterPreviewSignature != signature) {
+          return;
+        }
+        try {
+          /// 上一章完整分页的分批测量任务。
+          final _ReaderIncrementalPageLayoutJob layoutJob =
+              _ReaderIncrementalPageLayoutJob(
+            title: widget.state.config.titleMode == ReaderTitleMode.hidden
+                ? ''
+                : content.title,
+            text: content.text,
+            bodyStyle: bodyStyle,
+            titleStyle: titleStyle,
+            maxWidth: contentWidth,
+            maxHeight: contentHeight,
+            titleTopSpacing: widget.state.config.titleTopSpacing,
+            titleBottomSpacing: widget.state.config.titleBottomSpacing,
+            paragraphSpacing: widget.state.config.paragraphSpacing,
+            paragraphIndent: widget.state.config.paragraphIndent,
+            textFullJustify: widget.state.config.textFullJustify,
+            textDirection: textDirection,
+            textScaler: textScaler,
+          );
+          /// 上一章完整纯文本页集。
+          final List<ReaderTextPage> textPages = await layoutJob.run();
+          /// 插入图片页后的上一章完整页集。
+          final List<ReaderTextPage> pages =
+              ReaderPageLayoutEngine.insertImagePages(
+            pages: textPages,
+            images: content.images,
+            pageHeight: contentHeight,
+          );
+          if (!mounted ||
+              generation != _previousChapterPreviewGeneration ||
+              _previousChapterPreviewSignature != signature) {
+            return;
+          }
+          ReaderPageLayoutCache.put(signature, pages);
+          setState(() {
+            _previousChapterPreviewLoading = false;
+            if (pages.isEmpty) {
+              _previousChapterPagePreview = null;
+              return;
+            }
+            /// 上一章末页在完整页集中的索引。
+            final int pageIndex = pages.length - 1;
+            /// 上一章实时卷页使用的末页。
+            final ReaderTextPage page = pages[pageIndex];
+            _previousChapterPagePreview = _ReaderAdjacentPagePreview(
+              content: content,
+              page: page,
+              pageIndex: pageIndex,
+              footerText: _adjacentPreviewFooterText(
+                content: content,
+                page: page,
+                pageIndex: pageIndex,
+                pageCount: pages.length,
+              ),
+            );
+          });
+        } on Object {
+          if (mounted &&
+              generation == _previousChapterPreviewGeneration &&
+              _previousChapterPreviewSignature == signature) {
+            setState(() {
+              _previousChapterPreviewLoading = false;
+              _previousChapterPagePreview = null;
+            });
+          }
+        }
+      });
+    });
+  }
+
+  /// 清理相邻章节可重建页面和异步世代，不影响当前稳定正文。
+  void _clearAdjacentPagePreviews() {
+    _previousChapterPreviewGeneration += 1;
+    _nextChapterPreviewGeneration += 1;
+    _previousChapterPreviewSignature = null;
+    _nextChapterPreviewSignature = null;
+    _previousChapterPagePreview = null;
+    _nextChapterPagePreview = null;
+    _previousChapterPreviewLoading = false;
+    _nextChapterPreviewLoading = false;
+    _boundaryTargetPreview = null;
+    _boundaryTurnCommitted = false;
+  }
+
+  /// 构建相邻章节目标页页脚；下一章总页数未知时使用省略号。
+  String _adjacentPreviewFooterText({
+    required ReaderChapterContent content,
+    required ReaderTextPage page,
+    required int pageIndex,
+    required int? pageCount,
+  }) {
+    /// 当前目标页结束位置对应的章节百分比。
+    final int percent = content.text.isEmpty
+        ? 0
+        : ((page.endOffset / content.text.length).clamp(0, 1) * 100)
+            .round();
+    /// 已知完整分页时显示真实总页数，否则保持省略号。
+    final String totalText = pageCount == null ? '…' : '$pageCount';
+    return '${pageIndex + 1} / $totalText · $percent%';
   }
 
   /// 在首批页面绘制后继续测量完整章节，并只回填仍匹配当前签名的结果。
@@ -1393,9 +1819,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         .toInt();
     /// 仿真动画的目标页面索引。
     final int? targetIndex = _coverToIndex;
-    if (targetIndex == null ||
-        targetIndex < 0 ||
-        targetIndex >= _pages.length) {
+    /// 当前边界手势已经准备好的相邻章节目标页。
+    final _ReaderAdjacentPagePreview? boundaryPreview =
+        _boundaryTargetPreview;
+    if (boundaryPreview == null &&
+        (targetIndex == null ||
+            targetIndex < 0 ||
+            targetIndex >= _pages.length)) {
       return _buildPage(
         content,
         textStyle,
@@ -1415,15 +1845,44 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       _pages[baseIndex],
       selectionEnabled: false,
     );
+    /// 动画目标正文。
+    final ReaderChapterContent targetContent;
+    /// 动画目标分页模型。
+    final ReaderTextPage targetPageModel;
+    /// 动画目标页在其章节内的索引。
+    final int targetPageIndex;
+    /// 动画目标页页脚覆盖文本；章内目标页保持为空。
+    final String? targetFooterText;
+    /// 目标页是否允许消费当前章节标注；跨章预览必须禁用。
+    final bool includeCurrentProcesses;
+    if (boundaryPreview != null) {
+      targetContent = boundaryPreview.content;
+      targetPageModel = boundaryPreview.page;
+      targetPageIndex = boundaryPreview.pageIndex;
+      targetFooterText = boundaryPreview.footerText;
+      includeCurrentProcesses = false;
+    } else if (targetIndex != null &&
+        targetIndex >= 0 &&
+        targetIndex < _pages.length) {
+      targetContent = content;
+      targetPageModel = _pages[targetIndex];
+      targetPageIndex = targetIndex;
+      targetFooterText = null;
+      includeCurrentProcesses = true;
+    } else {
+      return currentPage;
+    }
     /// 动画期间目标页禁用重复选区和语义节点。
     final Widget targetPage = _buildPage(
-      content,
+      targetContent,
       textStyle,
       titleStyle,
       contentWidth,
-      targetIndex,
-      _pages[targetIndex],
+      targetPageIndex,
+      targetPageModel,
       selectionEnabled: false,
+      includeCurrentProcesses: includeCurrentProcesses,
+      footerText: targetFooterText,
     );
     return AnimatedBuilder(
       animation: _coverController,
@@ -1433,9 +1892,12 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           targetPage: targetPage,
           direction: _coverDirection,
           progress: _coverController.value,
-          touchYRatio: _simulationTouchYRatio,
-          useUpperCorner: _simulationUpperCorner,
+          touch: _simulationTouchForControllerValue(
+            _coverController.value,
+          ),
+          corner: _simulationCorner,
           paperColor: Color(widget.state.config.backgroundColorValue),
+          onDebugLog: _writeSimulationDebugLog,
         );
       },
     );
@@ -1466,6 +1928,8 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     int index,
     ReaderTextPage page, {
     bool selectionEnabled = true,
+    bool includeCurrentProcesses = true,
+    String? footerText,
   }) {
     return ColoredBox(
       color: Color(widget.state.config.backgroundColorValue),
@@ -1516,6 +1980,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                     titleStyle,
                     index,
                     selectionEnabled: selectionEnabled,
+                    includeCurrentProcesses: includeCurrentProcesses,
                   ),
                 ),
                 if (widget.state.config.showHeaderFooter)
@@ -1536,7 +2001,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                           ),
                         ),
                         Text(
-                          _pageFooterText(index, page),
+                          footerText ?? _pageFooterText(index, page),
                           maxLines: 1,
                           style: TextStyle(
                             color: Color(widget.state.config.textColorValue)
@@ -1563,6 +2028,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     TextStyle titleStyle,
     int pageIndex, {
     required bool selectionEnabled,
+    required bool includeCurrentProcesses,
   }) {
     /// 当前页是否包含至少一行可选择正文。
     final bool hasSelectableBody = page.lines.any(
@@ -1646,7 +2112,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                   text: sourceText,
                   startOffset: line.startOffset,
                   baseStyle: style,
-                  processes: widget.state.contentProcesses,
+                  processes: includeCurrentProcesses
+                      ? widget.state.contentProcesses
+                      : const <BookContentProcess>[],
                 ),
               ],
             ),
@@ -1741,9 +2209,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     double width,
     double height,
   ) {
-    if (_usesSimulationPaging && height > 0) {
-      _simulationTouchYRatio = (y / height).clamp(0.01, 0.99).toDouble();
-      _simulationUpperCorner = _simulationTouchYRatio < 1 / 3;
+    if (_usesSimulationPaging && width > 0 && height > 0) {
+      _simulationPageSize = Size(width, height);
+      _simulationGestureStart = Offset(x, y);
     }
     /// 当前左侧点击区域宽度。
     final double leftWidth = width * widget.state.config.leftTapWidthRatio;
@@ -1800,6 +2268,12 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       _turnToPage((_pageController.page ?? 0).round() - 1);
       return;
     }
+    if (_usesSimulationPaging &&
+        _isLayoutComplete &&
+        _previousChapterPagePreview != null) {
+      _animateAdjacentChapterPreview(-1);
+      return;
+    }
     if (_isLayoutComplete && widget.state.canGoPrevious) {
       widget.onIntent(const OpenPreviousChapterIntent());
     }
@@ -1817,9 +2291,47 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       _turnToPage((_pageController.page ?? 0).round() + 1);
       return;
     }
+    if (_usesSimulationPaging &&
+        _isLayoutComplete &&
+        _nextChapterPagePreview != null) {
+      _animateAdjacentChapterPreview(1);
+      return;
+    }
     if (_isLayoutComplete && widget.state.canGoNext) {
       widget.onIntent(const OpenNextChapterIntent());
     }
+  }
+
+  /// 返回指定方向已经完成分页的相邻章节目标页。
+  _ReaderAdjacentPagePreview? _adjacentPreviewForDirection(int direction) {
+    if (!_isLayoutComplete) {
+      return null;
+    }
+    return direction < 0
+        ? _previousChapterPagePreview
+        : _nextChapterPagePreview;
+  }
+
+  /// 点击区域或音量键在章边界时使用相邻预览页播放同一套程序化仿真。
+  void _animateAdjacentChapterPreview(int direction) {
+    if (_coverController.isAnimating || _boundaryTurnCommitted) {
+      return;
+    }
+    /// 当前方向已经准备好的相邻章节页面。
+    final _ReaderAdjacentPagePreview? preview =
+        _adjacentPreviewForDirection(direction);
+    if (preview == null) {
+      return;
+    }
+    _prepareProgrammaticSimulation(direction);
+    setState(() {
+      _coverFromIndex = _currentPageIndex;
+      _coverToIndex = null;
+      _coverDirection = direction;
+      _boundaryTargetPreview = preview;
+    });
+    _coverController.reset();
+    _finishAdjacentChapterAnimation(direction);
   }
 
   /// 开始横向跟手翻页，并记录页面尺寸和仿真触点。
@@ -1829,20 +2341,31 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     DragStartDetails details,
   ) {
     _horizontalDragEnabled =
-        !_selectionActive && !_coverController.isAnimating;
+        !_selectionActive &&
+        !_coverController.isAnimating &&
+        !_boundaryTurnCommitted;
     if (!_horizontalDragEnabled) {
       return;
     }
     _horizontalDragDistance = 0;
     _horizontalDragWidth = width <= 0 ? 1 : width;
-    if (_usesSimulationPaging && height > 0) {
-      _simulationTouchYRatio =
-          (details.localPosition.dy / height).clamp(0.01, 0.99).toDouble();
-      _simulationUpperCorner = _simulationTouchYRatio < 1 / 3;
+    _horizontalDragDirection = 0;
+    _horizontalDragCancelRequested = false;
+    if (_usesSimulationPaging && width > 0 && height > 0) {
+      _simulationPageSize = Size(width, height);
+      _simulationGestureStart = details.localPosition;
+      _simulationTouch = details.localPosition;
+      _simulationCorner = Offset(width, height);
+      _resetSimulationMotion();
+      _writeSimulationDebugLog(
+        'event=drag_start size=$_simulationPageSize '
+        'start=$_simulationGestureStart',
+        force: true,
+      );
     }
   }
 
-  /// 根据手指水平位移实时更新覆盖或仿真目标页。
+  /// 根据手指真实二维位置更新覆盖或仿真目标页，并在首次有效移动后锁定方向。
   void _handleHorizontalDragUpdate(
     DragUpdateDetails details,
     double height,
@@ -1854,40 +2377,73 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     if (_horizontalDragDistance == 0) {
       return;
     }
-    /// 手势目标方向；左滑进入下一页，右滑进入上一页。
-    final int direction = _horizontalDragDistance < 0 ? 1 : -1;
-    if (_usesSimulationPaging && height > 0) {
-      _simulationTouchYRatio =
-          (details.localPosition.dy / height).clamp(0.01, 0.99).toDouble();
-      if (direction < 0) {
-        _simulationUpperCorner = false;
+    if (_horizontalDragDirection == 0) {
+      _horizontalDragDirection = _horizontalDragDistance < 0 ? 1 : -1;
+      if (_usesSimulationPaging) {
+        _lockSimulationCorner(_horizontalDragDirection);
+        _writeSimulationDebugLog(
+          'event=direction_lock direction=$_horizontalDragDirection '
+          'distance=${_horizontalDragDistance.toStringAsFixed(1)} '
+          'start=$_simulationGestureStart corner=$_simulationCorner',
+          force: true,
+        );
       }
+    }
+    /// 本次手势已经锁定的目标方向，不因回拉穿过起点而更换页面。
+    final int direction = _horizontalDragDirection;
+    _horizontalDragCancelRequested =
+        direction > 0 ? details.delta.dx > 0 : details.delta.dx < 0;
+    if (_usesSimulationPaging && height > 0) {
+      _simulationTouch = _adjustSimulationDragTouch(
+        details.localPosition,
+        direction,
+      );
     }
     /// 当前章节内与手势方向对应的目标页索引。
     final int targetIndex = _currentPageIndex + direction;
     if (targetIndex < 0 || targetIndex >= _pages.length) {
-      if (_coverToIndex != null) {
+      /// 当前方向已经完成后台分页的相邻章节目标页。
+      final _ReaderAdjacentPagePreview? adjacentPreview =
+          _adjacentPreviewForDirection(direction);
+      if (!_usesSimulationPaging || adjacentPreview == null) {
+        if (_coverToIndex != null || _boundaryTargetPreview != null) {
+          setState(() {
+            _coverFromIndex = null;
+            _coverToIndex = null;
+            _boundaryTargetPreview = null;
+          });
+          _coverController.value = 0;
+        }
+        return;
+      }
+      if (!identical(_boundaryTargetPreview, adjacentPreview)) {
         setState(() {
-          _coverFromIndex = null;
+          _coverFromIndex = _currentPageIndex;
           _coverToIndex = null;
+          _coverDirection = direction;
+          _boundaryTargetPreview = adjacentPreview;
         });
         _coverController.value = 0;
       }
-      return;
-    }
-    if (_coverToIndex != targetIndex) {
+    } else if (_coverToIndex != targetIndex ||
+        _boundaryTargetPreview != null) {
       setState(() {
         _coverFromIndex = _currentPageIndex;
         _coverToIndex = targetIndex;
         _coverDirection = direction;
+        _boundaryTargetPreview = null;
       });
       _coverController.value = 0;
     }
-    /// 当前拖动距离对应的受控覆盖进度。
-    final double progress = (_horizontalDragDistance.abs() / _horizontalDragWidth)
-        .clamp(0, 1)
-        .toDouble();
-    _coverController.value = progress;
+    /// 当前拖动距离沿锁定方向的完成比例；回拉穿过起点后保持在零而不切换目标页。
+    final double directedDistance = direction > 0
+        ? -_horizontalDragDistance
+        : _horizontalDragDistance;
+    /// 当前拖动距离对应的受控页面完成比例。
+    final double progress =
+        (directedDistance / _horizontalDragWidth).clamp(0, 1).toDouble();
+    /// 目标页存在时保留极小首尾余量，确保真实触点仍可执行完成或回弹二维收尾。
+    _coverController.value = progress.clamp(0.002, 0.998).toDouble();
   }
 
   /// 系统取消当前横向手势时按原方向回弹，并保留当前字符锚点。
@@ -1901,22 +2457,56 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       _cancelCoverAnimation();
       return;
     }
+    _horizontalDragDirection = 0;
+    _horizontalDragCancelRequested = false;
     _applyPendingCompletePagination();
   }
 
-  /// 按距离或速度决定完成翻页、回弹，或在章节边界进入相邻章节。
+  /// 按当前策略决定完成、回弹，或在章节边界进入相邻章节。
   void _handleHorizontalDragEnd(DragEndDetails details) {
     if (!_horizontalDragEnabled || _pages.isEmpty) {
       return;
     }
     _horizontalDragEnabled = false;
-    /// 手势目标方向；左滑进入下一页，右滑进入上一页。
-    final int direction = _horizontalDragDistance < 0 ? 1 : -1;
+    if (_horizontalDragDirection == 0) {
+      _horizontalDragDistance = 0;
+      _applyPendingCompletePagination();
+      return;
+    }
+    /// 本次手势已经锁定的翻页方向。
+    final int direction = _horizontalDragDirection;
     /// 水平结束速度，正数向右、负数向左。
     final double velocity = details.primaryVelocity ?? 0;
-    /// 拖动是否达到提交覆盖翻页的距离或速度阈值。
-    final bool shouldCommit = _horizontalDragDistance.abs() >= _horizontalDragWidth * 0.22 ||
-        (direction > 0 ? velocity < -500 : velocity > 500);
+    /// 仿真模式按 Android 最后运动方向决定完成/取消；覆盖模式保留原有距离和速度阈值。
+    final bool shouldCommit = _usesSimulationPaging
+        ? !_horizontalDragCancelRequested
+        : _horizontalDragDistance.abs() >=
+                _horizontalDragWidth * 0.22 ||
+            (direction > 0 ? velocity < -500 : velocity > 500);
+    if (_usesSimulationPaging) {
+      _writeSimulationDebugLog(
+        'event=drag_end direction=$direction commit=$shouldCommit '
+        'cancelRequested=$_horizontalDragCancelRequested '
+        'distance=${_horizontalDragDistance.toStringAsFixed(1)} '
+        'velocity=${velocity.toStringAsFixed(1)} '
+        'progress=${_coverController.value.toStringAsFixed(3)} '
+        'touch=$_simulationTouch corner=$_simulationCorner '
+        'targetIndex=$_coverToIndex boundary=${_boundaryTargetPreview != null}',
+        force: true,
+      );
+    }
+    /// 当前手势已经取得的相邻章节目标页。
+    final _ReaderAdjacentPagePreview? boundaryPreview =
+        _boundaryTargetPreview;
+    if (boundaryPreview != null) {
+      if (shouldCommit) {
+        _finishAdjacentChapterAnimation(direction);
+      } else {
+        _cancelCoverAnimation();
+      }
+      _horizontalDragDistance = 0;
+      return;
+    }
     /// 当前章节内已经准备好的目标页。
     final int? targetIndex = _coverToIndex;
     if (targetIndex != null) {
@@ -1937,7 +2527,197 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       widget.onIntent(const OpenPreviousChapterIntent());
     }
     _horizontalDragDistance = 0;
+    _horizontalDragDirection = 0;
+    _horizontalDragCancelRequested = false;
     _applyPendingCompletePagination();
+  }
+
+  /// 按 Android 规则为首次有效移动锁定页角：下一页取右上/右下，上一页固定右下。
+  void _lockSimulationCorner(int direction) {
+    /// 当前仿真页面宽度。
+    final double width = _simulationPageSize.width;
+    /// 当前仿真页面高度。
+    final double height = _simulationPageSize.height;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    if (direction < 0) {
+      _simulationCorner = Offset(width, height);
+      return;
+    }
+    /// Android 下一页以起手点所在上下半屏选择右上或右下页角。
+    final bool useUpperCorner = _simulationGestureStart.dy <= height / 2;
+    _simulationCorner = Offset(
+      width,
+      useUpperCorner ? 0 : height,
+    );
+  }
+
+  /// 对齐 Android 中部触点修正规则，避免中线手势产生过长对角折痕。
+  Offset _adjustSimulationDragTouch(Offset rawTouch, int direction) {
+    /// 当前仿真页面高度。
+    final double height = _simulationPageSize.height;
+    if (height <= 0) {
+      return rawTouch;
+    }
+    if (direction < 0) {
+      return Offset(rawTouch.dx, height);
+    }
+    /// 本次手势锁定方向前记录的起手纵坐标。
+    final double startY = _simulationGestureStart.dy;
+    if (startY > height / 3 && startY < height / 2) {
+      return Offset(rawTouch.dx, 1);
+    }
+    if (startY > height / 3 && startY < height * 2 / 3) {
+      return Offset(rawTouch.dx, height);
+    }
+    return rawTouch;
+  }
+
+  /// 为点击区域或音量键翻页准备 Android 同类程序化起点和锁定页角。
+  void _prepareProgrammaticSimulation(int direction) {
+    /// 当前仿真页面宽度。
+    final double width = _simulationPageSize.width;
+    /// 当前仿真页面高度。
+    final double height = _simulationPageSize.height;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    _resetSimulationMotion();
+    if (direction < 0) {
+      _simulationCorner = Offset(width, height);
+      _simulationTouch = Offset(0, height);
+      _writeSimulationDebugLog(
+        'event=programmatic_prepare direction=$direction '
+        'size=$_simulationPageSize start=$_simulationGestureStart '
+        'touch=$_simulationTouch corner=$_simulationCorner',
+        force: true,
+      );
+      return;
+    }
+    /// 程序化下一页仍按最近点击所在上下半屏选择页角。
+    final bool useUpperCorner = _simulationGestureStart.dy <= height / 2;
+    _simulationCorner = Offset(
+      width,
+      useUpperCorner ? 0 : height,
+    );
+    _simulationTouch = Offset(
+      width * 0.9,
+      useUpperCorner ? 1 : height * 0.9,
+    );
+    _writeSimulationDebugLog(
+      'event=programmatic_prepare direction=$direction '
+      'size=$_simulationPageSize start=$_simulationGestureStart '
+      'touch=$_simulationTouch corner=$_simulationCorner',
+      force: true,
+    );
+  }
+
+  /// 配置从当前真实触点到完成或回弹终点的二维线性插值。
+  void _configureSimulationMotion({
+    required Offset endTouch,
+    required double endValue,
+  }) {
+    _simulationMotionStartTouch = _simulationTouch;
+    _simulationMotionEndTouch = endTouch;
+    _simulationMotionStartValue = _coverController.value;
+    _simulationMotionEndValue = endValue;
+    _simulationMotionActive = true;
+    _writeSimulationDebugLog(
+      'event=settle_config direction=$_coverDirection '
+      'startTouch=$_simulationMotionStartTouch endTouch=$endTouch '
+      'startValue=${_simulationMotionStartValue.toStringAsFixed(3)} '
+      'endValue=${endValue.toStringAsFixed(3)}',
+      force: true,
+    );
+  }
+
+  /// 返回控制器当前值对应的二维触点，横纵坐标在收尾期间同时抵达目标。
+  Offset _simulationTouchForControllerValue(double controllerValue) {
+    if (!_simulationMotionActive) {
+      return _simulationTouch;
+    }
+    /// 当前二维插值覆盖的控制器值范围。
+    final double valueRange =
+        _simulationMotionEndValue - _simulationMotionStartValue;
+    if (valueRange.abs() < 0.0001) {
+      return _simulationMotionEndTouch;
+    }
+    /// 当前控制器值在线性收尾轨迹中的比例。
+    final double motionProgress =
+        ((controllerValue - _simulationMotionStartValue) / valueRange)
+            .clamp(0, 1)
+            .toDouble();
+    return Offset(
+      _simulationMotionStartTouch.dx +
+          (_simulationMotionEndTouch.dx -
+                  _simulationMotionStartTouch.dx) *
+              motionProgress,
+      _simulationMotionStartTouch.dy +
+          (_simulationMotionEndTouch.dy -
+                  _simulationMotionStartTouch.dy) *
+              motionProgress,
+    );
+  }
+
+  /// 计算 Android 仿真模式完成或取消时的二维触点终点。
+  Offset _simulationSettleEndTouch({required bool commit}) {
+    /// 当前仿真页面宽度。
+    final double width = _simulationPageSize.width;
+    /// 当前仿真页面高度。
+    final double height = _simulationPageSize.height;
+    /// 上页角使用一个逻辑像素而不是精确零，避免贝塞尔退化。
+    final double cornerY = _simulationCorner.dy <= height / 2 ? 1 : height;
+    if (_coverDirection > 0) {
+      return commit
+          ? Offset(-width, cornerY)
+          : Offset(width, cornerY);
+    }
+    return commit
+        ? Offset(width, height)
+        : Offset(-width, height);
+  }
+
+  /// 按 Android 300ms 基准和剩余水平距离计算本段收尾动画时长。
+  Duration _simulationSettleDuration(Offset endTouch) {
+    /// 防止零尺寸布局产生除零的安全页面宽度。
+    final double width =
+        _simulationPageSize.width <= 0 ? 1 : _simulationPageSize.width;
+    /// 剩余横向距离相对页面宽度的比例。
+    final double distanceRatio =
+        (endTouch.dx - _simulationTouch.dx).abs() / width;
+    /// Android 同类距离时长，限制异常扩展坐标造成的超长动画。
+    final int milliseconds =
+        (300 * distanceRatio).round().clamp(1, 900).toInt();
+    return Duration(milliseconds: milliseconds);
+  }
+
+  /// 清理仅属于上一段仿真收尾动画的插值状态。
+  void _resetSimulationMotion() {
+    _simulationMotionActive = false;
+    _simulationMotionStartTouch = _simulationTouch;
+    _simulationMotionEndTouch = _simulationTouch;
+    _simulationMotionStartValue = _coverController.value;
+    _simulationMotionEndValue = _coverController.value;
+  }
+
+  /// 【FLUTTER_READER_SIMULATION_LOG】按统一 Tag 写入不含正文的仿真手势和几何日志。
+  void _writeSimulationDebugLog(String message, {bool force = false}) {
+    if (!_usesSimulationPaging) {
+      return;
+    }
+    /// 【FLUTTER_READER_SIMULATION_LOG】当前毫秒时间戳，用于把逐帧几何日志限制为约每 120ms 一条。
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (!force && nowMs - _simulationDebugLastFrameLogAtMs < 120) {
+      return;
+    }
+    _simulationDebugLastFrameLogAtMs = nowMs;
+    _simulationDebugSequence += 1;
+    widget.logger.debug(
+      tag: readerSimulationPageTurnLogTag,
+      message: 'marker=$readerSimulationPageTurnDebugLogMarker '
+          'seq=$_simulationDebugSequence $message',
+    );
   }
 
   /// 将跨平台保存的字重数值映射为 Flutter 字体权重。
@@ -1981,13 +2761,15 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     if (targetIndex == _currentPageIndex) {
       return;
     }
+    /// 本次程序化翻页方向。
+    final int direction = targetIndex > _currentPageIndex ? 1 : -1;
+    if (_usesSimulationPaging) {
+      _prepareProgrammaticSimulation(direction);
+    }
     setState(() {
       _coverFromIndex = _currentPageIndex;
       _coverToIndex = targetIndex;
-      _coverDirection = targetIndex > _currentPageIndex ? 1 : -1;
-      if (_usesSimulationPaging && _coverDirection < 0) {
-        _simulationUpperCorner = false;
-      }
+      _coverDirection = direction;
     });
     _coverController.reset();
     _finishCoverAnimation(targetIndex);
@@ -1998,7 +2780,23 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     /// 动画开始时的布局代次，防止切章或重排后的旧回调提交页码。
     final int animationGeneration = _layoutGeneration;
     /// 当前覆盖翻页动画任务。
-    final Future<void> animation = _coverController.forward();
+    final Future<void> animation;
+    if (_usesSimulationPaging) {
+      /// Android 同类完成轨迹的二维终点。
+      final Offset endTouch =
+          _simulationSettleEndTouch(commit: true);
+      _configureSimulationMotion(
+        endTouch: endTouch,
+        endValue: 1,
+      );
+      animation = _coverController.animateTo(
+        1,
+        duration: _simulationSettleDuration(endTouch),
+        curve: Curves.linear,
+      );
+    } else {
+      animation = _coverController.forward();
+    }
     animation.whenComplete(() {
       if (!mounted ||
           animationGeneration != _layoutGeneration ||
@@ -2012,16 +2810,73 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         _selectionActive = false;
         _coverFromIndex = null;
         _coverToIndex = null;
+        _boundaryTargetPreview = null;
+        _boundaryTurnCommitted = false;
+        _horizontalDragDirection = 0;
+        _horizontalDragCancelRequested = false;
+        _resetSimulationMotion();
       });
       widget.onIntent(UpdateReaderScrollIntent(_pages[targetIndex].startOffset));
       _applyPendingCompletePagination();
     });
   }
 
+  /// 完成章首或章末的同一次仿真手势，并在视觉到位后提交相邻章节。
+  void _finishAdjacentChapterAnimation(int direction) {
+    /// 动画开始时的布局代次，防止旧边界回调在重排后提交章节。
+    final int animationGeneration = _layoutGeneration;
+    /// Android 同类完成轨迹的二维终点。
+    final Offset endTouch = _simulationSettleEndTouch(commit: true);
+    _configureSimulationMotion(
+      endTouch: endTouch,
+      endValue: 1,
+    );
+    /// 当前跨章节边界仿真动画任务。
+    final Future<void> animation = _coverController.animateTo(
+      1,
+      duration: _simulationSettleDuration(endTouch),
+      curve: Curves.linear,
+    );
+    animation.whenComplete(() {
+      if (!mounted ||
+          animationGeneration != _layoutGeneration ||
+          _boundaryTargetPreview == null) {
+        return;
+      }
+      setState(() {
+        _selectionEpoch += 1;
+        _selectionActive = false;
+        _boundaryTurnCommitted = true;
+        _horizontalDragDirection = 0;
+        _horizontalDragCancelRequested = false;
+        _resetSimulationMotion();
+      });
+      widget.onIntent(
+        CommitReaderAdjacentPageTurnIntent(direction),
+      );
+    });
+  }
+
   /// 将未达到阈值的覆盖页退回屏幕外，并清理本地手势状态。
   void _cancelCoverAnimation() {
     /// 当前覆盖页回弹任务。
-    final Future<void> animation = _coverController.reverse();
+    final Future<void> animation;
+    if (_usesSimulationPaging) {
+      /// Android 同类回弹轨迹的二维终点。
+      final Offset endTouch =
+          _simulationSettleEndTouch(commit: false);
+      _configureSimulationMotion(
+        endTouch: endTouch,
+        endValue: 0,
+      );
+      animation = _coverController.animateTo(
+        0,
+        duration: _simulationSettleDuration(endTouch),
+        curve: Curves.linear,
+      );
+    } else {
+      animation = _coverController.reverse();
+    }
     animation.whenComplete(() {
       if (!mounted) {
         return;
@@ -2029,6 +2884,11 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       setState(() {
         _coverFromIndex = null;
         _coverToIndex = null;
+        _boundaryTargetPreview = null;
+        _boundaryTurnCommitted = false;
+        _horizontalDragDirection = 0;
+        _horizontalDragCancelRequested = false;
+        _resetSimulationMotion();
       });
       _applyPendingCompletePagination();
     });
@@ -2060,6 +2920,29 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     final String totalText = _isLayoutComplete ? '${_pages.length}' : '…';
     return '${index + 1} / $totalText · $percent%';
   }
+}
+
+/// 保存一个相邻章节已经完成测量的有限目标页，不持有额外 Widget、控制器或平台资源。
+final class _ReaderAdjacentPagePreview {
+  /// 创建章首或章末卷页所需的只读页面快照。
+  const _ReaderAdjacentPagePreview({
+    required this.content,
+    required this.page,
+    required this.pageIndex,
+    required this.footerText,
+  });
+
+  /// 目标章节已经处理完成的正文。
+  final ReaderChapterContent content;
+
+  /// 目标章节首个或最后一个分页模型。
+  final ReaderTextPage page;
+
+  /// 目标页在相邻章节完整页集中的索引。
+  final int pageIndex;
+
+  /// 目标页独立页脚，避免读取当前章节页数和百分比。
+  final String footerText;
 }
 
 /// 显示阅读页眉页脚中的时间和电量，并每分钟自动刷新时间。

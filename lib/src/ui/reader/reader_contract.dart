@@ -211,6 +211,9 @@ final class ReaderUiState {
     this.searchState = const ReaderSearchState(),
     this.restoreRequestId = 0,
     this.chapterTransitionDirection = 0,
+    this.animateChapterTransition = true,
+    this.previousChapterPreview,
+    this.nextChapterPreview,
     this.batteryLevel,
     List<ReplaceRule> replaceRules = const <ReplaceRule>[],
     List<BookContentProcess> contentProcesses = const <BookContentProcess>[],
@@ -266,6 +269,15 @@ final class ReaderUiState {
   /// 最近一次章节切换方向；供覆盖与仿真呈现层决定相邻章节的进入方向。
   final int chapterTransitionDirection;
 
+  /// 新章节正文就绪后是否还需要播放跨章动画；边界手势已经展示目标页时为 false。
+  final bool animateChapterTransition;
+
+  /// 已预加载的上一可阅读章节正文，只供有限跨章页面预览使用。
+  final ReaderChapterContent? previousChapterPreview;
+
+  /// 已预加载的下一可阅读章节正文，只供有限跨章页面预览使用。
+  final ReaderChapterContent? nextChapterPreview;
+
   /// 平台最近一次返回的电量百分比；为空时页眉页脚隐藏电量。
   final int? batteryLevel;
 
@@ -298,6 +310,12 @@ final class ReaderUiState {
   /// 是否存在下一可阅读章节。
   bool get canGoNext => _findReadableIndex(1) != null;
 
+  /// 上一可阅读章节在完整目录中的稳定索引。
+  int? get previousReadableChapterIndex => _findReadableIndex(-1);
+
+  /// 下一可阅读章节在完整目录中的稳定索引。
+  int? get nextReadableChapterIndex => _findReadableIndex(1);
+
   /// 从当前索引查找指定方向的下一可阅读章节。
   int? _findReadableIndex(int direction) {
     int index = currentChapterIndex + direction;
@@ -326,6 +344,9 @@ final class ReaderUiState {
     ReaderSearchState? searchState,
     int? restoreRequestId,
     int? chapterTransitionDirection,
+    bool? animateChapterTransition,
+    ReaderChapterContent? previousChapterPreview,
+    ReaderChapterContent? nextChapterPreview,
     int? batteryLevel,
     List<ReplaceRule>? replaceRules,
     List<BookContentProcess>? contentProcesses,
@@ -336,6 +357,8 @@ final class ReaderUiState {
     bool clearError = false,
     bool clearSheet = false,
     bool clearBattery = false,
+    bool clearPreviousChapterPreview = false,
+    bool clearNextChapterPreview = false,
   }) {
     return ReaderUiState(
       book: book ?? this.book,
@@ -353,6 +376,14 @@ final class ReaderUiState {
       restoreRequestId: restoreRequestId ?? this.restoreRequestId,
       chapterTransitionDirection:
           chapterTransitionDirection ?? this.chapterTransitionDirection,
+      animateChapterTransition:
+          animateChapterTransition ?? this.animateChapterTransition,
+      previousChapterPreview: clearPreviousChapterPreview
+          ? null
+          : previousChapterPreview ?? this.previousChapterPreview,
+      nextChapterPreview: clearNextChapterPreview
+          ? null
+          : nextChapterPreview ?? this.nextChapterPreview,
       batteryLevel: clearBattery ? null : batteryLevel ?? this.batteryLevel,
       replaceRules: replaceRules ?? this.replaceRules,
       contentProcesses: contentProcesses ?? this.contentProcesses,
@@ -394,6 +425,15 @@ final class OpenPreviousChapterIntent extends ReaderIntent {
 final class OpenNextChapterIntent extends ReaderIntent {
   /// 创建下一章 Intent。
   const OpenNextChapterIntent();
+}
+
+/// 仿真边界手势已经完整展示目标页后提交相邻章节，不再在正文就绪后重复播放跨章动画。
+final class CommitReaderAdjacentPageTurnIntent extends ReaderIntent {
+  /// 创建已经完成视觉呈现的相邻章节提交 Intent。
+  const CommitReaderAdjacentPageTurnIntent(this.direction);
+
+  /// 相邻章节方向，正数下一章、负数上一章。
+  final int direction;
 }
 
 /// 从目录或书签打开指定章节和字符位置。
