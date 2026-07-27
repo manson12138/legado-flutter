@@ -1167,6 +1167,14 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           final bool excludesRightEdgePointers =
               widget.state.config.rightEdgeSwipeToCloseEnabled &&
               widget.state.activeSheet == null;
+          /// 与原 GestureDetector 一致的设备触摸阈值，避免正文选区先于翻页识别器赢得竞技场。
+          final DeviceGestureSettings? gestureSettings =
+              MediaQuery.maybeGestureSettingsOf(context);
+          /// 与原 GestureDetector 一致的多指拖动合并策略，不改变现有单指仿真手感。
+          final MultitouchDragStrategy multitouchDragStrategy =
+              ScrollConfiguration.of(
+                context,
+              ).getMultitouchDragStrategy(context);
           /// 当前覆盖或仿真分页使用的横向手势识别器工厂。
           final Map<Type, GestureRecognizerFactory> horizontalGestures =
               _selectionActive
@@ -1192,6 +1200,8 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                             ..excludeRightEdgePointers =
                                 excludesRightEdgePointers
                             ..dragStartBehavior = DragStartBehavior.start
+                            ..multitouchDragStrategy = multitouchDragStrategy
+                            ..gestureSettings = gestureSettings
                             ..onStart = (DragStartDetails details) {
                               if (widget.state.menuVisible) {
                                 widget.onIntent(
