@@ -728,6 +728,13 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
         state.chapters.isNotEmpty;
     /// 当前是否允许打开目录第一个可读章节。
     final bool canRead = _firstReadableChapterIndex(state.chapters) != null && !state.loadingToc && state.tocError == null;
+    /// 显式更新目录是否正在复用详情或目录网络加载链路。
+    final bool updatingToc =
+        state.loadingInfo || state.loadingToc || state.switchingSource;
+    /// 本地书没有远端目录，不能执行联网更新。
+    final bool canUpdateToc =
+        !updatingToc &&
+        (state.book?.origin ?? state.selectedBook.origin) != 'loc_book';
     return Column(
       children: <Widget>[
         Row(
@@ -824,11 +831,23 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
             const SizedBox(width: SpacingToken.small),
             Expanded(
               child: _BookInfoActionCard(
-                icon: Icons.extension_outlined,
-                label: '后续能力',
-                state: _BookInfoActionCardState.available,
-                detail: '查看功能规划',
-                onTap: () => _showFeatureMatrix(context, state, onIntent),
+                icon: updatingToc ? Icons.sync : Icons.update,
+                label: updatingToc ? '正在更新' : '更新目录',
+                state: updatingToc
+                    ? _BookInfoActionCardState.working
+                    : canUpdateToc
+                        ? _BookInfoActionCardState.available
+                        : _BookInfoActionCardState.pending,
+                detail: updatingToc
+                    ? '正在获取最新目录'
+                    : canUpdateToc
+                        ? '检查网页最新章节'
+                        : '本地书无需联网更新',
+                onTap: () => onIntent(
+                  const BookInfoMenuActionIntent(
+                    BookInfoMenuAction.refresh,
+                  ),
+                ),
               ),
             ),
           ],
@@ -931,47 +950,79 @@ Future<void> _showFullChapterList(
     context: context,
     showDragHandle: true,
     builder: (BuildContext context) {
-      return SafeArea(
-        child: Column(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                SpacingToken.large,
-                SpacingToken.small,
-                SpacingToken.large,
-                SpacingToken.medium,
-              ),
-              child: Row(
-                children: <Widget>[
-                  Text('目录（${state.chapters.length}）', style: Theme.of(context).textTheme.titleMedium),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('关闭'),
+      /// 当前弹层内是否按倒序显示，关闭后不持久化。
+      bool descending = false;
+      return StatefulBuilder(
+        builder: (BuildContext context, StateSetter setSheetState) {
+          return SafeArea(
+            child: Column(
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    SpacingToken.large,
+                    SpacingToken.small,
+                    SpacingToken.small,
+                    SpacingToken.medium,
                   ),
-                ],
-              ),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          '目录（${state.chapters.length}）',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      Tooltip(
+                        message: descending ? '切换为正序' : '切换为倒序',
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setSheetState(() {
+                              descending = !descending;
+                            });
+                          },
+                          icon: Icon(descending ? Icons.arrow_upward : Icons.arrow_downward),
+                          label: Text(descending ? '倒序' : '正序'),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('关闭'),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: state.chapters.length,
+                    itemBuilder: (BuildContext context, int visibleIndex) {
+                      /// 当前可见行映射到的原始章节索引。
+                      final int chapterIndex = descending
+                          ? state.chapters.length - 1 - visibleIndex
+                          : visibleIndex;
+                      /// 当前目录项对应的章节对象。
+                      final BookChapter chapter = state.chapters[chapterIndex];
+                      return ListTile(
+                        key: ValueKey<String>('toc-sheet-${chapter.index}:${chapter.url}'),
+                        dense: true,
+                        leading: Text('${chapter.index + 1}'),
+                        title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: chapter.tag == null
+                            ? null
+                            : Text(chapter.tag ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+                        enabled: !chapter.isVolume && !state.addingToShelf,
+                        onTap: chapter.isVolume || state.addingToShelf
+                            ? null
+                            : () => Navigator.of(context).pop(chapterIndex),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: state.chapters.length,
-                itemBuilder: (BuildContext context, int index) {
-                  /// 当前目录项对应的章节对象。
-                  final BookChapter chapter = state.chapters[index];
-                  return ListTile(
-                    key: ValueKey<String>('toc-sheet-${chapter.index}:${chapter.url}'),
-                    dense: true,
-                    leading: Text('${chapter.index + 1}'),
-                    title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: chapter.tag == null ? null : Text(chapter.tag ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
-                    enabled: !chapter.isVolume && !state.addingToShelf,
-                    onTap: chapter.isVolume || state.addingToShelf ? null : () => Navigator.of(context).pop(index),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       );
     },
   );

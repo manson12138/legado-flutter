@@ -136,6 +136,9 @@ enum BookSourceImportEntry {
 
   /// 二维码扫描。
   qr,
+
+  /// 游客手动输入的远程 HTTP/HTTPS JSON 地址。
+  remoteUrl,
 }
 
 sealed class BookSourceDialog {

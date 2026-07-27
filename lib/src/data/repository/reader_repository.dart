@@ -361,6 +361,9 @@ final class ReaderRepository
           ),
           orientationMode: _orientationMode(decoded['orientationMode']),
           fullScreen: decoded['fullScreen'] is bool ? decoded['fullScreen'] as bool : false,
+          edgeSwipeToCloseEnabled: decoded['edgeSwipeToCloseEnabled'] is bool
+              ? decoded['edgeSwipeToCloseEnabled'] as bool
+              : true,
         );
       } on FormatException {
         return const ReaderDisplayConfig();
@@ -417,6 +420,7 @@ final class ReaderRepository
         'readerBrightness': config.readerBrightness,
         'orientationMode': config.orientationMode.name,
         'fullScreen': config.fullScreen,
+        'edgeSwipeToCloseEnabled': config.edgeSwipeToCloseEnabled,
       });
       /// 阅读显示设置为全局偏好，切换书籍和重启 App 后仍应一致生效。
       return _cacheDao.upsert(Cache(key: _globalConfigKey, value: value));

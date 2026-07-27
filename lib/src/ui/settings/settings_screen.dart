@@ -93,6 +93,24 @@ final class SettingsScreen extends StatelessWidget {
                 tooltip: '返回',
               )
             : null,
+        actions: <Widget>[
+          if (appSession == null)
+            TextButton.icon(
+              onPressed: onOpenAuthentication,
+              icon: const Icon(Icons.login_rounded),
+              label: const Text('登录'),
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.onSurface,
+              ),
+            )
+          else
+            IconButton(
+              onPressed: onOpenAuthentication,
+              icon: const Icon(Icons.manage_accounts_outlined),
+              tooltip: '账号管理',
+            ),
+          const SizedBox(width: SpacingToken.small),
+        ],
       ),
       body: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
@@ -198,26 +216,31 @@ final class SettingsScreen extends StatelessWidget {
             radius: 22,
             backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
             foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
-            child: const Icon(Icons.person_outline, size: 22),
+            child: Icon(
+              session == null
+                  ? Icons.person_outline
+                  : Icons.person_rounded,
+              size: 22,
+            ),
           ),
           const SizedBox(width: SpacingToken.medium),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(session?.account.username ?? '本地读者', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  session?.account.username ?? '游客',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: SpacingToken.xSmall),
                 Text(
-                  session == null ? '阅读数据保存在本机' : '阅读数据保存在本机',
+                  session == null
+                      ? '数据保存在本机，登录后使用独立账号数据'
+                      : '当前账号数据与游客数据独立保存',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
-          ),
-          IconButton(
-            onPressed: onOpenAuthentication,
-            icon: const Icon(Icons.manage_accounts_outlined),
-            tooltip: session == null ? '登录或注册 App 账号' : '管理 App 账号',
           ),
         ],
       ),

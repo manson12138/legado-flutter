@@ -32,9 +32,9 @@ final class BookshelfHistoryStartupSnapshot {
   final List<Book> readingHistoryBooks;
 }
 
-/// 在已登录用户进入主界面前单飞读取本地书架与阅读历史。
+/// 在游客或已登录用户进入主界面前单飞读取当前作用域的本地书架与阅读历史。
 ///
-/// 不执行书源网络请求、目录刷新、书源导入或下载恢复；未登录流程不得调用该服务。
+/// 不执行书源网络请求、目录刷新、书源导入或下载恢复。
 final class BookshelfHistoryStartupPreloader {
   /// 创建只依赖本地 DAO 的启动期预加载器。
   BookshelfHistoryStartupPreloader({

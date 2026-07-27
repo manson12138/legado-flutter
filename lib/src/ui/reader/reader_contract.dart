@@ -263,7 +263,7 @@ final class ReaderUiState {
   /// 每次章节或字体宽度配置变化时递增，通知路由按字符锚点重新定位。
   final int restoreRequestId;
 
-  /// 最近一次章节切换方向；正数表示下一章从右侧覆盖，负数表示上一章从左侧覆盖。
+  /// 最近一次章节切换方向；供覆盖与仿真呈现层决定相邻章节的进入方向。
   final int chapterTransitionDirection;
 
   /// 平台最近一次返回的电量百分比；为空时页眉页脚隐藏电量。
@@ -602,6 +602,12 @@ final class OpenReaderBookSourceChangeIntent extends ReaderIntent {
   const OpenReaderBookSourceChangeIntent();
 }
 
+/// 保存当前进度后请求打开当前书籍详情页。
+final class OpenReaderBookInfoIntent extends ReaderIntent {
+  /// 创建阅读器书籍详情 Intent。
+  const OpenReaderBookInfoIntent();
+}
+
 /// 请求通过系统面板保存或分享当前正文图片。
 final class ShareReaderContentImageIntent extends ReaderIntent {
   /// 创建正文图片分享 Intent。
@@ -726,4 +732,13 @@ final class OpenReaderBookSourceChangeEffect extends ReaderEffect {
 
   /// 当前已保存进度的旧书籍稳定 URL。
   final String bookUrl;
+}
+
+/// 请求路由退出阅读系统模式并打开当前书籍详情页。
+final class OpenReaderBookInfoEffect extends ReaderEffect {
+  /// 创建阅读器书籍详情导航 Effect。
+  const OpenReaderBookInfoEffect(this.book);
+
+  /// 当前已保存阅读进度的书籍事实。
+  final Book book;
 }

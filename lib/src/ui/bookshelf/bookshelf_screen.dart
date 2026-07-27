@@ -346,6 +346,12 @@ final class _BookshelfList extends StatelessWidget {
         final BookshelfBookItem item = state.books[index];
         /// 是否已选择。
         final bool selected = state.selectedBookUrls.contains(item.book.bookUrl);
+        /// 未读时沿用数字角标，全部读完后回退显示目录总章数。
+        final String? chapterBadgeLabel = item.unreadChapterCount > 0
+            ? '${item.unreadChapterCount}'
+            : item.book.totalChapterNum > 0
+                ? '共 ${item.book.totalChapterNum} 章'
+                : null;
         return Card(
           key: ValueKey<String>(item.book.bookUrl),
           color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
@@ -373,7 +379,7 @@ final class _BookshelfList extends StatelessWidget {
                 : Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      if (item.unreadChapterCount > 0) Badge(label: Text('${item.unreadChapterCount}')),
+                      if (chapterBadgeLabel != null) Badge(label: Text(chapterBadgeLabel)),
                       IconButton(
                         onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
                         icon: const Icon(Icons.info_outline),
@@ -436,6 +442,12 @@ final class _BookshelfGrid extends StatelessWidget {
             final double authorFontSize = titleFontSize - 1;
             /// 未读章节字号：比作者名小 2 号。
             final double unreadFontSize = authorFontSize - 2;
+            /// 封面底部的章节状态；全部读完时仍展示目录总章数。
+            final String? chapterStatusText = item.unreadChapterCount > 0
+                ? '${item.unreadChapterCount} 章未读'
+                : item.book.totalChapterNum > 0
+                    ? '共 ${item.book.totalChapterNum} 章'
+                    : null;
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: BookGridLayout.cardHorizontalInset),
               child: Card(
@@ -462,7 +474,7 @@ final class _BookshelfGrid extends StatelessWidget {
                             ),
                             if (selected)
                               const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
-                            if (item.unreadChapterCount > 0)
+                            if (chapterStatusText != null)
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -475,7 +487,7 @@ final class _BookshelfGrid extends StatelessWidget {
                                   color: Colors.white.withValues(alpha: 0.5),
                                   alignment: Alignment.centerLeft,
                                   child: Text(
-                                    '${item.unreadChapterCount} 章未读',
+                                    chapterStatusText,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(fontSize: unreadFontSize, color: Colors.grey.shade700),

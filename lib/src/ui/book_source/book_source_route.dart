@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/guest_book_source_import_service.dart';
 import '../../app/remote_book_source_sync_service.dart';
+import '../../api/http/http_contract.dart';
 import '../../domain/model/app_account.dart';
 import '../../domain/model/book_source_import_result.dart';
 import '../../help/logging/app_logger.dart';
@@ -54,6 +56,12 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   bool _remoteSyncing = false;
   /// 最近一次可安全展示的服务器书源同步进度。
   RemoteBookSourceSyncProgress? _remoteSyncProgress;
+  /// 游客 URL 或邀请码导入是否正在运行。
+  bool _guestRemoteImporting = false;
+  /// 最近一次可安全展示的游客导入进度。
+  GuestBookSourceImportProgress? _guestRemoteImportProgress;
+  /// 当前游客导入独占的网络取消令牌。
+  HttpCancellationToken? _guestRemoteImportCancellationToken;
 
   /// 创建 ViewModel 并监听 Effect。
   @override
@@ -287,6 +295,8 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   /// 释放 Effect 订阅和 ViewModel。
   @override
   void dispose() {
+    _guestRemoteImportCancellationToken?.cancel('书源管理页面已关闭');
+    _guestRemoteImportCancellationToken = null;
     _effectSubscription.cancel();
     _viewModel.dispose();
     super.dispose();
@@ -314,6 +324,10 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
               showRemoteSync: canSyncRemoteBookSources,
               remoteSyncing: _remoteSyncing,
               remoteSyncProgress: _remoteSyncProgress,
+              onGuestRemoteImport: _requestGuestRemoteSourceImport,
+              showGuestRemoteImport: session == null,
+              guestRemoteImporting: _guestRemoteImporting,
+              guestRemoteImportProgress: _guestRemoteImportProgress,
               showBackButton: !widget.embedded,
             );
           },
@@ -382,6 +396,208 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
     setState(() {
       _remoteSyncProgress = progress;
     });
+  }
+
+  /// 仅在游客状态打开 URL/邀请码输入，并在提交后连接应用服务。
+  Future<void> _requestGuestRemoteSourceImport() async {
+    if (_guestRemoteImporting ||
+        _viewModel.state.busy ||
+        widget.dependencies.authenticationGateway.session.value != null ||
+        !mounted) {
+      return;
+    }
+    /// 用户在路由局部对话框中提交的短期输入；取消时为 null。
+    final String? input = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) =>
+          const _GuestBookSourceInputDialogView(),
+    );
+    if (input == null ||
+        input.trim().isEmpty ||
+        !mounted ||
+        widget.dependencies.authenticationGateway.session.value != null) {
+      return;
+    }
+    _guestRemoteImportCancellationToken?.cancel('开始新的游客书源导入');
+    /// 本轮游客导入独占的网络取消令牌。
+    final HttpCancellationToken cancellationToken =
+        widget.dependencies.createHttpCancellationToken();
+    _guestRemoteImportCancellationToken = cancellationToken;
+    setState(() {
+      _guestRemoteImporting = true;
+      _guestRemoteImportProgress = const GuestBookSourceImportProgress(
+        stage: GuestBookSourceImportStage.resolvingInput,
+      );
+    });
+    try {
+      /// URL JSON 解析结果或邀请码分页同步摘要。
+      final GuestBookSourceInputResult result =
+          await widget.dependencies.guestBookSourceImportService.submit(
+        input,
+        cancellationToken: cancellationToken,
+        onProgress: (GuestBookSourceImportProgress progress) {
+          _updateGuestRemoteImportProgress(progress, cancellationToken);
+        },
+      );
+      if (!_finishGuestRemoteImport(cancellationToken)) {
+        return;
+      }
+      switch (result) {
+        case GuestBookSourceUrlResolved(sourceJson: final String sourceJson):
+          _viewModel.onIntent(
+            ShowBookSourceTextImportIntent(
+              initialText: sourceJson,
+              entry: BookSourceImportEntry.remoteUrl,
+            ),
+          );
+        case GuestBookSourceInvitationImported(
+          importedCount: final int importedCount,
+          processedCount: final int processedCount,
+          invalidCount: final int invalidCount,
+        ):
+          _showMessage(
+            '游客书源同步完成：处理 $processedCount 条，导入 $importedCount 条'
+            '${invalidCount > 0 ? '，无效 $invalidCount 条' : ''}',
+          );
+      }
+    } on GuestBookSourceImportException catch (error) {
+      if (!_finishGuestRemoteImport(cancellationToken)) {
+        return;
+      }
+      if (error.kind != GuestBookSourceImportFailureKind.cancelled) {
+        _showMessage(error.message);
+      }
+    } catch (error) {
+      if (!_finishGuestRemoteImport(cancellationToken)) {
+        return;
+      }
+      widget.dependencies.logger.warning(
+        tag: guestBookSourceImportLogTag,
+        message: 'stage=route_failed type=${error.runtimeType}',
+      );
+      _showMessage('游客书源导入失败，请稍后重试');
+    }
+  }
+
+  /// 接收游客导入进度；旧请求或已销毁页面不会再更新状态。
+  void _updateGuestRemoteImportProgress(
+    GuestBookSourceImportProgress progress,
+    HttpCancellationToken cancellationToken,
+  ) {
+    if (!mounted ||
+        !identical(
+          _guestRemoteImportCancellationToken,
+          cancellationToken,
+        )) {
+      return;
+    }
+    setState(() {
+      _guestRemoteImportProgress = progress;
+    });
+  }
+
+  /// 完成当前游客操作并清理计数型 UI；旧请求返回 false。
+  bool _finishGuestRemoteImport(
+    HttpCancellationToken cancellationToken,
+  ) {
+    if (!mounted ||
+        !identical(
+          _guestRemoteImportCancellationToken,
+          cancellationToken,
+        )) {
+      return false;
+    }
+    _guestRemoteImportCancellationToken = null;
+    setState(() {
+      _guestRemoteImporting = false;
+      _guestRemoteImportProgress = null;
+    });
+    return true;
+  }
+}
+
+/// 游客 URL 或管理员邀请码的路由局部输入对话框。
+final class _GuestBookSourceInputDialogView extends StatefulWidget {
+  /// 创建不把输入保存到长期 UiState 的游客导入对话框。
+  const _GuestBookSourceInputDialogView();
+
+  /// 创建输入控制器状态。
+  @override
+  State<_GuestBookSourceInputDialogView> createState() =>
+      _GuestBookSourceInputDialogViewState();
+}
+
+/// 管理游客输入控制器，并在关闭时立即释放。
+final class _GuestBookSourceInputDialogViewState
+    extends State<_GuestBookSourceInputDialogView> {
+  /// 当前对话框唯一输入控制器。
+  final TextEditingController _controller = TextEditingController();
+
+  /// 本地空输入反馈，不进入页面长期状态。
+  String? _errorMessage;
+
+  /// 清理短期输入控制器。
+  @override
+  void dispose() {
+    _controller.clear();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// 提交非空输入，并先清空控制器再关闭对话框。
+  void _submit() {
+    /// 去除外围空白后的 URL 或邀请码候选。
+    final String candidate = _controller.text.trim();
+    if (candidate.isEmpty) {
+      setState(() {
+        _errorMessage = '请输入书源 URL 或管理员邀请码';
+      });
+      return;
+    }
+    _controller.clear();
+    Navigator.of(context).pop(candidate);
+  }
+
+  /// 构建单行、禁止输入建议的敏感输入界面。
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('输入 URL 或邀请码'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.url,
+        textInputAction: TextInputAction.done,
+        autocorrect: false,
+        enableSuggestions: false,
+        maxLines: 1,
+        maxLength: 4096,
+        decoration: InputDecoration(
+          labelText: '书源 URL 或管理员邀请码',
+          helperText: 'URL 返回书源 JSON；非 URL 内容将尝试作为管理员邀请码',
+          errorText: _errorMessage,
+          counterText: '',
+        ),
+        onChanged: (String value) {
+          if (_errorMessage != null && value.trim().isNotEmpty) {
+            setState(() {
+              _errorMessage = null;
+            });
+          }
+        },
+        onSubmitted: (String value) => _submit(),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('继续'),
+        ),
+      ],
+    );
   }
 }
 

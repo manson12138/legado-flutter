@@ -6,6 +6,7 @@ import '../components/app_state_views.dart';
 import '../theme/app_tokens.dart';
 import 'book_source_contract.dart';
 import '../../app/remote_book_source_sync_service.dart';
+import '../../app/guest_book_source_import_service.dart';
 
 /// 只渲染书源管理状态并发送 Intent 的无业务逻辑页面。
 final class BookSourceManagementScreen extends StatelessWidget {
@@ -17,6 +18,10 @@ final class BookSourceManagementScreen extends StatelessWidget {
     required this.showRemoteSync,
     required this.remoteSyncing,
     required this.remoteSyncProgress,
+    required this.onGuestRemoteImport,
+    required this.showGuestRemoteImport,
+    required this.guestRemoteImporting,
+    required this.guestRemoteImportProgress,
     this.showBackButton = true,
     super.key,
   });
@@ -38,6 +43,18 @@ final class BookSourceManagementScreen extends StatelessWidget {
 
   /// 当前可安全展示的同步阶段与批次计数。
   final RemoteBookSourceSyncProgress? remoteSyncProgress;
+
+  /// 打开游客 URL/邀请码输入对话框的路由回调。
+  final VoidCallback onGuestRemoteImport;
+
+  /// 仅在未登录游客状态展示新的远程输入入口。
+  final bool showGuestRemoteImport;
+
+  /// 游客 URL 或邀请码导入是否正在运行。
+  final bool guestRemoteImporting;
+
+  /// 当前可安全展示的游客导入阶段和批次计数。
+  final GuestBookSourceImportProgress? guestRemoteImportProgress;
 
   /// 非选择模式下是否展示返回按钮。
   final bool showBackButton;
@@ -96,7 +113,7 @@ final class BookSourceManagementScreen extends StatelessWidget {
                     ),
                   IconButton(
                     tooltip: '导入文件',
-                    onPressed: state.busy
+                    onPressed: state.busy || guestRemoteImporting
                         ? null
                         : () {
                             onIntent(const RequestBookSourceFileIntent());
@@ -105,6 +122,7 @@ final class BookSourceManagementScreen extends StatelessWidget {
                   ),
                   PopupMenuButton<String>(
                     tooltip: '更多导入方式',
+                    enabled: !guestRemoteImporting,
                     onSelected: (String value) {
                       switch (value) {
                         case 'text':
@@ -113,12 +131,28 @@ final class BookSourceManagementScreen extends StatelessWidget {
                           onIntent(const RequestBookSourceClipboardIntent());
                         case 'qr':
                           onIntent(const RequestBookSourceQrIntent());
+                        case 'guest_remote':
+                          onGuestRemoteImport();
                       }
                     },
-                    itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
-                      PopupMenuItem<String>(value: 'text', child: Text('粘贴 JSON 文本')),
-                      PopupMenuItem<String>(value: 'clipboard', child: Text('从剪贴板导入')),
-                      PopupMenuItem<String>(value: 'qr', child: Text('扫描二维码')),
+                    itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                      const PopupMenuItem<String>(
+                        value: 'text',
+                        child: Text('粘贴 JSON 文本'),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'clipboard',
+                        child: Text('从剪贴板导入'),
+                      ),
+                      const PopupMenuItem<String>(
+                        value: 'qr',
+                        child: Text('扫描二维码'),
+                      ),
+                      if (showGuestRemoteImport)
+                        const PopupMenuItem<String>(
+                          value: 'guest_remote',
+                          child: Text('输入 URL'),
+                        ),
                     ],
                   ),
                 ],
@@ -138,8 +172,14 @@ final class BookSourceManagementScreen extends StatelessWidget {
         body: Column(
           children: <Widget>[
             if (state.busy) const LinearProgressIndicator(),
-            if (remoteSyncing && remoteSyncProgress != null)
-              _RemoteSyncStatus(progress: remoteSyncProgress!),
+            if (remoteSyncing)
+              if (remoteSyncProgress
+                  case final RemoteBookSourceSyncProgress progress)
+                _RemoteSyncStatus(progress: progress),
+            if (guestRemoteImporting)
+              if (guestRemoteImportProgress
+                  case final GuestBookSourceImportProgress progress)
+                _GuestRemoteImportStatus(progress: progress),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 SpacingToken.medium,
@@ -507,6 +547,61 @@ final class _RemoteSyncStatus extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(SpacingToken.small),
+          child: Row(
+            children: <Widget>[
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: SpacingToken.small),
+              Expanded(child: Text(message)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 展示游客 URL/邀请码导入的当前阶段和安全分页计数。
+final class _GuestRemoteImportStatus extends StatelessWidget {
+  /// 创建游客远程导入状态条。
+  const _GuestRemoteImportStatus({required this.progress});
+
+  /// 当前游客导入进度。
+  final GuestBookSourceImportProgress progress;
+
+  /// 构建不包含输入、凭证、URL 或书源内容的进度反馈。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前阶段对应的安全展示文案。
+    final String message = switch (progress.stage) {
+      GuestBookSourceImportStage.resolvingInput => '正在识别 URL 或邀请码…',
+      GuestBookSourceImportStage.downloadingUrl => '正在读取远程书源 JSON…',
+      GuestBookSourceImportStage.exchangingInvitation =>
+        '正在验证管理员邀请码…',
+      GuestBookSourceImportStage.fetchingBatch =>
+        progress.totalCount == null
+            ? '正在获取第 ${progress.batchNumber ?? 1} 批游客书源…'
+            : '正在获取第 ${progress.batchNumber ?? 1} 批：已处理 ${progress.processedCount}/${progress.totalCount}',
+      GuestBookSourceImportStage.importingBatch =>
+        '正在导入第 ${progress.batchNumber ?? 1} 批：已处理 ${progress.processedCount}/${progress.totalCount ?? progress.processedCount}',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SpacingToken.medium,
+        SpacingToken.small,
+        SpacingToken.medium,
+        0,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.tertiaryContainer,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Padding(

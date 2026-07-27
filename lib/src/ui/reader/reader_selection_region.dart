@@ -61,6 +61,11 @@ final class _ReaderSelectionRegionState extends State<ReaderSelectionRegion> {
     if (oldWidget.selectionEpoch != widget.selectionEpoch ||
         oldWidget.chapterText != widget.chapterText) {
       _selectedText = '';
+      WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+        if (mounted) {
+          _reportSelectionActive(false);
+        }
+      });
     }
   }
 
@@ -73,9 +78,7 @@ final class _ReaderSelectionRegionState extends State<ReaderSelectionRegion> {
       ),
       onSelectionChanged: (SelectedContent? content) {
         _selectedText = content?.plainText ?? '';
-        ReaderTapRegionSelectionScope.maybeOf(context)?.onSelectionChanged(
-          _selectedText.isNotEmpty,
-        );
+        _reportSelectionActive(_selectedText.isNotEmpty);
       },
       contextMenuBuilder: (
         BuildContext menuContext,
@@ -132,11 +135,13 @@ final class _ReaderSelectionRegionState extends State<ReaderSelectionRegion> {
     if (selection == null) {
       selectableRegionState.clearSelection();
       _selectedText = '';
+      _reportSelectionActive(false);
       return;
     }
     Clipboard.setData(ClipboardData(text: selection.text));
     selectableRegionState.clearSelection();
     _selectedText = '';
+    _reportSelectionActive(false);
   }
 
   /// 把 Flutter 选择纯文本解析为稳定字符范围并发送业务动作。
@@ -148,10 +153,16 @@ final class _ReaderSelectionRegionState extends State<ReaderSelectionRegion> {
     final ReaderTextSelection? selection = _resolveSelection();
     selectableRegionState.clearSelection();
     _selectedText = '';
+    _reportSelectionActive(false);
     if (selection == null) {
       return;
     }
     widget.onAction(selection, action);
+  }
+
+  /// 向最近的阅读短按区域同步选区事实，避免外层翻页手势抢占选择手柄。
+  void _reportSelectionActive(bool active) {
+    ReaderTapRegionSelectionScope.maybeOf(context)?.onSelectionChanged(active);
   }
 
   /// 在当前区域内查找最接近阅读位置的选区文本，忽略显示缩进和布局换行差异。

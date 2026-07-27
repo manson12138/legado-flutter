@@ -49,6 +49,9 @@ const String bookReaderContentLogTag = 'BOOK_READER_CONTENT';
 /// 服务器书源同步流程的统一诊断 Tag；不记录 Token、书源内容或远端地址。
 const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
 
+/// 游客 URL/邀请码书源导入的统一诊断 Tag；不记录输入、凭证、地址或书源正文。
+const String guestBookSourceImportLogTag = 'GUEST_BOOK_SOURCE_IMPORT';
+
 /// 内置书源启动导入流程的统一诊断 Tag；仅记录阶段、数量、耗时和错误类型。
 const String defaultBookSourceBootstrapLogTag = 'DEFAULT_BOOK_SOURCE_BOOTSTRAP';
 

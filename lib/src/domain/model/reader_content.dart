@@ -161,6 +161,9 @@ enum ReaderPageTurnStyle {
   /// Android 阅读器常用的覆盖翻页，目标页滑入并覆盖当前页。
   cover,
 
+  /// 对齐 Android `SimulationPageDelegate` 的贝塞尔仿真卷页。
+  simulation,
+
   /// 不使用动画，点击翻页时立即切换。
   none,
 
@@ -255,6 +258,7 @@ final class ReaderDisplayConfig {
     this.readerBrightness = 0.5,
     this.orientationMode = ReaderOrientationMode.portrait,
     this.fullScreen = false,
+    this.edgeSwipeToCloseEnabled = true,
   });
 
   /// 正文字号，单位为逻辑像素。
@@ -380,6 +384,9 @@ final class ReaderDisplayConfig {
   /// 是否隐藏系统状态栏和导航栏进入沉浸式全屏阅读；默认关闭，由用户在设置中主动开启。
   final bool fullScreen;
 
+  /// 是否允许从左右物理屏幕边缘向内滑动并保存进度后退出阅读器。
+  final bool edgeSwipeToCloseEnabled;
+
   /// 复制显示配置并只覆盖用户本次修改的字段。
   ReaderDisplayConfig copyWith({
     double? fontSize,
@@ -423,6 +430,7 @@ final class ReaderDisplayConfig {
     double? readerBrightness,
     ReaderOrientationMode? orientationMode,
     bool? fullScreen,
+    bool? edgeSwipeToCloseEnabled,
   }) {
     return ReaderDisplayConfig(
       fontSize: fontSize ?? this.fontSize,
@@ -466,6 +474,8 @@ final class ReaderDisplayConfig {
       readerBrightness: readerBrightness ?? this.readerBrightness,
       orientationMode: orientationMode ?? this.orientationMode,
       fullScreen: fullScreen ?? this.fullScreen,
+      edgeSwipeToCloseEnabled:
+          edgeSwipeToCloseEnabled ?? this.edgeSwipeToCloseEnabled,
     );
   }
 }

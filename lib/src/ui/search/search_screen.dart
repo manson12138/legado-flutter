@@ -963,6 +963,7 @@ final class _SearchResultPagesState extends State<_SearchResultPages> {
           child: _SearchResultPageSelector(
             pages: pages,
             selectedPage: _selectedPage,
+            pageController: _pageController,
             onSelected: _selectPage,
           ),
         ),
@@ -992,7 +993,12 @@ final class _SearchResultPagesState extends State<_SearchResultPages> {
 /// 搜索结果分类的轻量页面切换栏。
 final class _SearchResultPageSelector extends StatelessWidget {
   /// 创建分类切换栏。
-  const _SearchResultPageSelector({required this.pages, required this.selectedPage, required this.onSelected});
+  const _SearchResultPageSelector({
+    required this.pages,
+    required this.selectedPage,
+    required this.pageController,
+    required this.onSelected,
+  });
 
   /// 可展示页面。
   final List<_SearchResultPageData> pages;
@@ -1000,47 +1006,109 @@ final class _SearchResultPageSelector extends StatelessWidget {
   /// 当前页码。
   final int selectedPage;
 
+  /// 与结果 PageView 共用的控制器，用小数页位置驱动唯一选中背景。
+  final PageController pageController;
+
   /// 选择页面回调。
   final ValueChanged<int> onSelected;
 
   @override
   Widget build(BuildContext context) {
+    if (pages.isEmpty) {
+      return const SizedBox.shrink();
+    }
     /// 当前主题颜色。
     final ColorScheme colors = Theme.of(context).colorScheme;
-    return Row(
-      children: List<Widget>.generate(pages.length, (int index) {
-        /// 当前页数据。
-        final _SearchResultPageData page = pages[index];
-        /// 当前页是否被选择。
-        final bool selected = index == selectedPage;
-        return Expanded(
-          child: Semantics(
-            button: true,
-            selected: selected,
-            label: '${page.label}，${page.groups.length} 条结果',
-            child: InkWell(
-              borderRadius: BorderRadius.circular(RadiusToken.medium),
-              onTap: () => onSelected(index),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                curve: Curves.easeOut,
-                padding: const EdgeInsets.symmetric(vertical: SpacingToken.small),
-                decoration: BoxDecoration(
-                  color: selected ? colors.secondaryContainer : Colors.transparent,
-                  borderRadius: BorderRadius.circular(RadiusToken.medium),
-                ),
-                child: Text(
-                  '${page.label} ${page.groups.length}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+    return AnimatedBuilder(
+      animation: pageController,
+      builder: (BuildContext context, Widget? child) {
+        /// PageView 正在拖动时的小数页位置；控制器尚未挂载时使用稳定页码。
+        final double rawPagePosition = pageController.hasClients
+            ? pageController.page ?? selectedPage.toDouble()
+            : selectedPage.toDouble();
+        /// 防止“其他”页动态出现或消失时背景短暂移动到无效范围。
+        final double pagePosition = rawPagePosition
+            .clamp(0, pages.length - 1)
+            .toDouble();
+        return LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            /// 每个分类点击区和共享背景占据的固定宽度。
+            final double itemWidth = constraints.maxWidth / pages.length;
+            return SizedBox(
+              height: 40,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  Positioned(
+                    left: pagePosition * itemWidth,
+                    top: 0,
+                    bottom: 0,
+                    width: itemWidth,
+                    child: RepaintBoundary(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.secondaryContainer,
+                          borderRadius: BorderRadius.circular(
+                            RadiusToken.medium,
+                          ),
+                        ),
                       ),
-                ),
+                    ),
+                  ),
+                  Row(
+                    children: List<Widget>.generate(pages.length, (int index) {
+                      /// 当前页数据。
+                      final _SearchResultPageData page = pages[index];
+                      /// 当前页相对 PageView 连续位置的选中强度。
+                      final double selectedStrength =
+                          (1 - (pagePosition - index).abs())
+                              .clamp(0, 1)
+                              .toDouble();
+                      /// 文字颜色与共享背景同步插值，避免切页阈值处突然跳色。
+                      final Color foreground =
+                          Color.lerp(
+                            colors.onSurfaceVariant,
+                            colors.onSecondaryContainer,
+                            selectedStrength,
+                          ) ??
+                          colors.onSurfaceVariant;
+                      return Expanded(
+                        child: Semantics(
+                          button: true,
+                          selected: index == selectedPage,
+                          label:
+                              '${page.label}，${page.groups.length} 条结果',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(
+                              RadiusToken.medium,
+                            ),
+                            onTap: () => onSelected(index),
+                            child: Center(
+                              child: Text(
+                                '${page.label} ${page.groups.length}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelLarge
+                                    ?.copyWith(
+                                      color: foreground,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ],
               ),
-            ),
-          ),
+            );
+          },
         );
-      }),
+      },
     );
   }
 }

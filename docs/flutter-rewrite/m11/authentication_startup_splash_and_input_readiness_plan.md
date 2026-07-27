@@ -1,6 +1,10 @@
 # 认证启动页与输入就绪门控方案
 
-状态：`IN_PROGRESS`。启动页与认证输入门控代码已写入 Flutter，仍需 Android 与 iOS 真机验收；本方案不代表已通过真机验收。
+状态：`SUPERSEDED_IN_PART`。启动页与会话恢复时序继续使用；2026-07-27 非强制登录游客模式移除了根部认证表单和认证输入门控，登录注册表单只在用户从“我的”页主动进入时创建。仍需 Android 与 iOS 真机验收。
+
+最新启动与登录入口以
+[`optional_authentication_guest_mode_design.md`](./optional_authentication_guest_mode_design.md)
+为准；下文认证根 Navigator 与启动期输入门控内容仅保留为历史设计记录。
 
 ## 1. 目标与边界
 

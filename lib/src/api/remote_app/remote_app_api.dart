@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 
 import '../http/http_contract.dart';
+import '../../help/logging/app_logger.dart';
 import 'remote_app_service_config.dart';
 
 /// 远端 App API 的统一日志标识；不得记录密钥、签名、完整 URL 或响应正文。
@@ -262,6 +263,153 @@ final class RemoteAppApi {
     );
   }
 
+  /// 使用管理员邀请码兑换只存在于内存中的游客书源凭证。
+  ///
+  /// 原始邀请码只会进入本次签名请求体，不得由调用方记录或持久化。
+  Future<RemoteGuestBookSourceSession> createGuestBookSourceSession(
+    String invitationCode, {
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    /// 去除输入外围空白后的邀请码；内部字符由服务端做最终校验。
+    final String candidate = invitationCode.trim();
+    if (candidate.isEmpty) {
+      throw const FormatException('邀请码不能为空');
+    }
+    /// 游客凭证兑换接口固定路径，也是 HMAC canonical 的 URL_PATH。
+    const String path = '/api/v1/booksource/guest/session';
+    /// 实际发送且参与 HMAC 的原始 JSON 请求体。
+    final String body = jsonEncode(<String, Object?>{
+      'productId': _config.productId,
+      'invitationCode': candidate,
+    });
+    /// Unix 秒时间戳；服务端允许五分钟时钟偏差。
+    final String timestamp =
+        '${DateTime.now().millisecondsSinceEpoch ~/ 1000}';
+    /// 每次请求独立生成的随机 nonce，不写入客户端持久化。
+    final String nonce = base64UrlEncode(
+      List<int>.generate(18, (_) => Random.secure().nextInt(256)),
+    ).replaceAll('=', '');
+    /// 严格按 POST + URL_PATH + TIMESTAMP + NONCE + RAW_BODY 计算签名。
+    final String signature = Hmac(sha256, utf8.encode(_config.hmacSecret))
+        .convert(utf8.encode('POST$path$timestamp$nonce$body'))
+        .toString();
+    /// 统一信封中的游客会话数据。
+    final Object? data = await _executeEnvelope(
+      HttpRequest(
+        uri: _config.baseUri.replace(path: path),
+        method: HttpRequestMethod.post,
+        headers: <String, String>{
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-App-Timestamp': timestamp,
+          'X-App-Nonce': nonce,
+          'X-App-Signature': signature,
+        },
+        body: TextHttpRequestBody(body, contentType: 'application/json'),
+        acceptHttpErrorStatus: true,
+        cookieMode: HttpCookieMode.disabled,
+        logContext: guestBookSourceImportLogTag,
+      ),
+      cancellationToken: cancellationToken,
+    );
+    if (data is! Map<Object?, Object?> ||
+        data['guestToken'] is! String ||
+        data['expiresAt'] is! String) {
+      throw const UnifiedHttpException(
+        HttpFailureKind.decode,
+        '游客书源凭证响应无效',
+      );
+    }
+    /// 服务端返回的临时 Bearer 凭证。
+    final String guestToken = data['guestToken'] as String;
+    /// 服务端声明的游客凭证失效时间。
+    final DateTime? expiresAt =
+        DateTime.tryParse(data['expiresAt'] as String)?.toUtc();
+    if (guestToken.length != 43 ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(guestToken) ||
+        expiresAt == null ||
+        !expiresAt.isAfter(DateTime.now().toUtc())) {
+      throw const UnifiedHttpException(
+        HttpFailureKind.decode,
+        '游客书源凭证字段无效',
+      );
+    }
+    return RemoteGuestBookSourceSession(
+      guestToken: guestToken,
+      expiresAt: expiresAt,
+    );
+  }
+
+  /// 使用临时游客凭证按不可变书源 ID 游标获取一批启用书源。
+  Future<RemoteBookSourceCursorPage> fetchGuestBookSourceCursorPage(
+    String guestToken, {
+    int? beforeId,
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    if (guestToken.isEmpty) {
+      throw const FormatException('游客书源凭证不能为空');
+    }
+    if (beforeId != null && beforeId <= 0) {
+      throw const FormatException('游客书源同步游标必须为正整数');
+    }
+    /// 游客书源分页接口固定路径，也是 HMAC canonical 的 URL_PATH。
+    const String path = '/api/v1/booksource/guest/page';
+    /// 首次请求为空，后续只使用服务端上一批返回的游标。
+    final Map<String, String> query = <String, String>{};
+    if (beforeId != null) {
+      query['beforeId'] = '$beforeId';
+    }
+    /// Unix 秒时间戳；每个分页请求都重新计算。
+    final String timestamp =
+        '${DateTime.now().millisecondsSinceEpoch ~/ 1000}';
+    /// 每个分页请求独立生成的随机 nonce。
+    final String nonce = base64UrlEncode(
+      List<int>.generate(18, (_) => Random.secure().nextInt(256)),
+    ).replaceAll('=', '');
+    /// GET 无 RAW_BODY，查询参数不进入用户提供的 URL_PATH canonical。
+    final String signature = Hmac(sha256, utf8.encode(_config.hmacSecret))
+        .convert(utf8.encode('GET$path$timestamp$nonce'))
+        .toString();
+    /// 统一响应信封中的游客书源分页对象。
+    final Object? data = await _executeEnvelope(
+      HttpRequest(
+        uri: _config.baseUri.replace(path: path, queryParameters: query),
+        headers: <String, String>{
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $guestToken',
+          'X-App-Timestamp': timestamp,
+          'X-App-Nonce': nonce,
+          'X-App-Signature': signature,
+        },
+        acceptHttpErrorStatus: true,
+        cookieMode: HttpCookieMode.disabled,
+        logContext: guestBookSourceImportLogTag,
+      ),
+      cancellationToken: cancellationToken,
+    );
+    if (data is! Map<Object?, Object?> ||
+        data['items'] is! List<Object?> ||
+        data['total'] is! int ||
+        data['pageSize'] is! int ||
+        data['hasMore'] is! bool ||
+        (data['nextCursor'] != null && data['nextCursor'] is! int)) {
+      throw const UnifiedHttpException(
+        HttpFailureKind.decode,
+        '游客书源游标同步响应无效',
+      );
+    }
+    /// 后续批次使用的可空游标。
+    final int? nextCursor =
+        data['nextCursor'] == null ? null : data['nextCursor'] as int;
+    return RemoteBookSourceCursorPage(
+      items: List<Object?>.unmodifiable(data['items'] as List<Object?>),
+      total: data['total'] as int,
+      pageSize: data['pageSize'] as int,
+      nextCursor: nextCursor,
+      hasMore: data['hasMore'] as bool,
+    );
+  }
+
   /// 批量上报书源请求结果；调用方负责离线队列与失败重试。
   Future<void> reportBookSourceEvents(String token, List<Map<String, Object?>> events) async {
     if (events.isEmpty) { return; }
@@ -477,8 +625,14 @@ final class RemoteAppApi {
   }
 
   /// 执行请求并校验后端统一响应信封后返回未转换的 `data` 值。
-  Future<Object?> _executeEnvelope(HttpRequest request) async {
-    final HttpResponse response = await _httpClient.execute(request);
+  Future<Object?> _executeEnvelope(
+    HttpRequest request, {
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    final HttpResponse response = await _httpClient.execute(
+      request,
+      cancellationToken: cancellationToken,
+    );
     final Object? root;
     try { root = jsonDecode(utf8.decode(response.bytes)); } on FormatException { throw const UnifiedHttpException(HttpFailureKind.decode, '远端 App 服务响应格式无效'); }
     if (root is! Map<Object?, Object?> || root['code'] is! num) {
@@ -682,6 +836,21 @@ final class RemoteBookSourceCursorPage {
   final int? nextCursor;
   /// 是否仍有下一批数据；它是本轮完成的唯一判定条件。
   final bool hasMore;
+}
+
+/// 管理员邀请码兑换得到的内存态游客书源会话。
+final class RemoteGuestBookSourceSession {
+  /// 创建严格解码后的游客书源会话。
+  const RemoteGuestBookSourceSession({
+    required this.guestToken,
+    required this.expiresAt,
+  });
+
+  /// 最长一小时有效且只能访问游客书源分页接口的 Bearer 凭证。
+  final String guestToken;
+
+  /// 服务端声明的 UTC 失效时间。
+  final DateTime expiresAt;
 }
 
 /// 匿名埋点批次的幂等接收结果。

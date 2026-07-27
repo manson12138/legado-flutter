@@ -99,10 +99,12 @@ import 'default_book_source_bootstrapper.dart';
 import 'remote_app_bootstrapper.dart';
 import 'app_access_coordinator.dart';
 import 'bookshelf_layout_preferences.dart';
+import 'bookshelf_history_auto_refresh_service.dart';
 import 'bookshelf_history_startup_preloader.dart';
 import 'current_user_scope.dart';
 import 'search_preferences.dart';
 import 'remote_book_source_sync_service.dart';
+import 'guest_book_source_import_service.dart';
 
 /// 保存应用级共享依赖的组合根容器。
 ///
@@ -136,7 +138,9 @@ final class AppDependencies {
     required this.remoteAppConfigurationRepository,
     required this.authenticationGateway,
     required this.remoteBookSourceSyncService,
+    required this.guestBookSourceImportService,
     required this.bookshelfLayoutPreferences,
+    required this.bookshelfHistoryAutoRefreshService,
     required this.bookshelfHistoryStartupPreloader,
     required this.currentUserScope,
     required this.importBookSources,
@@ -193,7 +197,7 @@ final class AppDependencies {
     final ReplaceRuleDao replaceRuleDao = ReplaceRuleDao(database);
     /// 离线下载队列 DAO，只由 DownloadRepository 访问。
     final DownloadTaskDao downloadTaskDao = DownloadTaskDao(database);
-    /// 登录用户的本地数据作用域；只保存用户 ID，不保存认证凭据。
+    /// 游客或登录账号的本地数据作用域；只保存作用域 ID，不保存认证凭据。
     final CurrentUserScope currentUserScope = CurrentUserScope();
     /// 书籍、目录和进度共用的 Repository 实现。
     final BookRepository bookRepository = BookRepository(
@@ -214,7 +218,7 @@ final class AppDependencies {
       bookGroupDao,
       currentUserScope.requireUserId,
     );
-    /// 登录后主界面书架与历史的本地首快照预加载器。
+    /// 游客或账号主界面书架与历史的本地首快照预加载器。
     final BookshelfHistoryStartupPreloader bookshelfHistoryStartupPreloader =
         BookshelfHistoryStartupPreloader(
       bookDao: bookDao,
@@ -410,11 +414,34 @@ final class AppDependencies {
       standardService: standardBookSourceService,
       logger: logger,
     );
+    /// 首次成功阅读和启动自动更新共同复用的历史快照保存动作。
+    final RecordReadingHistoryUseCase recordReadingHistory =
+        RecordReadingHistoryUseCase(readingHistoryRepository);
+    /// 默认书源准备完成后在后台更新书架与历史目录，不阻塞启动首屏。
+    final BookshelfHistoryAutoRefreshService
+        bookshelfHistoryAutoRefreshService =
+        BookshelfHistoryAutoRefreshService(
+      startupPreloader: bookshelfHistoryStartupPreloader,
+      currentUserScope: currentUserScope,
+      detailService: bookDetailService,
+      saveBookshelfBook: addBookToBookshelf,
+      saveReadingHistory: recordReadingHistory,
+      cancellationTokenFactory: DioHttpCancellationToken.new,
+      logger: logger,
+    );
     /// 书源 JSON 导入 UseCase，供管理页面和启动内置书源导入共同复用。
     final ImportBookSourcesUseCase importBookSources =
         ImportBookSourcesUseCase(bookSourceRepository);
     /// 服务器同步每页成功后立即复用该导入事务，并以相同 URL 覆盖策略续传。
     remoteBookSourceSyncService.configurePageImporter(importBookSources);
+    /// 游客 URL/邀请码入口复用同一远程 API、文本解析器和书源导入事务。
+    final GuestBookSourceImportService guestBookSourceImportService =
+        GuestBookSourceImportService(
+          api: remoteAppApi,
+          importTextResolver: bookSourceImportTextResolver,
+          importBookSources: importBookSources,
+          logger: logger,
+        );
     /// 离线下载队列持久化 Repository。
     final DownloadRepository downloadRepository = DownloadRepository(
       downloadTaskDao,
@@ -486,7 +513,10 @@ final class AppDependencies {
       remoteAppConfigurationRepository: remoteAppConfigurationRepository,
       authenticationGateway: authenticationRepository,
       remoteBookSourceSyncService: remoteBookSourceSyncService,
+      guestBookSourceImportService: guestBookSourceImportService,
       bookshelfLayoutPreferences: BookshelfLayoutPreferences(cacheDao),
+      bookshelfHistoryAutoRefreshService:
+          bookshelfHistoryAutoRefreshService,
       bookshelfHistoryStartupPreloader: bookshelfHistoryStartupPreloader,
       currentUserScope: currentUserScope,
       importBookSources: importBookSources,
@@ -504,8 +534,7 @@ final class AppDependencies {
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
       saveReadingProgress: SaveReadingProgressUseCase(bookRepository),
       restoreReadingProgress: RestoreReadingProgressUseCase(bookRepository),
-      recordReadingHistory:
-          RecordReadingHistoryUseCase(readingHistoryRepository),
+      recordReadingHistory: recordReadingHistory,
       saveBookContentProcess: SaveBookContentProcessUseCase(readerRepository),
       standardBookSourceService: standardBookSourceService,
       bookDetailService: bookDetailService,
@@ -591,10 +620,16 @@ final class AppDependencies {
   /// App 登录及服务端书源同步服务。
   final RemoteBookSourceSyncService remoteBookSourceSyncService;
 
+  /// 游客通过 URL 或管理员邀请码导入书源的应用服务。
+  final GuestBookSourceImportService guestBookSourceImportService;
+
   /// 书架与阅读历史列表/网格模式的持久化偏好服务。
   final BookshelfLayoutPreferences bookshelfLayoutPreferences;
 
-  /// 登录后为书架和阅读历史页面准备本地首快照的单飞服务。
+  /// 启动后不阻塞首屏的书架与历史网络目录自动更新服务。
+  final BookshelfHistoryAutoRefreshService bookshelfHistoryAutoRefreshService;
+
+  /// 为当前游客或账号作用域准备书架和阅读历史本地首快照的单飞服务。
   final BookshelfHistoryStartupPreloader bookshelfHistoryStartupPreloader;
 
   /// 当前登录用户的本地书架与历史数据作用域。

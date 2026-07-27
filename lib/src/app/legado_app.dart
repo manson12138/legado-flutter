@@ -8,7 +8,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../domain/model/app_account.dart';
 import '../domain/gateway/authentication_gateway.dart';
 import '../ui/theme/app_theme.dart';
-import '../ui/authentication/authentication_route.dart';
 import 'app_dependencies.dart';
 import 'app_access_coordinator.dart';
 import 'app_error_boundary.dart';
@@ -16,6 +15,7 @@ import '../help/logging/app_logger.dart';
 import 'app_navigation_observer.dart';
 import 'app_route.dart';
 import 'app_router.dart';
+import 'current_user_scope.dart';
 import '../help/logging/app_log_manager.dart';
 import '../help/crash_reporting/crash_report_manager.dart';
 import '../api/remote_app/remote_app_service_config.dart';
@@ -128,7 +128,7 @@ final class _LegadoBootstrapAppState extends State<LegadoBootstrapApp> {
   }
 }
 
-/// 应用启动期间认证会话与输入交互的可见阶段。
+/// 应用启动期间认证会话恢复与业务界面开放的可见阶段。
 enum _AppStartupPhase {
   /// 根 Widget 已创建但尚未开始认证恢复。
   booting,
@@ -136,10 +136,10 @@ enum _AppStartupPhase {
   /// 正在从安全存储恢复或刷新认证会话。
   restoringAuthentication,
 
-  /// 认证门已挂载，正在等待 Navigator 与输入焦点树完成首帧稳定。
-  preparingAuthenticationInput,
+  /// 会话恢复已完成，正在等待业务 Navigator 首帧稳定。
+  preparingApplication,
 
-  /// 启动页已退出，认证表单可以接收焦点与提交。
+  /// 启动页已退出，游客或账号业务界面可以交互。
   ready,
 }
 
@@ -174,11 +174,11 @@ final class _LegadoAppState extends State<LegadoApp> {
     ThemeMode.system,
   );
 
-  /// 控制启动页、认证恢复和表单输入开放时机的应用级状态。
+  /// 控制启动页、认证恢复和业务界面开放时机的应用级状态。
   final ValueNotifier<_AppStartupPhase> _startupPhase =
       ValueNotifier<_AppStartupPhase>(_AppStartupPhase.booting);
 
-  /// 是否已经在登录成功后启动过主界面后台初始化，防止会话刷新重复触发导入和恢复。
+  /// 是否已经为当前游客或账号作用域启动后台初始化。
   bool _hasStartedMainBackgroundServices = false;
 
   /// 防止同一恢复结果被 ValueNotifier 重复发布时产生重复事件。
@@ -219,6 +219,9 @@ final class _LegadoAppState extends State<LegadoApp> {
     widget.dependencies.authenticationGateway.restoreResult.removeListener(
       _onAuthenticationRestoreResultChanged,
     );
+    widget.dependencies.bookshelfHistoryAutoRefreshService.cancel(
+      reason: 'app_disposed',
+    );
     widget.dependencies.currentUserScope.dispose();
     widget.dependencies.appAccessCoordinator.dispose();
     unawaited(widget.dependencies.adultContentGateway.dispose());
@@ -244,7 +247,7 @@ final class _LegadoAppState extends State<LegadoApp> {
       valueListenable: widget.dependencies.currentUserScope.userId,
       builder: (BuildContext context, int? userId, Widget? child) {
         return MaterialApp(
-          key: ValueKey<String>('authenticated-user-$userId'),
+          key: ValueKey<String>('local-user-scope-$userId'),
           title: 'Legado Flutter',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
@@ -285,44 +288,57 @@ final class _LegadoAppState extends State<LegadoApp> {
     );
   }
 
-  /// 会话恢复或用户登录成功后，才异步启动主界面所需的书源和下载后台工作。
+  /// 会话变化后切换游客或账号作用域，并为当前作用域启动本地后台工作。
   void _onAuthenticationSessionChanged() {
     final AppAuthenticationSession? session =
         widget.dependencies.authenticationGateway.session.value;
     final int? previousUserId =
         widget.dependencies.currentUserScope.userId.value;
-    final int? nextUserId = session?.account.id;
+    final int nextUserId =
+        session?.account.id ?? CurrentUserScope.guestUserId;
     if (previousUserId != nextUserId) {
+      widget.dependencies.bookshelfHistoryAutoRefreshService.cancel(
+        reason: 'authentication_session_changed',
+      );
       widget.dependencies.bookshelfHistoryStartupPreloader.invalidate();
-      if (previousUserId != null) {
-        widget.dependencies.downloadCoordinator.invalidateUserSession();
-      }
+      widget.dependencies.downloadCoordinator.invalidateUserSession();
       _hasStartedMainBackgroundServices = false;
     }
-    /// 会话变更必须先切换本地数据作用域，避免新页面读取到上一个账号的记录。
+    /// 会话变更必须先切换本地作用域，避免游客与账号页面相互读取记录。
     widget.dependencies.currentUserScope.applySession(session);
-    if (session == null ||
-        _hasStartedMainBackgroundServices) {
+    if (_hasStartedMainBackgroundServices) {
       return;
     }
     _hasStartedMainBackgroundServices = true;
-    /// 会话已存在或刚登录成功后，趁主界面启动遮罩可见预读本地书架与历史。
+    final int userId =
+        widget.dependencies.currentUserScope.requireUserId();
+    final int userGeneration =
+        widget.dependencies.currentUserScope.generation;
+    /// 启动遮罩可见期间预读当前游客或账号的本地书架与历史。
     /// 失败由页面原有数据库流兜底，不能影响认证、准入或主界面进入。
     unawaited(_preloadBookshelfHistory());
-    if (_isAdministrator(session)) {
-      widget.dependencies.logger.info(
-        tag: appAccessCheckLogTag,
-        message: 'stage=start_skipped reason=administrator_account',
-      );
-    } else {
-      /// 认证态建立后立即检查，不能等待书源导入和下载恢复完成。
-      widget.dependencies.appAccessCoordinator.start(
-        trigger: 'authenticated_session',
+    if (session != null) {
+      if (_isAdministrator(session)) {
+        widget.dependencies.logger.info(
+          tag: appAccessCheckLogTag,
+          message: 'stage=start_skipped reason=administrator_account',
+        );
+      } else {
+        /// 账号态建立后立即检查，不能等待书源导入和下载恢复完成。
+        widget.dependencies.appAccessCoordinator.start(
+          trigger: 'authenticated_session',
+        );
+      }
+      unawaited(
+        widget.dependencies.remoteBookSourceSyncService
+            .flushPendingAnalytics(),
       );
     }
-    unawaited(_initializeMainBackgroundServices(session));
     unawaited(
-      widget.dependencies.remoteBookSourceSyncService.flushPendingAnalytics(),
+      _initializeMainBackgroundServices(
+        userId: userId,
+        userGeneration: userGeneration,
+      ),
     );
   }
 
@@ -362,9 +378,10 @@ final class _LegadoAppState extends State<LegadoApp> {
   }
 
   /// 串行导入内置书源并恢复下载队列，避免两项工作并发占用同一 SQLite 连接。
-  Future<void> _initializeMainBackgroundServices(
-    AppAuthenticationSession session,
-  ) async {
+  Future<void> _initializeMainBackgroundServices({
+    required int userId,
+    required int userGeneration,
+  }) async {
     widget.dependencies.logger.info(
       tag: appStartupLogTag,
       message: 'stage=main_background_services_started',
@@ -387,8 +404,10 @@ final class _LegadoAppState extends State<LegadoApp> {
       );
       rethrow;
     } finally {
-      if (widget.dependencies.currentUserScope.userId.value ==
-          session.account.id) {
+      if (widget.dependencies.currentUserScope.matches(
+        expectedUserId: userId,
+        expectedGeneration: userGeneration,
+      )) {
         widget.dependencies.logger.info(
           tag: appStartupLogTag,
           message: 'stage=download_restore_started',
@@ -406,6 +425,15 @@ final class _LegadoAppState extends State<LegadoApp> {
             error: error,
           );
           rethrow;
+        } finally {
+          if (widget.dependencies.currentUserScope.matches(
+            expectedUserId: userId,
+            expectedGeneration: userGeneration,
+          )) {
+            unawaited(
+              widget.dependencies.bookshelfHistoryAutoRefreshService.start(),
+            );
+          }
         }
         widget.dependencies.logger.info(
           tag: appStartupLogTag,
@@ -420,12 +448,12 @@ final class _LegadoAppState extends State<LegadoApp> {
     return session.account.username == _administratorUsername;
   }
 
-  /// 恢复或刷新持久化安全会话，并在完成前保持认证门覆盖业务页面。
+  /// 恢复或刷新持久化安全会话；无会话时继续使用游客本地作用域。
   Future<void> _restoreAuthenticationSession() async {
     _startupPhase.value = _AppStartupPhase.restoringAuthentication;
     widget.dependencies.logger.info(
       tag: appStartupLogTag,
-      message: 'stage=authentication_gate_restore_started',
+      message: 'stage=authentication_restore_started',
     );
     try {
       final AuthenticationRestoreStart restore =
@@ -441,7 +469,11 @@ final class _LegadoAppState extends State<LegadoApp> {
         },
       );
     } finally {
-      await _prepareAuthenticationInput();
+      /// 没有可恢复会话时 session 不会发生变化，需要在此显式启动游客作用域。
+      if (mounted) {
+        _onAuthenticationSessionChanged();
+      }
+      await _finishStartup();
     }
   }
 
@@ -458,15 +490,15 @@ final class _LegadoAppState extends State<LegadoApp> {
     }
   }
 
-  /// 在认证门已挂载后等待首帧和下一事件循环，再开放输入框以避免冷启动首击过早请求系统键盘。
-  Future<void> _prepareAuthenticationInput() async {
+  /// 等待业务 Navigator 首帧并满足最短品牌页时间后开放游客或账号主界面。
+  Future<void> _finishStartup() async {
     if (!mounted) {
       return;
     }
-    _startupPhase.value = _AppStartupPhase.preparingAuthenticationInput;
+    _startupPhase.value = _AppStartupPhase.preparingApplication;
     widget.dependencies.logger.info(
       tag: appStartupLogTag,
-      message: 'stage=authentication_input_preparing',
+      message: 'stage=application_ready_preparing',
     );
     await _waitForNextFrame();
     await Future<void>.delayed(Duration.zero);
@@ -482,11 +514,11 @@ final class _LegadoAppState extends State<LegadoApp> {
     _startupPhase.value = _AppStartupPhase.ready;
     widget.dependencies.logger.info(
       tag: appStartupLogTag,
-      message: 'stage=authentication_gate_restore_finished input_ready=true',
+      message: 'stage=authentication_restore_finished app_ready=true',
     );
   }
 
-  /// 等待下一绘制帧结束，确保认证根 Navigator、Overlay 和 FocusScope 已完成挂载。
+  /// 等待下一绘制帧结束，确保业务 Navigator 和 Overlay 已完成挂载。
   Future<void> _waitForNextFrame() {
     final Completer<void> completer = Completer<void>();
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
@@ -540,7 +572,6 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
       }
       return Stack(children: <Widget>[
         _AppStartupGate(
-          dependencies: widget.dependencies,
           startupPhase: widget.startupPhase,
           child: child ?? const SizedBox.shrink(),
         ),
@@ -712,55 +743,29 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
   }
 }
 
-/// 在应用根部协调启动页、未登录认证门和已登录业务路由的可见性状态。
+/// 在应用根部协调启动页与游客/账号业务路由的可见性状态。
 final class _AppStartupGate extends StatelessWidget {
-  /// 创建应用根部认证门。
+  /// 创建不强制登录的应用启动门。
   const _AppStartupGate({
-    required this.dependencies,
     required this.startupPhase,
     required this.child,
   });
 
-  /// 创建认证 UI 与读取会话所需的应用依赖。
-  final AppDependencies dependencies;
-
-  /// 启动页和认证输入就绪状态。
+  /// 启动页和业务界面就绪状态。
   final ValueListenable<_AppStartupPhase> startupPhase;
 
-  /// 已登录时允许显示的业务路由树。
+  /// 游客与已登录账号共用的业务路由树。
   final Widget child;
 
-  /// 认证门始终先挂载在启动页下方；启动页结束前，认证输入框保持不可交互。
+  /// 业务树始终挂载在启动页下方，会话恢复结束前由启动页阻止交互。
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<_AppStartupPhase>(
     valueListenable: startupPhase,
     builder: (BuildContext context, _AppStartupPhase phase, Widget? child) => Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        ValueListenableBuilder(
-        valueListenable: dependencies.authenticationGateway.session,
-        builder: (BuildContext context, Object? session, Widget? child) {
-          if (session == null) {
-            /// 根部认证门不在主 Navigator 路由树中，因此提供独立 Navigator，同时拥有稳定的 Overlay 与焦点作用域。
-            return Navigator(
-              /// 初始 Route 会缓存其 builder 参数；输入门从关闭变为开放时必须重建，
-              /// 否则认证页会永久持有首次创建时的 `inputEnabled=false`。
-              key: ValueKey<bool>(phase == _AppStartupPhase.ready),
-              onGenerateRoute: (RouteSettings settings) => MaterialPageRoute<void>(
-                settings: settings,
-                builder: (BuildContext context) => AuthenticationRoute(
-                  dependencies: dependencies,
-                  embedded: true,
-                  inputEnabled: phase == _AppStartupPhase.ready,
-                ),
-              ),
-            );
-          }
-          return child ?? const SizedBox.shrink();
-        },
-        child: child,
-        ),
-        /// 启动遮罩淡出而不是直接移除，让最低展示时长结束后平滑过渡到认证页或主界面。
+        child ?? const SizedBox.shrink(),
+        /// 启动遮罩淡出而不是直接移除，让最低展示时长结束后平滑过渡到游客或账号主界面。
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
           switchInCurve: Curves.easeOut,
@@ -777,7 +782,7 @@ final class _AppStartupGate extends StatelessWidget {
   );
 }
 
-/// 冷启动期间覆盖认证门的极简启动页，只展示品牌图标且不暴露可点击的表单控件。
+/// 冷启动期间覆盖业务树的极简启动页，只展示品牌图标。
 final class _AppStartupSplash extends StatelessWidget {
   /// 创建居中展示应用图标的启动页。
   const _AppStartupSplash({super.key});

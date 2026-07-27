@@ -162,7 +162,7 @@ final class AppRouter {
         /// 详情页必须由搜索页携带候选来源参数。
         final Object? arguments = settings.arguments;
         if (arguments is BookInfoRouteArguments) {
-          return MaterialPageRoute<void>(
+          return MaterialPageRoute<ReaderRouteArguments?>(
             settings: settings,
             builder: (BuildContext context) {
               return BookInfoRoute(dependencies: dependencies, arguments: arguments);

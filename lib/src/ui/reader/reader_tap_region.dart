@@ -9,11 +9,15 @@ final class ReaderTapRegion extends StatefulWidget {
   const ReaderTapRegion({
     required this.onTapUp,
     required this.child,
+    this.onSelectionActiveChanged,
     super.key,
   });
 
   /// 确认是短按后回传松手位置，供阅读器按左右区域分派动作。
   final ValueChanged<Offset> onTapUp;
+
+  /// 向外层翻页手势报告原生文字选区是否激活。
+  final ValueChanged<bool>? onSelectionActiveChanged;
 
   /// 被监听的正文、分页器或滚动列表。
   final Widget child;
@@ -58,7 +62,11 @@ final class _ReaderTapRegionState extends State<ReaderTapRegion> {
 
   /// 同步内部正文 SelectionArea 的选区状态，不触发无关的组件重建。
   void _updateSelectionActive(bool value) {
+    if (_selectionActive == value) {
+      return;
+    }
     _selectionActive = value;
+    widget.onSelectionActiveChanged?.call(value);
   }
 
   /// 记录主按键按下的初始位置与时间。

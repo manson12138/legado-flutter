@@ -127,15 +127,21 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         chapters: final List<BookChapter> chapters,
         chapterIndex: final int chapterIndex,
       ):
+        /// 本次阅读所需的完整路由参数；阅读器来源详情页会把它返回给原阅读路由。
+        final ReaderRouteArguments readerArguments = ReaderRouteArguments(
+          bookUrl: book.bookUrl,
+          initialChapterIndex: chapterIndex,
+          initialBook: book,
+          initialChapters: chapters,
+          entry: 'detail',
+        );
+        if (widget.arguments.returnReaderResult) {
+          Navigator.of(context).pop(readerArguments);
+          return;
+        }
         Navigator.of(context).pushNamed(
           AppRoute.reader,
-          arguments: ReaderRouteArguments(
-            bookUrl: book.bookUrl,
-            initialChapterIndex: chapterIndex,
-            initialBook: book,
-            initialChapters: chapters,
-            entry: 'detail',
-          ),
+          arguments: readerArguments,
         );
       case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openFullSourceChange(bookUrl));
@@ -242,6 +248,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
           selectedBook: searchBook,
           analyticsEntry: widget.arguments.analyticsEntry,
           initialMessage: resultMessage,
+          returnReaderResult: widget.arguments.returnReaderResult,
         ),
       ),
     );

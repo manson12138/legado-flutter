@@ -40,6 +40,31 @@ final class BookSourceImportTextResolver {
   /// 【扫码诊断日志】不输出二维码原文、URL、Header 或 Cookie 的日志边界。
   final AppLogger _logger;
 
+  /// 下载游客手动输入的绝对 HTTP/HTTPS 地址并返回待确认 JSON 文本。
+  ///
+  /// 该入口复用扫码地址的网络、大小和字符集约束，但不会保存输入或响应诊断文件。
+  Future<String> resolveRemoteUrl(
+    String sourceUrl, {
+    HttpCancellationToken? cancellationToken,
+  }) async {
+    /// 去除外围空白后的绝对地址候选。
+    final String candidate = sourceUrl.trim();
+    /// 只允许带有效 host 的 HTTP/HTTPS 地址。
+    final Uri? uri = Uri.tryParse(candidate);
+    if (uri == null ||
+        (uri.scheme.toLowerCase() != 'http' &&
+            uri.scheme.toLowerCase() != 'https') ||
+        uri.host.trim().isEmpty) {
+      throw const FormatException('请输入有效的 HTTP 或 HTTPS 书源地址');
+    }
+    return _downloadSourceText(
+      uri,
+      cancellationToken: cancellationToken,
+      logMarker: guestBookSourceImportLogTag,
+      saveDiagnostics: false,
+    );
+  }
+
   /// 返回可交给书源导入对话框预览的 JSON 文本。
   ///
   /// 普通文本原样返回；绝对 HTTP/HTTPS 地址会先下载。其他协议不执行，避免二维码触发
@@ -180,19 +205,21 @@ final class BookSourceImportTextResolver {
   Future<String> _downloadSourceText(
     Uri uri, {
     HttpCancellationToken? cancellationToken,
+    String logMarker = bookSourceQrScanLogTag,
+    bool saveDiagnostics = true,
   }) async {
     /// 小写协议名，用于阻止 file、content、intent 等非网络协议。
     final String scheme = uri.scheme.toLowerCase();
     if (scheme != 'http' && scheme != 'https') {
       _logger.warning(
         message:
-            '$bookSourceQrScanLogTag stage=http_rejected reason=unsupported_scheme scheme=$scheme',
+            '$logMarker stage=http_rejected reason=unsupported_scheme scheme=$scheme',
       );
       throw const FormatException('二维码书源地址只支持 HTTP 或 HTTPS');
     }
     if (uri.host.trim().isEmpty) {
       _logger.warning(
-        message: '$bookSourceQrScanLogTag stage=http_rejected reason=empty_host',
+        message: '$logMarker stage=http_rejected reason=empty_host',
       );
       throw const FormatException('二维码中的书源地址无效');
     }
@@ -203,7 +230,7 @@ final class BookSourceImportTextResolver {
     // 【扫码诊断日志】不记录 host、完整 URL 或请求 Header。
     _logger.debug(
       message:
-          '$bookSourceQrScanLogTag stage=http_started scheme=$scheme withoutUa=$requestWithoutUserAgent '
+          '$logMarker stage=http_started scheme=$scheme withoutUa=$requestWithoutUserAgent '
           'connectTimeoutMs=15000 receiveTimeoutMs=30000 totalTimeoutMs=30000 '
           'followRedirects=true maxRedirects=10 cookieMode=disabled',
     );
@@ -218,27 +245,29 @@ final class BookSourceImportTextResolver {
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 30),
         totalTimeout: const Duration(seconds: 30),
-        // 【扫码诊断日志】让 Dio 全链路日志归入扫码书源统一 Tag。
-        logContext: bookSourceQrScanLogTag,
+        // 让 Dio 全链路日志归入当前书源导入统一 Tag，并隐藏地址和正文。
+        logContext: logMarker,
       ),
       cancellationToken: cancellationToken,
     );
     if (response.bytes.length > _maximumResponseBytes) {
       _logger.warning(
         message:
-            '$bookSourceQrScanLogTag stage=http_rejected status=${response.statusCode} bytes=${response.bytes.length} reason=too_large',
+            '$logMarker stage=http_rejected status=${response.statusCode} bytes=${response.bytes.length} reason=too_large',
       );
       throw const FormatException('远程书源内容超过 5 MiB，已停止导入');
     }
 
-    /// 【扫码诊断文件】根据响应媒体类型选择便于直接查看的文件扩展名。
-    final String responseFileName = _diagnosticResponseFileName(response);
-    // 【扫码诊断文件】在任何业务解码前保存 Dio 返回的响应字节，便于确认实际内容。
-    await _saveDiagnosticBytes(
-      kind: 'http_response',
-      fileName: responseFileName,
-      bytes: response.bytes,
-    );
+    if (saveDiagnostics) {
+      /// 【扫码诊断文件】根据响应媒体类型选择便于直接查看的文件扩展名。
+      final String responseFileName = _diagnosticResponseFileName(response);
+      // 【扫码诊断文件】在任何业务解码前保存 Dio 返回的响应字节，便于确认实际内容。
+      await _saveDiagnosticBytes(
+        kind: 'http_response',
+        fileName: responseFileName,
+        bytes: response.bytes,
+      );
+    }
 
     /// 按响应字符集和压缩格式解码后的书源文本。
     final DecodedHttpResponse decodedResponse = _responseDecoder.decode(response);
@@ -246,11 +275,11 @@ final class BookSourceImportTextResolver {
     final String resolvedText = decodedResponse.text.trim();
     _logger.debug(
       message:
-          '$bookSourceQrScanLogTag stage=http_finished status=${response.statusCode} bytes=${response.bytes.length} charset=${decodedResponse.charset} chars=${resolvedText.length}',
+          '$logMarker stage=http_finished status=${response.statusCode} bytes=${response.bytes.length} charset=${decodedResponse.charset} chars=${resolvedText.length}',
     );
     if (resolvedText.isEmpty) {
       _logger.warning(
-        message: '$bookSourceQrScanLogTag stage=http_rejected reason=empty_response',
+        message: '$logMarker stage=http_rejected reason=empty_response',
       );
       throw const FormatException('远程书源内容为空');
     }

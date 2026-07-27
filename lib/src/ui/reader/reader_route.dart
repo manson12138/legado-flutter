@@ -8,11 +8,14 @@ import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
+import '../../domain/model/book_search.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/reader_content.dart';
+import '../../domain/model/search_book.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../../platform/reader_platform_service.dart';
+import '../book_info/book_info_contract.dart';
 import '../change_chapter_source/change_chapter_source_contract.dart';
 import '../change_chapter_source/change_chapter_source_screen.dart';
 import '../change_chapter_source/change_chapter_source_view_model.dart';
@@ -96,6 +99,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   /// 是否已经打开换源页面，阻止重复 Effect 创建多条路由。
   bool _openingChangeSource = false;
 
+  /// 是否已经打开书籍详情页，阻止重复 Effect 创建多条路由。
+  bool _openingBookInfo = false;
+
   /// 创建 ViewModel、订阅 Effect 并开始初始化。
   @override
   void initState() {
@@ -149,6 +155,8 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed &&
+        !_openingChangeSource &&
+        !_openingBookInfo &&
         _viewModel.state.loadState == ReaderLoadState.ready) {
       /// 回到前台后重新应用 iOS 系统栏与常亮设置，阅读位置仍由现有 Dart 状态保持。
       unawaited(
@@ -253,6 +261,8 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         unawaited(_shareContentImage(imageUrl));
       case OpenReaderBookSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openChangeSource(bookUrl));
+      case OpenReaderBookInfoEffect(book: final Book book):
+        unawaited(_openBookInfo(book));
     }
   }
 
@@ -280,6 +290,82 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           ..showSnackBar(const SnackBar(content: Text('正文图片分享失败')));
       }
     }
+  }
+
+  /// 暂时退出阅读系统模式并打开当前书籍详情；详情返回阅读参数时替换旧阅读路由。
+  Future<void> _openBookInfo(Book book) async {
+    if (_openingBookInfo) {
+      return;
+    }
+    _openingBookInfo = true;
+    _stopSystemInfoTimer();
+    await _platformService.exitReader();
+    if (!mounted) {
+      _openingBookInfo = false;
+      return;
+    }
+    /// 详情页复用搜索候选模型，保留当前来源的完整书籍元数据。
+    final SearchBook searchBook = _toSearchBook(book);
+    /// 详情页主动阅读时返回的新阅读路由参数；普通返回时为空。
+    final ReaderRouteArguments? result =
+        await Navigator.of(context).pushNamed<ReaderRouteArguments>(
+      AppRoute.bookInfo,
+      arguments: BookInfoRouteArguments(
+        group: BookSearchResultGroup(
+          key: '${book.name.length}:${book.name}${book.author}',
+          books: <SearchBook>[searchBook],
+        ),
+        selectedBook: searchBook,
+        returnReaderResult: true,
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    _openingBookInfo = false;
+    if (result == null) {
+      await _platformService.enterReader(
+        keepScreenOn: _viewModel.state.config.keepScreenOn,
+        useSystemBrightness: _viewModel.state.config.useSystemBrightness,
+        readerBrightness: _viewModel.state.config.readerBrightness,
+        orientationMode: _viewModel.state.config.orientationMode,
+        fullScreen: _viewModel.state.config.fullScreen,
+      );
+      if (!mounted) {
+        return;
+      }
+      _startSystemInfoTimer();
+      _keyboardFocusNode.requestFocus();
+      return;
+    }
+    /// 用户在详情页选择阅读后替换当前旧阅读器，避免叠出重复阅读路由。
+    unawaited(
+      Navigator.of(context).pushReplacementNamed<void, void>(
+        AppRoute.reader,
+        arguments: result,
+      ),
+    );
+  }
+
+  /// 把当前书籍事实转换为详情页需要的单来源候选。
+  SearchBook _toSearchBook(Book book) {
+    return SearchBook(
+      bookUrl: book.bookUrl,
+      origin: book.origin,
+      originName: book.originName,
+      name: book.name,
+      author: book.author,
+      type: book.type,
+      kind: book.kind,
+      coverUrl: book.coverUrl,
+      intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      tocUrl: book.tocUrl,
+      time: book.lastCheckTime,
+      variable: book.variable,
+      originOrder: book.originOrder,
+    );
   }
 
   /// 暂时退出阅读系统模式，换源成功后用新主键替换当前阅读路由。
@@ -653,6 +739,9 @@ final class _ReaderTocSheetBodyState extends State<_ReaderTocSheetBody> {
   /// 是否显示卷标题。
   bool _showVolumes = true;
 
+  /// 是否按倒序显示目录；每次打开目录时默认正序。
+  bool _descending = false;
+
   /// 目录滚动控制器。
   late final ScrollController _scrollController;
 
@@ -684,14 +773,39 @@ final class _ReaderTocSheetBodyState extends State<_ReaderTocSheetBody> {
           ListTile(
             title: const Text('目录'),
             subtitle: Text('当前第 ${widget.state.currentChapterIndex + 1} 章'),
-            trailing: FilterChip(
-              selected: _showVolumes,
-              label: const Text('卷标题'),
-              onSelected: (bool selected) {
-                setState(() {
-                  _showVolumes = selected;
-                });
-              },
+            trailing: Tooltip(
+              message: _descending ? '切换为正序' : '切换为倒序',
+              child: TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _descending = !_descending;
+                  });
+                  _scheduleCurrentChapterPosition();
+                },
+                icon: Icon(_descending ? Icons.arrow_upward : Icons.arrow_downward),
+                label: Text(_descending ? '倒序' : '正序'),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              SpacingToken.medium,
+              0,
+              SpacingToken.medium,
+              SpacingToken.small,
+            ),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: FilterChip(
+                selected: _showVolumes,
+                label: const Text('卷标题'),
+                onSelected: (bool selected) {
+                  setState(() {
+                    _showVolumes = selected;
+                  });
+                  _scheduleCurrentChapterPosition();
+                },
+              ),
             ),
           ),
           const Divider(height: 1),
@@ -739,11 +853,34 @@ final class _ReaderTocSheetBodyState extends State<_ReaderTocSheetBody> {
     return (visibleIndex * _rowExtent - _rowExtent * 2).clamp(0, double.infinity).toDouble();
   }
 
+  /// 在目录选项变化后的下一帧把当前章节重新定位到可见区域。
+  void _scheduleCurrentChapterPosition() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted || !_scrollController.hasClients) {
+        return;
+      }
+      /// 当前选项下的可见目录索引。
+      final List<int> indexes = _visibleChapterIndexes(widget.state);
+      /// 当前章节在可见目录中的位置。
+      final int visibleIndex = indexes.indexOf(widget.state.currentChapterIndex);
+      if (visibleIndex < 0) {
+        return;
+      }
+      /// 预留两行上方上下文，并限制在当前列表的有效滚动范围内。
+      final double targetOffset = (visibleIndex * _rowExtent - _rowExtent * 2)
+          .clamp(0, _scrollController.position.maxScrollExtent)
+          .toDouble();
+      _scrollController.jumpTo(targetOffset);
+    });
+  }
+
   /// 根据卷标题开关生成可见目录索引。
   List<int> _visibleChapterIndexes(ReaderUiState state) {
     /// 可见目录索引。
     final List<int> indexes = <int>[];
-    for (int index = 0; index < state.chapters.length; index += 1) {
+    for (int offset = 0; offset < state.chapters.length; offset += 1) {
+      /// 根据当前顺序把可见位置映射到原始章节索引。
+      final int index = _descending ? state.chapters.length - 1 - offset : offset;
       /// 当前章节。
       final BookChapter chapter = state.chapters[index];
       if (_showVolumes || !chapter.isVolume || index == state.currentChapterIndex) {

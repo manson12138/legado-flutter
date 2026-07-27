@@ -35,6 +35,7 @@ final class BookInfoRouteArguments {
     required this.selectedBook,
     this.initialMessage,
     this.analyticsEntry,
+    this.returnReaderResult = false,
   });
   /// 同名作者候选来源组。
   final BookSearchResultGroup group;
@@ -46,6 +47,9 @@ final class BookInfoRouteArguments {
 
   /// 详情打开入口；仅允许 `search` 或 `bookshelf`，其他内部跳转保持为空。
   final String? analyticsEntry;
+
+  /// 是否由已有阅读器打开；为 true 时阅读动作把新阅读参数返回给下层阅读器。
+  final bool returnReaderResult;
 }
 
 /// 详情、目录、书架和换源入口的不可变页面状态。

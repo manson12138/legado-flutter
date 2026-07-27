@@ -190,6 +190,13 @@ final class _ReaderTopBar extends StatelessWidget {
               ),
             ),
             IconButton(
+              onPressed: state.book == null
+                  ? null
+                  : () => onIntent(const OpenReaderBookInfoIntent()),
+              icon: const Icon(Icons.info_outline),
+              tooltip: '书籍详情',
+            ),
+            IconButton(
               onPressed: state.loadState == ReaderLoadState.loading
                   ? null
                   : () => onIntent(const RetryReaderChapterIntent()),

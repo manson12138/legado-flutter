@@ -1,6 +1,6 @@
 # 小说正文阅读界面 UI 重构优先级
 
-> 文档状态：`IN_PROGRESS / P0～P4 可落地项已写入 Flutter，标题排版、段落排版、长章节首屏增量分页和后台续算已接入；单章换源和离线下载管理已接入，等待用户运行验证`  
+> 文档状态：`IN_PROGRESS / P0～P4 可落地项与仿真翻页已写入 Flutter，标题排版、段落排版、长章节首屏增量分页和后台续算已接入；单章换源和离线下载管理已接入，等待用户运行验证`  
 > 创建日期：2026-07-16  
 > 适用范围：Flutter `ui/reader/` 小说正文阅读界面对齐 Android `ui/book/read/` 当前阅读界面。  
 > 不包含范围：书籍详情页、书架页、搜索页、漫画阅读器完整能力、音频书完整能力、RSS 阅读器、原 Android 代码修改。
@@ -25,7 +25,8 @@
 - 阅读页从默认 `AppScaffold` 的 AppBar/BottomAppBar 改为全屏 `Scaffold` + `Stack`；
 - 正文区域保持原有连续滚动和分页渲染逻辑，点击正文中央仍发送 `ToggleReaderMenuIntent`；
 - 新增 `ReaderMenuOverlay`，用 `AnimatedOpacity` 和 `IgnorePointer` 实现阅读菜单浮层显示/隐藏；
-- 顶部浮层提供返回、当前章节/书名、刷新当前章、整书换源和更多菜单；
+- 顶部浮层提供返回、当前章节/书名、书籍详情、刷新当前章、整书换源和更多菜单；
+- 书籍详情入口先保存稳定进度并暂退阅读系统模式；普通返回恢复原阅读器，在详情里阅读或选择章节会替换原阅读路由，不叠加第二个阅读器；
 - 本地书会禁用整书换源入口，章节加载中会禁用刷新入口；
 - 更多菜单保留添加书签、目录和显示设置三个 P0 高频动作；
 - 底部浮层提供章节进度滑杆、当前章节/总章节、章节内百分比、上一章、目录、书签、设置和下一章；
@@ -177,6 +178,45 @@ AI 未运行 `flutter analyze`、`dart analyze`、测试、构建、格式化或
 
 AI 未运行 `flutter analyze`、`dart analyze`、测试、构建或应用启动；是否可用以用户运行结果为准。
 
+2026-07-27 已继续写入仿真翻页专项，修改范围为
+`lib/src/domain/model/reader_content.dart`、
+`lib/src/ui/reader/reader_settings_sheet.dart`、
+`lib/src/ui/reader/reader_tap_region.dart`、
+`lib/src/ui/reader/reader_selection_region.dart`、
+`lib/src/ui/reader/reader_page_layout.dart`、
+`lib/src/ui/reader/reader_screen.dart`、
+`lib/src/ui/reader/reader_contract.dart` 和新增
+`lib/src/ui/reader/reader_simulation_page_turn.dart`：
+
+- 设置面板新增“仿真”，选择后自动切换左右分页，配置继续使用现有全局 JSON 缓存；
+- 纯 Flutter 贝塞尔几何对齐 Android `SimulationPageDelegate` 的页角、卷页正面、反射页背和折痕阴影；
+- 单章内支持拖动跟手、距离/速度提交、取消回弹、点击区域和音量键程序化翻页；
+- 文字选区激活时禁用外层横向翻页，翻页完成后清除旧选区；
+- 后台完整分页在卷页期间完成时延迟到动画结束后应用，继续受布局签名和代次约束；
+- 跨章节切换容器支持目标正文加载完成后的仿真衔接；
+- 未新增第三方依赖、平台桥、数据库字段或路由。
+
+AI 未运行分析、测试、构建、格式化或应用启动；实现等待 Android/iOS 真机验证，专项记录见
+[`02_simulation_page_turn_implementation_plan.md`](./02_simulation_page_turn_implementation_plan.md)。
+
+2026-07-27 已继续写入双侧边缘滑动退出，修改范围为
+`lib/src/domain/model/reader_content.dart`、
+`lib/src/data/repository/reader_repository.dart`、
+`lib/src/ui/reader/reader_settings_sheet.dart`、
+`lib/src/ui/reader/reader_screen.dart`、
+`lib/src/ui/reader/reader_view_model.dart` 和新增
+`lib/src/ui/reader/reader_edge_swipe_exit.dart`：
+
+- 左边缘向右、右边缘向左达到距离或速度阈值后发送统一关闭 Intent，保存进度后退出；
+- 非边缘起手立即退出边缘手势竞争，现有覆盖、仿真、滑动、分页和滚动逻辑保持不变；
+- 使用祖先级边缘限定识别器，边缘轻点、长按和纵向移动仍可交给正文手势；
+- 设置面板“系统”页新增默认开启的全局开关，旧配置缺少字段时按开启恢复；
+- 菜单或 Sheet 活跃时禁用边缘退出，关闭流程增加单飞保护，避免与系统返回重复关闭；
+- 拖动时只绘制小范围返回箭头反馈，不平移正文、不创建全屏位图或额外平台能力。
+
+AI 未运行分析、测试、构建、格式化或应用启动；实现等待 Android/iOS 真机验证，专项记录见
+[`03_reader_edge_swipe_exit_design.md`](./03_reader_edge_swipe_exit_design.md)。
+
 ## 1. Android 对照范围
 
 本次优先级盘点以以下 Android 阅读器文件为基准：
@@ -292,7 +332,7 @@ P3 目标：补齐 Android 阅读器最有体感差异的翻页和排版功能�
 
 | 项目 | Android 对照 | Flutter 目标 | 前置依赖 |
 |---|---|---|---|
-| 翻页动画 | `page/delegate/*`、`PageAnimConfigSheet` | 覆盖、滑动、无动画、滚动优先；仿真翻页单独评估 | 需要 Flutter 分页引擎稳定和手势冲突处理。 |
+| 翻页动画 | `page/delegate/*`、`PageAnimConfigSheet` | 覆盖、仿真、滑动、无动画；仿真代码已写入待真机验证 | 复用稳定分页引擎，并显式处理文字选区冲突。 |
 | 页眉页脚 | `HeaderFooterPage` | 书名、章节、时间、电量、百分比、页码，可配置位置和颜色 | 需要 P0 状态信息和分页/滚动统一渲染。 |
 | 高级文字效果 | `ShadowSetSheet`、`UnderlineConfigSheet`、`HighlightRuleConfigSheet` | 阴影、下划线、正则高亮规则 | 需要富文本分段渲染，不应把整章变成单个超大 TextSpan。 |
 | 背景图和样式导入导出 | `BgTextConfigSheet`、`ReadStyleImageSelected` | 背景图选择、样式导入导出 | 需要文件选择、沙盒复制和跨平台路径策略。 |
@@ -369,7 +409,7 @@ P3/P4 验收：
 - 超长章节首屏增量分页已接入，但仍需真机确认极端单段长文本、低端设备帧率和后台续算期间的触摸手感；
 - 点击区域和音量键翻页配置已接入，但仍需真机确认 Android/iOS 是否都能收到系统音量键事件；真正文本选择、双击、鼠标滚轮和更复杂自定义动作尚未完成；
 - 页眉页脚已接入时间、电量、书名、章节名、页码和章节百分比，但仍缺分割线、位置、字体、颜色和更多 Android 细项配置；
-- 复杂翻页尚缺仿真、淡入和滚动动画，宽屏双页尚未接入；基础方向锁定已接入但仍需真机确认；
+- 仿真翻页代码已写入待真机确认，复杂翻页仍缺淡入和滚动动画，宽屏双页尚未接入；基础方向锁定已接入但仍需真机确认；
 - 背景图、字体文件选择、样式导入导出、正则高亮和菜单按钮排序尚未完成；
 - 当前书全文搜索、书签 Markdown 导出、刷新后续/全部章节和完整替换规则列表已接入；内容处理编辑器尚未完成。
 

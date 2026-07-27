@@ -27,6 +27,12 @@ final class AppDioLogInterceptor extends Interceptor {
     'passwd',
     'username',
     'publickey',
+    'invitationcode',
+    'invitation_code',
+    'guesttoken',
+    'guest_token',
+    'nonce',
+    'signature',
     'secret',
     'api_key',
     'apikey',
@@ -35,41 +41,43 @@ final class AppDioLogInterceptor extends Interceptor {
   /// 应用组合根注入的统一日志器。
   final AppLogger _logger;
 
-  /// 在请求发出前记录配置；扫码请求只记录安全摘要，不输出地址或正文。
+  /// 在请求发出前记录配置；敏感书源导入请求只记录安全摘要。
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     options.extra[_requestStartedAtKey] = DateTime.now().microsecondsSinceEpoch;
-    /// 【扫码诊断日志】当前请求是否属于扫码添加书源链路。
-    final bool isBookSourceQrRequest = _isBookSourceQrRequest(options);
-    /// 【扫码诊断日志】当前请求使用的 Logcat Tag。
+    /// 当前请求是否属于不能输出地址或正文的书源导入链路。
+    final bool isSensitiveBookSourceImport =
+        _isSensitiveBookSourceImportRequest(options);
+    /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(options);
-    /// 【扫码诊断日志】当前请求的稳定业务前缀。
+    /// 当前请求的稳定业务前缀。
     final String requestLogPrefix = _requestLogPrefix(options);
     _logger.info(
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_request\n'
           'method=${options.method}\n'
-          'target=${_formatRequestTarget(options.uri, hideAddress: isBookSourceQrRequest)}\n'
+          'target=${_formatRequestTarget(options.uri, hideAddress: isSensitiveBookSourceImport)}\n'
           'connectTimeoutMs=${options.connectTimeout?.inMilliseconds ?? -1}\n'
           'sendTimeoutMs=${options.sendTimeout?.inMilliseconds ?? -1}\n'
           'receiveTimeoutMs=${options.receiveTimeout?.inMilliseconds ?? -1}\n'
           'followRedirects=${options.followRedirects}\n'
           'maxRedirects=${options.maxRedirects}\n'
           'responseType=${options.responseType.name}\n'
-          'headers=${isBookSourceQrRequest ? _formatRequestHeaderSummary(options.headers) : _formatJson(_sanitizeMap(options.headers))}\n'
-          'body=${isBookSourceQrRequest ? _formatBodySummary(options.data, options.contentType) : _isAuthenticationPayloadRequest(options) ? '<redacted authentication body>' : _formatRequestBody(options.data, options.contentType)}',
+          'headers=${isSensitiveBookSourceImport ? _formatRequestHeaderSummary(options.headers) : _formatJson(_sanitizeMap(options.headers))}\n'
+          'body=${isSensitiveBookSourceImport ? _formatBodySummary(options.data, options.contentType) : _isAuthenticationPayloadRequest(options) ? '<redacted authentication body>' : _formatRequestBody(options.data, options.contentType)}',
     );
     handler.next(options);
   }
 
-  /// 在响应返回后记录状态和耗时；扫码请求只记录安全摘要。
+  /// 在响应返回后记录状态和耗时；敏感书源导入请求只记录安全摘要。
   @override
   void onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) {
     /// 【扫码诊断日志】Dio 返回的原始请求配置。
     final RequestOptions request = response.requestOptions;
-    /// 【扫码诊断日志】当前请求是否属于扫码添加书源链路。
-    final bool isBookSourceQrRequest = _isBookSourceQrRequest(request);
-    /// 【扫码诊断日志】当前请求使用的 Logcat Tag。
+    /// 当前请求是否属于不能输出地址或正文的书源导入链路。
+    final bool isSensitiveBookSourceImport =
+        _isSensitiveBookSourceImportRequest(request);
+    /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(request);
     /// 【扫码诊断日志】当前请求的稳定业务前缀。
     final String requestLogPrefix = _requestLogPrefix(request);
@@ -77,13 +85,13 @@ final class AppDioLogInterceptor extends Interceptor {
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_response\n'
           'method=${request.method}\n'
-          'target=${_formatRequestTarget(response.realUri, hideAddress: isBookSourceQrRequest)}\n'
+          'target=${_formatRequestTarget(response.realUri, hideAddress: isSensitiveBookSourceImport)}\n'
           'status=${response.statusCode ?? 0}\n'
           'durationMs=${_durationMilliseconds(request)}\n'
           'redirectCount=${response.redirects.length}\n'
           'contentType=${response.headers.value('content-type') ?? 'none'}\n'
-          'headers=${isBookSourceQrRequest ? _formatResponseHeaderSummary(response.headers.map) : _formatJson(_sanitizeResponseHeaders(response.headers.map))}\n'
-          'body=${isBookSourceQrRequest ? _formatBodySummary(response.data, response.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response.data, response.headers.value('content-type'))}',
+          'headers=${isSensitiveBookSourceImport ? _formatResponseHeaderSummary(response.headers.map) : _formatJson(_sanitizeResponseHeaders(response.headers.map))}\n'
+          'body=${isSensitiveBookSourceImport ? _formatBodySummary(response.data, response.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response.data, response.headers.value('content-type'))}',
     );
     handler.next(response);
   }
@@ -97,9 +105,10 @@ final class AppDioLogInterceptor extends Interceptor {
     final Response<dynamic>? response = error.response;
     /// 【扫码诊断日志】Dio 包装的底层传输异常。
     final Object? transportError = error.error;
-    /// 【扫码诊断日志】当前请求是否属于扫码添加书源链路。
-    final bool isBookSourceQrRequest = _isBookSourceQrRequest(request);
-    /// 【扫码诊断日志】当前请求使用的 Logcat Tag。
+    /// 当前请求是否属于不能输出地址或正文的书源导入链路。
+    final bool isSensitiveBookSourceImport =
+        _isSensitiveBookSourceImportRequest(request);
+    /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(request);
     /// 【扫码诊断日志】当前请求的稳定业务前缀。
     final String requestLogPrefix = _requestLogPrefix(request);
@@ -107,7 +116,7 @@ final class AppDioLogInterceptor extends Interceptor {
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_error\n'
           'method=${request.method}\n'
-          'target=${_formatRequestTarget(request.uri, hideAddress: isBookSourceQrRequest)}\n'
+          'target=${_formatRequestTarget(request.uri, hideAddress: isSensitiveBookSourceImport)}\n'
           'dioType=${error.type.name}\n'
           'cause=${_formatTransportError(transportError)}\n'
           'responsePresent=${response != null}\n'
@@ -119,18 +128,33 @@ final class AppDioLogInterceptor extends Interceptor {
           'followRedirects=${request.followRedirects}\n'
           'maxRedirects=${request.maxRedirects}\n'
           'redirectCount=${response?.redirects.length ?? 0}\n'
-          'responseHeaders=${isBookSourceQrRequest ? _formatResponseHeaderSummary(response?.headers.map ?? const <String, List<String>>{}) : _formatJson(_sanitizeResponseHeaders(response?.headers.map ?? const <String, List<String>>{}))}\n'
-          'responseBody=${isBookSourceQrRequest ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
-      // 【扫码诊断日志】扫码请求不附加可能包含目标地址的原始异常文本。
-      error: isBookSourceQrRequest ? null : transportError ?? error,
+          'responseHeaders=${isSensitiveBookSourceImport ? _formatResponseHeaderSummary(response?.headers.map ?? const <String, List<String>>{}) : _formatJson(_sanitizeResponseHeaders(response?.headers.map ?? const <String, List<String>>{}))}\n'
+          'responseBody=${isSensitiveBookSourceImport ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
+      // 敏感书源导入请求不附加可能包含地址或凭证的原始异常文本。
+      error: isSensitiveBookSourceImport ? null : transportError ?? error,
       stackTrace: error.stackTrace,
     );
     handler.next(error);
   }
 
-  /// 【扫码诊断日志】判断请求是否属于二维码添加书源业务。
+  /// 判断请求是否属于必须隐藏地址、请求体和响应体的书源导入业务。
+  bool _isSensitiveBookSourceImportRequest(RequestOptions request) {
+    /// 网络请求携带的业务日志上下文。
+    final Object? context =
+        request.extra[networkRequestLogContextExtraKey];
+    return context == bookSourceQrScanLogTag ||
+        context == guestBookSourceImportLogTag;
+  }
+
+  /// 判断请求是否属于二维码添加书源业务。
   bool _isBookSourceQrRequest(RequestOptions request) {
     return request.extra[networkRequestLogContextExtraKey] == bookSourceQrScanLogTag;
+  }
+
+  /// 判断请求是否属于游客 URL/邀请码书源导入业务。
+  bool _isGuestBookSourceImportRequest(RequestOptions request) {
+    return request.extra[networkRequestLogContextExtraKey] ==
+        guestBookSourceImportLogTag;
   }
 
   /// 判断是否为携带账户凭据或公钥的认证请求；这类请求的正文禁止输出。
@@ -140,17 +164,30 @@ final class AppDioLogInterceptor extends Interceptor {
         path == '/api/v1/auth/login' ||
         path == '/api/v1/auth/register' ||
         path == '/api/v1/auth/refresh' ||
-        path == '/api/v1/auth/logout';
+        path == '/api/v1/auth/logout' ||
+        path == '/api/v1/booksource/guest/session';
   }
 
-  /// 【扫码诊断日志】根据业务上下文选择稳定的 Logcat Tag。
+  /// 根据业务上下文选择稳定的 Logcat Tag。
   String _requestLogTag(RequestOptions request) {
-    return _isBookSourceQrRequest(request) ? bookSourceQrLogTag : networkLogTag;
+    if (_isBookSourceQrRequest(request)) {
+      return bookSourceQrLogTag;
+    }
+    if (_isGuestBookSourceImportRequest(request)) {
+      return guestBookSourceImportLogTag;
+    }
+    return networkLogTag;
   }
 
-  /// 【扫码诊断日志】返回用于串联二维码添加书源全链路的稳定前缀。
+  /// 返回用于串联书源导入全链路的稳定前缀。
   String _requestLogPrefix(RequestOptions request) {
-    return _isBookSourceQrRequest(request) ? '$bookSourceQrScanLogTag ' : '';
+    if (_isBookSourceQrRequest(request)) {
+      return '$bookSourceQrScanLogTag ';
+    }
+    if (_isGuestBookSourceImportRequest(request)) {
+      return '$guestBookSourceImportLogTag ';
+    }
+    return '';
   }
 
   /// 【扫码诊断日志】格式化请求目标；扫码请求只保留结构，不输出地址正文。

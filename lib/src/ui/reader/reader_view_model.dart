@@ -175,6 +175,9 @@ final class ReaderViewModel {
   /// 是否已释放页面资源。
   bool _disposed = false;
 
+  /// 是否已经进入保存并退出流程，防止系统返回和边缘手势重复关闭路由。
+  bool _closing = false;
+
   /// 首次打开结果是否已经记录，避免重试和切章重复产生 reader_opened。
   bool _initialOpenReported = false;
 
@@ -276,6 +279,8 @@ final class ReaderViewModel {
         _coordinator.handleMemoryPressure();
       case OpenReaderBookSourceChangeIntent():
         unawaited(_requestBookSourceChange());
+      case OpenReaderBookInfoIntent():
+        unawaited(_requestBookInfo());
       case ShareReaderContentImageIntent(imageUrl: final String imageUrl):
         _shareContentImage(imageUrl);
       case ApplyReaderSelectionIntent(
@@ -1707,6 +1712,22 @@ final class ReaderViewModel {
     _effectController.add(OpenReaderBookSourceChangeEffect(book.bookUrl));
   }
 
+  /// 立即收起菜单并保存稳定进度，再请求路由打开书籍详情。
+  Future<void> _requestBookInfo() async {
+    /// 当前书籍事实。
+    final Book? book = _state.book;
+    if (book == null) {
+      _effectController.add(const ShowReaderMessageEffect('当前书籍信息尚未就绪'));
+      return;
+    }
+    _emit(_state.copyWith(menuVisible: false));
+    await _saveProgress();
+    if (_disposed) {
+      return;
+    }
+    _effectController.add(OpenReaderBookInfoEffect(book));
+  }
+
   /// 把单章换源候选正文写入目标章节永久缓存，使其不再受 7 天普通缓存有效期约束；
   /// 目标章节正是当前可见章节时清除内存缓存并立即重新加载，让新正文马上显示。
   Future<void> _saveChapterSourceContent(
@@ -1765,7 +1786,14 @@ final class ReaderViewModel {
 
   /// 正常退出前立即保存进度并恢复平台窗口状态。
   Future<void> _close() async {
+    if (_closing || _disposed) {
+      return;
+    }
+    _closing = true;
     await _saveProgress();
+    if (_disposed) {
+      return;
+    }
     _effectController.add(const ExitReaderSystemEffect());
     _effectController.add(const CloseReaderRouteEffect());
   }

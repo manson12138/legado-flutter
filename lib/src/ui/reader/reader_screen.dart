@@ -5,9 +5,11 @@ import '../../domain/model/reader_content.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
+import 'reader_edge_swipe_exit.dart';
 import 'reader_menu_overlay.dart';
 import 'reader_page_layout.dart';
 import 'reader_selection_region.dart';
+import 'reader_simulation_page_turn.dart';
 import 'reader_tap_region.dart';
 
 /// 只消费 ReaderUiState、布局控制器并发送 Intent 的无状态小说阅读页面。
@@ -42,14 +44,20 @@ final class ReaderScreen extends StatelessWidget {
       body: Stack(
         children: <Widget>[
           Positioned.fill(
-            child: ColoredBox(
-              color: backgroundColor,
-              child: SafeArea(
-                left: avoidsSystemBars,
-                top: avoidsSystemBars,
-                right: avoidsSystemBars,
-                bottom: avoidsSystemBars,
-                child: _buildBody(context),
+            child: ReaderEdgeSwipeExitRegion(
+              enabled: state.config.edgeSwipeToCloseEnabled &&
+                  !state.menuVisible &&
+                  state.activeSheet == null,
+              onExit: () => onIntent(const CloseReaderIntent()),
+              child: ColoredBox(
+                color: backgroundColor,
+                child: SafeArea(
+                  left: avoidsSystemBars,
+                  top: avoidsSystemBars,
+                  right: avoidsSystemBars,
+                  bottom: avoidsSystemBars,
+                  child: _buildBody(context),
+                ),
               ),
             ),
           ),
@@ -107,10 +115,12 @@ final class ReaderScreen extends StatelessWidget {
       state: state,
       onIntent: onIntent,
     );
-    /// 当前是否启用 Android 语义的左右覆盖翻页。
-    final bool usesHorizontalCover =
+    /// 当前是否启用由阅读器接管的左右覆盖或仿真翻页。
+    final bool usesCustomHorizontalTurn =
         state.config.readingMode == ReaderReadingMode.horizontalPaging &&
-        state.config.pageTurnStyle == ReaderPageTurnStyle.cover;
+        (state.config.pageTurnStyle == ReaderPageTurnStyle.cover ||
+            state.config.pageTurnStyle ==
+                ReaderPageTurnStyle.simulation);
     /// 当前阅读模式对应的正文组件。
     final Widget readableContent;
     if (state.config.readingMode == ReaderReadingMode.continuous) {
@@ -119,10 +129,12 @@ final class ReaderScreen extends StatelessWidget {
         scrollController: scrollController,
         onIntent: onIntent,
       );
-    } else if (usesHorizontalCover) {
-      readableContent = _ReaderChapterCoverSwitch(
+    } else if (usesCustomHorizontalTurn) {
+      readableContent = _ReaderChapterPageTurnSwitch(
         chapterUrl: content.chapterUrl,
         direction: state.chapterTransitionDirection,
+        pageTurnStyle: state.config.pageTurnStyle,
+        paperColor: Color(state.config.backgroundColorValue),
         child: pagedContent,
       );
     } else {
@@ -148,12 +160,14 @@ final class ReaderScreen extends StatelessWidget {
   }
 }
 
-/// 在相邻章节之间保持旧页静止，并让新章节从左右方向覆盖进入。
-final class _ReaderChapterCoverSwitch extends StatefulWidget {
-  /// 创建跨章节覆盖切换容器。
-  const _ReaderChapterCoverSwitch({
+/// 在相邻章节之间保持旧页，并按当前覆盖或仿真策略进入新章节。
+final class _ReaderChapterPageTurnSwitch extends StatefulWidget {
+  /// 创建跨章节自定义翻页切换容器。
+  const _ReaderChapterPageTurnSwitch({
     required this.chapterUrl,
     required this.direction,
+    required this.pageTurnStyle,
+    required this.paperColor,
     required this.child,
   });
 
@@ -163,17 +177,24 @@ final class _ReaderChapterCoverSwitch extends StatefulWidget {
   /// 章节切换方向；正数移走旧章进入下一章，负数从左侧覆盖进入上一章。
   final int direction;
 
+  /// 当前左右分页使用的覆盖或仿真动画策略。
+  final ReaderPageTurnStyle pageTurnStyle;
+
+  /// 当前阅读纸张颜色，用于仿真页背着色。
+  final Color paperColor;
+
   /// 当前章节已经完成分页的正文组件。
   final Widget child;
 
   /// 创建章节覆盖切换的瞬时动画状态。
   @override
-  State<_ReaderChapterCoverSwitch> createState() =>
-      _ReaderChapterCoverSwitchState();
+  State<_ReaderChapterPageTurnSwitch> createState() =>
+      _ReaderChapterPageTurnSwitchState();
 }
 
 /// 保存跨章节动画期间的新旧正文组件，不把动画进度写入业务状态。
-final class _ReaderChapterCoverSwitchState extends State<_ReaderChapterCoverSwitch>
+final class _ReaderChapterPageTurnSwitchState
+    extends State<_ReaderChapterPageTurnSwitch>
     with SingleTickerProviderStateMixin {
   /// 驱动新章节覆盖旧章节的动画控制器。
   late final AnimationController _controller;
@@ -205,7 +226,7 @@ final class _ReaderChapterCoverSwitchState extends State<_ReaderChapterCoverSwit
 
   /// 接收新章节时保留旧组件，当前章内部状态变化时只更新现有组件。
   @override
-  void didUpdateWidget(covariant _ReaderChapterCoverSwitch oldWidget) {
+  void didUpdateWidget(covariant _ReaderChapterPageTurnSwitch oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.chapterUrl == _currentChapterUrl) {
       _currentChild = widget.child;
@@ -247,6 +268,21 @@ final class _ReaderChapterCoverSwitchState extends State<_ReaderChapterCoverSwit
       child: AnimatedBuilder(
         animation: _controller,
         builder: (BuildContext context, Widget? child) {
+          if (widget.pageTurnStyle == ReaderPageTurnStyle.simulation) {
+            return ExcludeSemantics(
+              child: IgnorePointer(
+                child: ReaderSimulationPageTurnFrame(
+                  currentPage: previousChild,
+                  targetPage: _currentChild,
+                  direction: _direction,
+                  progress: _controller.value,
+                  touchYRatio: 0.86,
+                  useUpperCorner: false,
+                  paperColor: widget.paperColor,
+                ),
+              ),
+            );
+          }
           /// 当前可用页面宽度。
           final double width = MediaQuery.sizeOf(context).width;
           if (_direction > 0) {

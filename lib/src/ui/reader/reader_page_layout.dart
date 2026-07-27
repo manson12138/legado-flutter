@@ -10,6 +10,7 @@ import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
 import 'reader_selection_region.dart';
+import 'reader_simulation_page_turn.dart';
 import 'reader_tap_region.dart';
 
 /// 标记分页行使用章节标题、正文或仅占据垂直空间。
@@ -819,6 +820,24 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   /// 本次横向手势是否成功取得覆盖翻页控制权。
   bool _horizontalDragEnabled = false;
 
+  /// 当前分页正文是否存在有效原生文字选区；激活时禁止横向翻页抢占手柄拖动。
+  bool _selectionActive = false;
+
+  /// 仿真卷页触点在页面高度中的受控比例。
+  double _simulationTouchYRatio = 0.86;
+
+  /// 仿真下一页是否从右上角卷起；上一页固定从左下侧展开。
+  bool _simulationUpperCorner = false;
+
+  /// 卷页手势期间暂缓应用的完整分页结果。
+  List<ReaderTextPage>? _pendingCompletePages;
+
+  /// 暂缓分页结果所属的布局签名。
+  int? _pendingCompleteSignature;
+
+  /// 暂缓分页结果所属的布局代次。
+  int? _pendingCompleteGeneration;
+
   /// 初始化覆盖翻页动画控制器。
   @override
   void initState() {
@@ -929,6 +948,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         if (_layoutSignature != layoutSignature) {
           _layoutSignature = layoutSignature;
           _layoutGeneration += 1;
+          _pendingCompletePages = null;
+          _pendingCompleteSignature = null;
+          _pendingCompleteGeneration = null;
+          _coverController.stop();
+          _horizontalDragEnabled = false;
+          _coverFromIndex = null;
+          _coverToIndex = null;
           /// 当前签名已经缓存的完整分页结果。
           final List<ReaderTextPage>? cachedPages =
               ReaderPageLayoutCache.get(layoutSignature);
@@ -985,27 +1011,56 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           }
         }
         _restorePage(widget.state);
-        if (_usesCoverPaging) {
+        if (_usesInteractiveHorizontalPaging) {
           return ReaderTapRegion(
             onTapUp: (Offset position) {
-              _handleTap(position.dx, constraints.maxWidth);
+              _handleTap(
+                position.dx,
+                position.dy,
+                constraints.maxWidth,
+                constraints.maxHeight,
+              );
             },
+            onSelectionActiveChanged: _handleSelectionActiveChanged,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: (DragStartDetails details) {
-                if (widget.state.menuVisible) {
-                  widget.onIntent(const HideReaderMenuIntent());
-                }
-                _handleHorizontalDragStart(constraints.maxWidth);
-              },
-              onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-              onHorizontalDragEnd: _handleHorizontalDragEnd,
-              child: _buildCoverPager(
-                content,
-                textStyle,
-                titleStyle,
-                contentWidth,
-              ),
+              onHorizontalDragStart: _selectionActive
+                  ? null
+                  : (DragStartDetails details) {
+                      if (widget.state.menuVisible) {
+                        widget.onIntent(const HideReaderMenuIntent());
+                      }
+                      _handleHorizontalDragStart(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                        details,
+                      );
+                    },
+              onHorizontalDragUpdate: _selectionActive
+                  ? null
+                  : (DragUpdateDetails details) {
+                      _handleHorizontalDragUpdate(
+                        details,
+                        constraints.maxHeight,
+                      );
+                    },
+              onHorizontalDragEnd:
+                  _selectionActive ? null : _handleHorizontalDragEnd,
+              onHorizontalDragCancel:
+                  _selectionActive ? null : _handleHorizontalDragCancel,
+              child: _usesSimulationPaging
+                  ? _buildSimulationPager(
+                      content,
+                      textStyle,
+                      titleStyle,
+                      contentWidth,
+                    )
+                  : _buildCoverPager(
+                      content,
+                      textStyle,
+                      titleStyle,
+                      contentWidth,
+                    ),
             ),
           );
         }
@@ -1027,8 +1082,14 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             },
             child: ReaderTapRegion(
             onTapUp: (Offset position) {
-              _handleTap(position.dx, constraints.maxWidth);
+              _handleTap(
+                position.dx,
+                position.dy,
+                constraints.maxWidth,
+                constraints.maxHeight,
+              );
             },
+            onSelectionActiveChanged: _handleSelectionActiveChanged,
             child: PageView.builder(
               controller: _pageController,
               scrollDirection:
@@ -1073,10 +1134,18 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     /// 当前逻辑按键。
     final LogicalKeyboardKey logicalKey = event.logicalKey;
     if (logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+      if (_usesSimulationPaging) {
+        _simulationTouchYRatio = 0.86;
+        _simulationUpperCorner = false;
+      }
       _performTapAction(ReaderTapAction.previousPage);
       return;
     }
     if (logicalKey == LogicalKeyboardKey.audioVolumeDown) {
+      if (_usesSimulationPaging) {
+        _simulationTouchYRatio = 0.86;
+        _simulationUpperCorner = false;
+      }
       _performTapAction(ReaderTapAction.nextPage);
     }
   }
@@ -1085,6 +1154,19 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
   bool get _usesCoverPaging {
     return widget.state.config.readingMode == ReaderReadingMode.horizontalPaging &&
         widget.state.config.pageTurnStyle == ReaderPageTurnStyle.cover;
+  }
+
+  /// 当前是否使用贝塞尔仿真卷页呈现。
+  bool get _usesSimulationPaging {
+    return widget.state.config.readingMode ==
+            ReaderReadingMode.horizontalPaging &&
+        widget.state.config.pageTurnStyle ==
+            ReaderPageTurnStyle.simulation;
+  }
+
+  /// 当前是否使用由阅读器自己接管的水平跟手动画，而不是 PageView 默认手势。
+  bool get _usesInteractiveHorizontalPaging {
+    return _usesCoverPaging || _usesSimulationPaging;
   }
 
   /// 在首批页面绘制后继续测量完整章节，并只回填仍匹配当前签名的结果。
@@ -1151,27 +1233,73 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
             _layoutGeneration != generation) {
           return;
         }
-        /// 当前可见页面的稳定字符位置，用于完整分页回填后保持阅读位置。
-        final int visibleOffset = _pages.isEmpty
-            ? (widget.state.anchor?.characterOffset ?? 0)
-            : _pages[_currentPageIndex.clamp(0, _pages.length - 1).toInt()]
-                .startOffset;
-        setState(() {
-          _pages = completePages;
-          _isLayoutComplete = true;
-          _currentPageIndex = _pageIndexForOffset(visibleOffset);
-          _selectionEpoch += 1;
-          _coverFromIndex = null;
-          _coverToIndex = null;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
-          if (!mounted || !_pageController.hasClients) {
-            return;
-          }
-          _pageController.jumpToPage(_currentPageIndex);
-        });
+        if (_horizontalDragEnabled || _coverController.isAnimating) {
+          _pendingCompletePages = completePages;
+          _pendingCompleteSignature = signature;
+          _pendingCompleteGeneration = generation;
+          return;
+        }
+        _applyCompletePagination(
+          completePages,
+          signature: signature,
+          generation: generation,
+        );
       });
     });
+  }
+
+  /// 应用仍属于当前布局代次的完整分页，并按可见字符位置保持页码稳定。
+  void _applyCompletePagination(
+    List<ReaderTextPage> completePages, {
+    required int signature,
+    required int generation,
+  }) {
+    if (!mounted ||
+        _layoutSignature != signature ||
+        _layoutGeneration != generation) {
+      return;
+    }
+    /// 当前可见页面的稳定字符位置，用于完整分页回填后保持阅读位置。
+    final int visibleOffset = _pages.isEmpty
+        ? (widget.state.anchor?.characterOffset ?? 0)
+        : _pages[_currentPageIndex.clamp(0, _pages.length - 1).toInt()]
+            .startOffset;
+    setState(() {
+      _pages = completePages;
+      _isLayoutComplete = true;
+      _currentPageIndex = _pageIndexForOffset(visibleOffset);
+      _selectionEpoch += 1;
+      _selectionActive = false;
+      _coverFromIndex = null;
+      _coverToIndex = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+      if (!mounted || !_pageController.hasClients) {
+        return;
+      }
+      _pageController.jumpToPage(_currentPageIndex);
+    });
+  }
+
+  /// 在卷页提交或回弹结束后应用暂缓的完整分页结果。
+  void _applyPendingCompletePagination() {
+    /// 等待应用的完整页集。
+    final List<ReaderTextPage>? completePages = _pendingCompletePages;
+    /// 页集所属布局签名。
+    final int? signature = _pendingCompleteSignature;
+    /// 页集所属布局代次。
+    final int? generation = _pendingCompleteGeneration;
+    _pendingCompletePages = null;
+    _pendingCompleteSignature = null;
+    _pendingCompleteGeneration = null;
+    if (completePages == null || signature == null || generation == null) {
+      return;
+    }
+    _applyCompletePagination(
+      completePages,
+      signature: signature,
+      generation: generation,
+    );
   }
 
   /// 构建覆盖翻页内容栈。
@@ -1249,6 +1377,70 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     );
   }
 
+  /// 构建贝塞尔仿真卷页内容栈；空闲时只保留当前可选择正文页。
+  Widget _buildSimulationPager(
+    ReaderChapterContent content,
+    TextStyle textStyle,
+    TextStyle titleStyle,
+    double contentWidth,
+  ) {
+    if (_pages.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    /// 仿真动画开始前的当前页面索引。
+    final int baseIndex = (_coverFromIndex ?? _currentPageIndex)
+        .clamp(0, _pages.length - 1)
+        .toInt();
+    /// 仿真动画的目标页面索引。
+    final int? targetIndex = _coverToIndex;
+    if (targetIndex == null ||
+        targetIndex < 0 ||
+        targetIndex >= _pages.length) {
+      return _buildPage(
+        content,
+        textStyle,
+        titleStyle,
+        contentWidth,
+        baseIndex,
+        _pages[baseIndex],
+      );
+    }
+    /// 动画期间当前页禁用重复选区和语义节点。
+    final Widget currentPage = _buildPage(
+      content,
+      textStyle,
+      titleStyle,
+      contentWidth,
+      baseIndex,
+      _pages[baseIndex],
+      selectionEnabled: false,
+    );
+    /// 动画期间目标页禁用重复选区和语义节点。
+    final Widget targetPage = _buildPage(
+      content,
+      textStyle,
+      titleStyle,
+      contentWidth,
+      targetIndex,
+      _pages[targetIndex],
+      selectionEnabled: false,
+    );
+    return AnimatedBuilder(
+      animation: _coverController,
+      builder: (BuildContext context, Widget? child) {
+        return ReaderSimulationPageTurnFrame(
+          currentPage: currentPage,
+          targetPage: targetPage,
+          direction: _coverDirection,
+          progress: _coverController.value,
+          touchYRatio: _simulationTouchYRatio,
+          useUpperCorner: _simulationUpperCorner,
+          paperColor: Color(widget.state.config.backgroundColorValue),
+        );
+      },
+    );
+  }
+
   /// 为移动纸张添加覆盖边缘阴影，强化页面压在另一页上方的层次。
   Widget _buildCoverShadow(Widget page) {
     return DecoratedBox(
@@ -1272,8 +1464,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     TextStyle titleStyle,
     double contentWidth,
     int index,
-    ReaderTextPage page,
-  ) {
+    ReaderTextPage page, {
+    bool selectionEnabled = true,
+  }) {
     return ColoredBox(
       color: Color(widget.state.config.backgroundColorValue),
       child: Center(
@@ -1322,6 +1515,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
                     textStyle,
                     titleStyle,
                     index,
+                    selectionEnabled: selectionEnabled,
                   ),
                 ),
                 if (widget.state.config.showHeaderFooter)
@@ -1367,8 +1561,9 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     ReaderTextPage page,
     TextStyle bodyStyle,
     TextStyle titleStyle,
-    int pageIndex,
-  ) {
+    int pageIndex, {
+    required bool selectionEnabled,
+  }) {
     /// 当前页是否包含至少一行可选择正文。
     final bool hasSelectableBody = page.lines.any(
       (ReaderPageLine line) =>
@@ -1463,7 +1658,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         );
       }).toList(growable: false),
     );
-    if (!hasSelectableBody) {
+    if (!hasSelectableBody || !selectionEnabled) {
       return lines;
     }
     return ReaderSelectionRegion(
@@ -1534,12 +1729,22 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     setState(() {
       _currentPageIndex = index;
       _selectionEpoch += 1;
+      _selectionActive = false;
     });
     widget.onIntent(UpdateReaderScrollIntent(_pages[index].startOffset));
   }
 
   /// 按用户配置把正文点击区域映射为阅读动作。
-  void _handleTap(double x, double width) {
+  void _handleTap(
+    double x,
+    double y,
+    double width,
+    double height,
+  ) {
+    if (_usesSimulationPaging && height > 0) {
+      _simulationTouchYRatio = (y / height).clamp(0.01, 0.99).toDouble();
+      _simulationUpperCorner = _simulationTouchYRatio < 1 / 3;
+    }
     /// 当前左侧点击区域宽度。
     final double leftWidth = width * widget.state.config.leftTapWidthRatio;
     /// 当前右侧点击区域起点。
@@ -1553,6 +1758,16 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       return;
     }
     _performTapAction(widget.state.config.centerTapAction);
+  }
+
+  /// 同步原生文字选区状态，并在选区存在时移除外层横向手势识别器。
+  void _handleSelectionActiveChanged(bool active) {
+    if (!mounted || _selectionActive == active) {
+      return;
+    }
+    setState(() {
+      _selectionActive = active;
+    });
   }
 
   /// 执行正文点击和按键共享的阅读动作；正文长按固定交给原生选区。
@@ -1577,7 +1792,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 优先翻到当前章节上一页，到达边界后进入上一章。
   void _openPreviousPageOrChapter() {
-    if (_usesCoverPaging && _currentPageIndex > 0) {
+    if (_usesInteractiveHorizontalPaging && _currentPageIndex > 0) {
       _turnToPage(_currentPageIndex - 1);
       return;
     }
@@ -1592,7 +1807,8 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 优先翻到当前章节下一页，到达边界后进入下一章。
   void _openNextPageOrChapter() {
-    if (_usesCoverPaging && _currentPageIndex < _pages.length - 1) {
+    if (_usesInteractiveHorizontalPaging &&
+        _currentPageIndex < _pages.length - 1) {
       _turnToPage(_currentPageIndex + 1);
       return;
     }
@@ -1606,18 +1822,31 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     }
   }
 
-  /// 开始横向覆盖拖动，并记录本次手势使用的稳定页面宽度。
-  void _handleHorizontalDragStart(double width) {
-    _horizontalDragEnabled = !_coverController.isAnimating;
+  /// 开始横向跟手翻页，并记录页面尺寸和仿真触点。
+  void _handleHorizontalDragStart(
+    double width,
+    double height,
+    DragStartDetails details,
+  ) {
+    _horizontalDragEnabled =
+        !_selectionActive && !_coverController.isAnimating;
     if (!_horizontalDragEnabled) {
       return;
     }
     _horizontalDragDistance = 0;
     _horizontalDragWidth = width <= 0 ? 1 : width;
+    if (_usesSimulationPaging && height > 0) {
+      _simulationTouchYRatio =
+          (details.localPosition.dy / height).clamp(0.01, 0.99).toDouble();
+      _simulationUpperCorner = _simulationTouchYRatio < 1 / 3;
+    }
   }
 
-  /// 根据手指水平位移实时拖入上一页或下一页覆盖层。
-  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+  /// 根据手指水平位移实时更新覆盖或仿真目标页。
+  void _handleHorizontalDragUpdate(
+    DragUpdateDetails details,
+    double height,
+  ) {
     if (!_horizontalDragEnabled || _coverController.isAnimating || _pages.isEmpty) {
       return;
     }
@@ -1627,6 +1856,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     }
     /// 手势目标方向；左滑进入下一页，右滑进入上一页。
     final int direction = _horizontalDragDistance < 0 ? 1 : -1;
+    if (_usesSimulationPaging && height > 0) {
+      _simulationTouchYRatio =
+          (details.localPosition.dy / height).clamp(0.01, 0.99).toDouble();
+      if (direction < 0) {
+        _simulationUpperCorner = false;
+      }
+    }
     /// 当前章节内与手势方向对应的目标页索引。
     final int targetIndex = _currentPageIndex + direction;
     if (targetIndex < 0 || targetIndex >= _pages.length) {
@@ -1652,6 +1888,20 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         .clamp(0, 1)
         .toDouble();
     _coverController.value = progress;
+  }
+
+  /// 系统取消当前横向手势时按原方向回弹，并保留当前字符锚点。
+  void _handleHorizontalDragCancel() {
+    if (!_horizontalDragEnabled) {
+      return;
+    }
+    _horizontalDragEnabled = false;
+    _horizontalDragDistance = 0;
+    if (_coverToIndex != null) {
+      _cancelCoverAnimation();
+      return;
+    }
+    _applyPendingCompletePagination();
   }
 
   /// 按距离或速度决定完成翻页、回弹，或在章节边界进入相邻章节。
@@ -1687,6 +1937,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       widget.onIntent(const OpenPreviousChapterIntent());
     }
     _horizontalDragDistance = 0;
+    _applyPendingCompletePagination();
   }
 
   /// 将跨平台保存的字重数值映射为 Flutter 字体权重。
@@ -1702,7 +1953,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
 
   /// 按用户配置切换到目标页面。
   void _turnToPage(int index) {
-    if (_usesCoverPaging) {
+    if (_usesInteractiveHorizontalPaging) {
       _animateCoverToPage(index);
       return;
     }
@@ -1720,7 +1971,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
     );
   }
 
-  /// 使用覆盖翻页动画切换到目标页面。
+  /// 使用当前自定义覆盖或仿真动画切换到目标页面。
   void _animateCoverToPage(int index) {
     if (_pages.isEmpty || _coverController.isAnimating) {
       return;
@@ -1734,26 +1985,36 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
       _coverFromIndex = _currentPageIndex;
       _coverToIndex = targetIndex;
       _coverDirection = targetIndex > _currentPageIndex ? 1 : -1;
+      if (_usesSimulationPaging && _coverDirection < 0) {
+        _simulationUpperCorner = false;
+      }
     });
     _coverController.reset();
     _finishCoverAnimation(targetIndex);
   }
 
-  /// 从当前动画进度完成覆盖翻页并保存目标页稳定字符锚点。
+  /// 从当前动画进度完成覆盖或仿真翻页并保存目标页稳定字符锚点。
   void _finishCoverAnimation(int targetIndex) {
+    /// 动画开始时的布局代次，防止切章或重排后的旧回调提交页码。
+    final int animationGeneration = _layoutGeneration;
     /// 当前覆盖翻页动画任务。
     final Future<void> animation = _coverController.forward();
     animation.whenComplete(() {
-      if (!mounted) {
+      if (!mounted ||
+          animationGeneration != _layoutGeneration ||
+          targetIndex < 0 ||
+          targetIndex >= _pages.length) {
         return;
       }
       setState(() {
         _currentPageIndex = targetIndex;
         _selectionEpoch += 1;
+        _selectionActive = false;
         _coverFromIndex = null;
         _coverToIndex = null;
       });
       widget.onIntent(UpdateReaderScrollIntent(_pages[targetIndex].startOffset));
+      _applyPendingCompletePagination();
     });
   }
 
@@ -1769,6 +2030,7 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
         _coverFromIndex = null;
         _coverToIndex = null;
       });
+      _applyPendingCompletePagination();
     });
   }
 

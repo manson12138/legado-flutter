@@ -131,7 +131,14 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
             label: Text(_pageTurnStyleLabel(style)),
             onSelected: (bool selected) {
               if (selected) {
-                _update(_draft.copyWith(pageTurnStyle: style));
+                _update(
+                  _draft.copyWith(
+                    pageTurnStyle: style,
+                    readingMode: style == ReaderPageTurnStyle.simulation
+                        ? ReaderReadingMode.horizontalPaging
+                        : null,
+                  ),
+                );
               }
             },
           );
@@ -357,6 +364,14 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
         title: const Text('全屏模式'),
         subtitle: const Text('隐藏系统状态栏和导航栏，默认关闭'),
         onChanged: (bool value) => _update(_draft.copyWith(fullScreen: value)),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        value: _draft.edgeSwipeToCloseEnabled,
+        title: const Text('边缘滑动退出'),
+        subtitle: const Text('从左右屏幕边缘向内滑动，保存进度并退出阅读'),
+        onChanged: (bool value) =>
+            _update(_draft.copyWith(edgeSwipeToCloseEnabled: value)),
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -605,6 +620,7 @@ final class _ReaderSettingsSheetBodyState extends State<ReaderSettingsSheetBody>
   String _pageTurnStyleLabel(ReaderPageTurnStyle style) {
     return switch (style) {
       ReaderPageTurnStyle.cover => '覆盖',
+      ReaderPageTurnStyle.simulation => '仿真',
       ReaderPageTurnStyle.none => '无动画',
       ReaderPageTurnStyle.slide => '滑动',
     };
