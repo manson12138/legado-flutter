@@ -194,6 +194,28 @@ final class AppRouter {
                 'bookId=${appLogDiagnosticId(normalizedReaderArguments.bookUrl)} '
                 'initialChapterIndex=${normalizedReaderArguments.initialChapterIndex}',
           );
+          /// 书籍详情页进入阅读器时使用 Flutter 标准 Material 页面转场，
+          /// 不再叠加中心封面移动、开书或封面淡出等阅读器专用动画。
+          if (normalizedReaderArguments.transitionSpec?.kind ==
+              ReaderTransitionKind.detail) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (BuildContext context) {
+                return BookReaderRoute(
+                  dependencies: dependencies,
+                  bookUrl: normalizedReaderArguments.bookUrl,
+                  initialChapterIndex:
+                      normalizedReaderArguments.initialChapterIndex,
+                  initialMessage: normalizedReaderArguments.initialMessage,
+                  initialBook: normalizedReaderArguments.initialBook,
+                  initialIsInBookshelf:
+                      normalizedReaderArguments.initialIsInBookshelf,
+                  initialChapters: normalizedReaderArguments.initialChapters,
+                  entry: normalizedReaderArguments.entry,
+                );
+              },
+            );
+          }
           /// 缺少新转场参数的旧路由使用中心封面降级，不查询来源 Widget。
           final ReaderTransitionSpec transitionSpec =
               normalizedReaderArguments.transitionSpec ??

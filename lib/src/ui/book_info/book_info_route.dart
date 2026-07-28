@@ -131,16 +131,14 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         chapters: final List<BookChapter> chapters,
         chapterIndex: final int chapterIndex,
       ):
-        /// 本次阅读所需的完整路由参数；阅读器来源详情页会把它返回给原阅读路由。
+        /// 本次阅读所需的完整路由参数；详情入口标识使路由器采用普通 Material 转场，
+        /// 阅读器来源详情页会把参数返回给原阅读路由。
         final ReaderRouteArguments readerArguments = ReaderRouteArguments(
           bookUrl: book.bookUrl,
           initialChapterIndex: chapterIndex,
           initialBook: book,
           initialChapters: chapters,
-          transitionSpec: ReaderTransitionSpec.centered(
-            kind: ReaderTransitionKind.detail,
-            coverUrl: book.customCoverUrl ?? book.coverUrl,
-          ),
+          transitionSpec: ReaderTransitionSpec.detail(),
           entry: 'detail',
         );
         if (widget.arguments.returnReaderResult) {

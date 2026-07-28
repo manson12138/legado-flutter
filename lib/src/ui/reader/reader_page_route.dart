@@ -10,7 +10,7 @@ import '../../help/logging/app_logger.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 
-/// 使用单次封面几何创建阅读器进入与返回动画。
+/// 使用单次封面几何创建书架、历史与兼容入口的阅读器进入和返回动画。
 final class ReaderPageRoute extends PageRouteBuilder<void> {
   /// 创建最长 300ms 的阅读器专用路由。
   ReaderPageRoute({
@@ -36,16 +36,10 @@ final class ReaderPageRoute extends PageRouteBuilder<void> {
            Animation<double> secondaryAnimation,
            Widget child,
          ) {
-           /// PDF 首批只做中心缩放淡入，不执行 3D 合页。
-           final bool opensCover =
-               transitionSpec.kind != ReaderTransitionKind.fallback &&
-               !(book?.origin == 'loc_book' &&
-                   book?.originName.toLowerCase().endsWith('.pdf') == true);
            return _ReaderRouteTransition(
              animation: animation,
              spec: transitionSpec,
              book: book,
-             opensCover: opensCover,
              logger: logger,
              child: child,
            );
@@ -60,7 +54,6 @@ final class _ReaderRouteTransition extends StatefulWidget {
     required this.animation,
     required this.spec,
     required this.book,
-    required this.opensCover,
     required this.logger,
     required this.child,
   });
@@ -73,9 +66,6 @@ final class _ReaderRouteTransition extends StatefulWidget {
 
   /// 用于封面语义和跨页面图片缓存的书籍快照。
   final Book? book;
-
-  /// 是否允许执行 3D 合页；PDF 为 false。
-  final bool opensCover;
 
   /// FLUTTER_REWRITE_DEBUG_LOG：记录本轮转场帧耗时且不输出书籍或封面隐私。
   final AppLogger logger;
@@ -445,7 +435,7 @@ final class _ReaderRouteTransitionState
     return 'local_path_or_other';
   }
 
-  /// 构建减少动态效果降级或完整封面动画。
+  /// 构建减少动态效果降级或书架、历史与兼容入口的完整封面动画。
   @override
   Widget build(BuildContext context) {
     /// 系统辅助功能是否要求减少动画。
@@ -475,13 +465,7 @@ final class _ReaderRouteTransitionState
         child: widget.child,
       );
     }
-    /// 书架、历史和无来源兼容入口使用从封面起点放大到全屏的动画。
-    final bool usesFullScreenCover =
-        widget.spec.kind != ReaderTransitionKind.detail;
-    if (usesFullScreenCover) {
-      return _buildFullScreenCoverTransition(context);
-    }
-    return _buildCenteredCoverTransition(context);
+    return _buildFullScreenCoverTransition(context);
   }
 
   /// 构建从真实 cell 封面放大到全屏，并从动画中段渐进淡出露出文章的进入动画。
@@ -623,124 +607,6 @@ final class _ReaderRouteTransitionState
     );
   }
 
-  /// 保留书籍详情入口的轻量中心开封动画，不改变本次任务以外的视觉行为。
-  Widget _buildCenteredCoverTransition(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.animation,
-      child: RepaintBoundary(child: widget.child),
-      builder: (BuildContext context, Widget? stableChild) {
-        /// 当前原始路由进度。
-        final double progress =
-            widget.animation.value.clamp(0, 1).toDouble();
-        /// 阅读页面在封面开始打开后平滑显现。
-        final double pageOpacity = _intervalProgress(
-          progress,
-          0.28,
-          1,
-          Curves.easeOutCubic,
-        );
-        /// 来源封面移动到阅读中心的进度。
-        final double moveProgress = _intervalProgress(
-          progress,
-          0,
-          0.58,
-          Curves.easeOutCubic,
-        );
-        /// 封面以左侧书脊为轴打开的进度。
-        final double openProgress = widget.opensCover
-            ? _intervalProgress(
-                progress,
-                0.22,
-                0.84,
-                Curves.easeInOutCubic,
-              )
-            : 0;
-        /// 封面末段淡出。
-        final double coverOpacity =
-            1 -
-            _intervalProgress(
-              progress,
-              0.78,
-              1,
-              Curves.easeOut,
-            );
-        return LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            /// 当前路由可用尺寸。
-            final Size viewport = constraints.biggest;
-            /// 封面在阅读器中心的目标矩形。
-            final Rect targetRect = _targetRect(viewport);
-            /// 来源矩形无效时使用中心缩小矩形降级。
-            final Rect sourceRect = _usableSourceRect(
-              widget.spec.sourceRect,
-              viewport,
-            )
-                ? widget.spec.sourceRect ??
-                      _centeredSourceRect(targetRect)
-                : _centeredSourceRect(targetRect);
-            /// 当前帧封面位置和尺寸。
-            final Rect coverRect = _interpolateRect(
-              sourceRect,
-              targetRect,
-              moveProgress,
-            );
-            return Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                Opacity(
-                  opacity: pageOpacity,
-                  child: stableChild ?? const SizedBox.shrink(),
-                ),
-                if (coverOpacity > 0.001)
-                  Positioned.fromRect(
-                    rect: coverRect,
-                    child: IgnorePointer(
-                      child: Opacity(
-                        opacity: coverOpacity,
-                        child: RepaintBoundary(
-                          key: ValueKey<String>(widget.spec.id),
-                          child: Transform(
-                            alignment: Alignment.centerLeft,
-                            transform: Matrix4.identity()
-                              ..setEntry(3, 2, 0.0012)
-                              ..rotateY(-math.pi * 0.47 * openProgress),
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(10),
-                                boxShadow: <BoxShadow>[
-                                  BoxShadow(
-                                    color: Colors.black.withValues(
-                                      alpha:
-                                          0.22 *
-                                          (1 - openProgress * 0.5),
-                                    ),
-                                    blurRadius: 14,
-                                    offset: const Offset(4, 2),
-                                  ),
-                                ],
-                              ),
-                              child: BookCover(
-                                coverUrl: widget.spec.coverUrl,
-                                semanticLabel:
-                                    '${widget.book?.name ?? '目标书籍'}封面转场',
-                                bookName: widget.book?.name,
-                                bookAuthor: widget.book?.author,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
   /// 把指定区间映射到 0～1 并应用曲线。
   double _intervalProgress(
     double value,
@@ -770,15 +636,6 @@ final class _ReaderRouteTransitionState
       center: Offset(viewport.width / 2, viewport.height * 0.42),
       width: width,
       height: height,
-    );
-  }
-
-  /// 无来源几何时从目标中心的较小封面开始。
-  Rect _centeredSourceRect(Rect target) {
-    return Rect.fromCenter(
-      center: target.center,
-      width: target.width * 0.76,
-      height: target.height * 0.76,
     );
   }
 

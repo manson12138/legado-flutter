@@ -7,7 +7,7 @@ const String readerCoverTransitionLogTag = 'READER_COVER_TRANSITION';
 const String readerCoverTransitionDebugLogMarker =
     'FLUTTER_REWRITE_DEBUG_LOG';
 
-/// 阅读器封面转场的入口类型，决定完整开书或轻量详情动画。
+/// 阅读器入口类型，决定使用专用封面转场或普通页面转场。
 enum ReaderTransitionKind {
   /// 从书架封面进入，使用真实 cell 起点到全屏的放大淡出动画。
   bookshelf,
@@ -15,7 +15,7 @@ enum ReaderTransitionKind {
   /// 从历史封面进入，使用真实 cell 起点到全屏的放大淡出动画。
   history,
 
-  /// 从书籍详情进入，使用中心封面的轻量开封动画。
+  /// 从书籍详情进入，由路由器使用标准 Material 页面转场。
   detail,
 
   /// 旧路由或来源不可用，从中心封面降级放大到全屏后淡出。
@@ -79,7 +79,19 @@ final class ReaderTransitionSpec {
     );
   }
 
-  /// 创建没有来源几何的详情或兼容降级转场。
+  /// 创建书籍详情进入阅读器的普通页面转场标识。
+  ///
+  /// 该参数只用于让应用路由器识别详情入口，不携带封面地址或来源几何，
+  /// 因此不会触发阅读器专用的封面移动、缩放或开书动画。
+  factory ReaderTransitionSpec.detail() {
+    return ReaderTransitionSpec(
+      id: _nextId(),
+      kind: ReaderTransitionKind.detail,
+      coverUrl: null,
+    );
+  }
+
+  /// 创建没有来源几何的兼容降级封面转场。
   factory ReaderTransitionSpec.centered({
     required ReaderTransitionKind kind,
     required String? coverUrl,
