@@ -36,6 +36,7 @@ final class ReaderRoute extends StatefulWidget {
     this.initialChapterIndex,
     this.initialMessage,
     this.initialBook,
+    this.initialIsInBookshelf,
     this.initialChapters = const <BookChapter>[],
     this.entry = 'bookshelf',
     super.key,
@@ -53,8 +54,11 @@ final class ReaderRoute extends StatefulWidget {
   /// 新路由首帧需要展示的一次性提示，例如整书换源结果。
   final String? initialMessage;
 
-  /// 详情页直接阅读时传入的未入架书籍快照。
+  /// 书架、历史或详情入口传入的书籍快照。
   final Book? initialBook;
+
+  /// 路由入口已知的书架成员事实；为空时由 ViewModel 并行补查。
+  final bool? initialIsInBookshelf;
 
   /// 详情页直接阅读时传入的未入架目录快照。
   final List<BookChapter> initialChapters;
@@ -112,11 +116,21 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       message: '文本阅读页面创建 bookId=${appLogDiagnosticId(widget.bookUrl)}',
     );
     WidgetsBinding.instance.addObserver(this);
+    /// MMKV 中没有当前用户与书籍的完成标记时，首帧直接建立先导页状态。
+    final bool initialShowIntroPage =
+        !widget.dependencies.readerIntroPreferences.hasSeen(widget.bookUrl);
     _viewModel = ReaderViewModel(
       bookUrl: widget.bookUrl,
       initialChapterIndex: widget.initialChapterIndex,
       initialBook: widget.initialBook,
+      initialIsInBookshelf: widget.initialIsInBookshelf,
       initialChapters: widget.initialChapters,
+      initialDisplayConfig:
+          widget.dependencies.readerCacheGateway.currentDisplayConfig,
+      initialShowIntroPage: initialShowIntroPage,
+      markIntroSeen: () {
+        widget.dependencies.readerIntroPreferences.markSeen(widget.bookUrl);
+      },
       entry: widget.entry,
       bookshelfGateway: widget.dependencies.bookshelfGateway,
       readingHistoryGateway: widget.dependencies.readingHistoryGateway,
@@ -423,6 +437,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         arguments: ReaderRouteArguments(
           bookUrl: newBookUrl,
           initialMessage: resultMessage,
+          initialBook: result.book,
         ),
       ),
     );

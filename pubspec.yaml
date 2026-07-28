@@ -23,6 +23,8 @@ dependencies:
   json_path: ^0.9.0
   jsf: ^1.1.0
   mobile_scanner: ^7.2.0
+  # 小型高频非关系偏好使用官方 MMKV；业务层只依赖项目内类型化 Store。
+  mmkv: ^2.4.0
   path: ^1.9.1
   path_provider: ^2.1.6
   pdfx: ^2.9.2

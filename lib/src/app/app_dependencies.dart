@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 
@@ -31,6 +33,7 @@ import '../data/dao/download_task_dao.dart';
 import '../data/dao/reading_history_dao.dart';
 import '../data/local/database_tables.dart';
 import '../data/local/legado_database.dart';
+import '../data/local/preferences/app_preferences_store.dart';
 import '../data/local/secure_auth_session_store.dart';
 import '../data/model/book_source_import_decoder.dart';
 import '../data/repository/adult_content_repository.dart';
@@ -85,6 +88,7 @@ import '../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import '../model/book_source/book_source_import_text_resolver.dart';
 import '../model/analyze_rule/legado_javascript_service.dart';
 import '../model/reader/read_book_coordinator.dart';
+import '../model/reader/reader_processed_content_cache.dart';
 import '../model/reader/reader_text_processor.dart';
 import '../platform/download_background_service.dart';
 import '../model/local_book/epub_local_book_parser.dart';
@@ -105,6 +109,8 @@ import 'current_user_scope.dart';
 import 'search_preferences.dart';
 import 'remote_book_source_sync_service.dart';
 import 'guest_book_source_import_service.dart';
+import 'reader_intro_preferences.dart';
+import 'reader_processed_content_startup_preloader.dart';
 
 /// 保存应用级共享依赖的组合根容器。
 ///
@@ -127,6 +133,9 @@ final class AppDependencies {
     required this.bookContentProcessGateway,
     required this.replaceRuleGateway,
     required this.readerCacheGateway,
+    required this.readerProcessedContentCache,
+    required this.readerProcessedContentStartupPreloader,
+    required this.readerIntroPreferences,
     required this.coverCacheGateway,
     required this.searchHistoryGateway,
     required this.searchPreferences,
@@ -171,6 +180,7 @@ final class AppDependencies {
     required AppLogManager logManager,
     required CrashReportManager crashReportManager,
     required RemoteAppServiceConfig remoteAppConfig,
+    required AppPreferencesStore preferencesStore,
   }) {
     /// M2 Flutter 独立数据库，首次数据操作时惰性打开。
     final LegadoDatabase database = LegadoDatabase(logger: logger);
@@ -252,7 +262,12 @@ final class AppDependencies {
     );
     /// 启动配置和过滤规则的远端仓储。
     final RemoteAppConfigurationRepository remoteAppConfigurationRepository =
-        RemoteAppConfigurationRepository(remoteAppApi, cacheDao, remoteAppConfig);
+        RemoteAppConfigurationRepository(
+          remoteAppApi,
+          cacheDao,
+          remoteAppConfig,
+          preferencesStore,
+        );
     /// App 用户注册登录与内存会话仓储。
     final AuthenticationRepository authenticationRepository = AuthenticationRepository(
       remoteAppApi,
@@ -279,6 +294,7 @@ final class AppDependencies {
           cacheDao,
           authenticationRepository,
           remoteAppConfig,
+          preferencesStore,
           logger,
         );
     crashReportManager.configureAnalyticsRecorder(
@@ -290,6 +306,7 @@ final class AppDependencies {
       rootBundle,
       httpClient,
       logger,
+      preferencesStore: preferencesStore,
       notifySourceVisibilityChanged: () {
         /// 屏蔽策略改变了书源查询的可见结果，复用表级观察链触发重新查询，
         /// 但不删除或改写数据库中的任何书源。
@@ -358,6 +375,7 @@ final class AppDependencies {
       StandardBookSourceParser(javaScriptService: javaScriptService),
       javaScriptService,
       cacheDao,
+      preferencesStore,
       webViewScriptBridge,
       logger,
     );
@@ -367,12 +385,51 @@ final class AppDependencies {
       cacheDao,
       currentUserScope.requireUserId,
     );
+    /// M08 跨阅读路由复用的三章、约 4 MiB 处理后正文 LRU。
+    final ReaderProcessedContentCache readerProcessedContentCache =
+        ReaderProcessedContentCache();
     /// M08 正文缓存、稳定锚点、显示配置、书签、替换规则和封面地址缓存 Repository。
     final ReaderRepository readerRepository = ReaderRepository(
       cacheDao,
       bookmarkDao,
       bookContentProcessDao,
       replaceRuleDao,
+      preferencesStore,
+      onChapterContentChanged:
+          readerProcessedContentCache.invalidateChapter,
+      onBookContentChanged: readerProcessedContentCache.invalidateBook,
+    );
+    /// 主界面首帧后只用既有原始正文缓存预热最近阅读书籍当前章。
+    final ReaderProcessedContentStartupPreloader
+        readerProcessedContentStartupPreloader =
+        ReaderProcessedContentStartupPreloader(
+          startupSnapshotPreloader: bookshelfHistoryStartupPreloader,
+          readingHistoryGateway: readingHistoryRepository,
+          cacheGateway: readerRepository,
+          replaceRuleGateway: readerRepository,
+          textProcessor: const ReaderTextProcessor(),
+          processedContentCache: readerProcessedContentCache,
+          currentUserScope: currentUserScope,
+        );
+    /// App 组合根建立后立即预加载一次全局显示配置；MMKV 已有新键时不访问 SQLite，
+    /// 旧版本单书兼容值留到实际打开书籍时迁移，避免用空主键提前写完成标记。
+    unawaited(
+      readerRepository.preloadDisplayConfig().onError(
+        (Object error, StackTrace stackTrace) {
+          logger.warning(
+            tag: appStartupLogTag,
+            message: 'stage=reader_display_config_preload_degraded',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        },
+      ),
+    );
+    /// 首次阅读先导页按当前用户和书籍摘要保存，不持有原始 URL。
+    final ReaderIntroPreferences readerIntroPreferences =
+        ReaderIntroPreferences(
+      preferencesStore,
+      currentUserScope.requireUserId,
     );
     // BookCover 深埋在书架/搜索/详情等无状态 Screen 里，不经过路由层依赖注入；
     // 用组合根这一次性调用把持久化实现接进去，避免逐个页面 Screen/Route 都要新增
@@ -478,6 +535,7 @@ final class AppDependencies {
       logger: logger,
       backgroundService: const MethodChannelDownloadBackgroundService(),
       cacheDao: cacheDao,
+      preferencesStore: preferencesStore,
       analyticsEnabled: remoteBookSourceSyncService.isAnalyticsEnabled,
       analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
     );
@@ -497,9 +555,13 @@ final class AppDependencies {
       bookContentProcessGateway: readerRepository,
       replaceRuleGateway: readerRepository,
       readerCacheGateway: readerRepository,
+      readerProcessedContentCache: readerProcessedContentCache,
+      readerProcessedContentStartupPreloader:
+          readerProcessedContentStartupPreloader,
+      readerIntroPreferences: readerIntroPreferences,
       coverCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
-      searchPreferences: SearchPreferences(cacheDao),
+      searchPreferences: SearchPreferences(preferencesStore, cacheDao),
       cookieManager: cookieManager,
       scriptInteractionBroker: scriptInteractionBroker,
       defaultBookSourceBootstrapper: DefaultBookSourceBootstrapper(
@@ -514,7 +576,8 @@ final class AppDependencies {
       authenticationGateway: authenticationRepository,
       remoteBookSourceSyncService: remoteBookSourceSyncService,
       guestBookSourceImportService: guestBookSourceImportService,
-      bookshelfLayoutPreferences: BookshelfLayoutPreferences(cacheDao),
+      bookshelfLayoutPreferences:
+          BookshelfLayoutPreferences(preferencesStore, cacheDao),
       bookshelfHistoryAutoRefreshService:
           bookshelfHistoryAutoRefreshService,
       bookshelfHistoryStartupPreloader: bookshelfHistoryStartupPreloader,
@@ -527,6 +590,13 @@ final class AppDependencies {
       changeBookSource: ChangeBookSourceUseCase(
         bookRepository,
         readerRepository,
+        onProcessedContentInvalidated: (
+          String oldBookUrl,
+          String newBookUrl,
+        ) {
+          readerProcessedContentCache.invalidateBook(oldBookUrl);
+          readerProcessedContentCache.invalidateBook(newBookUrl);
+        },
         analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
       ),
       replaceBooksGroup: ReplaceBooksGroupUseCase(bookRepository),
@@ -587,6 +657,16 @@ final class AppDependencies {
 
   /// 阅读器正文缓存、稳定锚点和显示配置边界。
   final ReaderCacheGateway readerCacheGateway;
+
+  /// 跨阅读路由复用、受三章和约 4 MiB 双限约束的处理后正文缓存。
+  final ReaderProcessedContentCache readerProcessedContentCache;
+
+  /// 主界面首帧后只命中本地原始正文缓存的最近阅读当前章预热器。
+  final ReaderProcessedContentStartupPreloader
+      readerProcessedContentStartupPreloader;
+
+  /// 按当前用户和书籍摘要隔离的首次阅读先导页偏好。
+  final ReaderIntroPreferences readerIntroPreferences;
 
   /// 跨页面“已知可显示封面地址”缓存边界，供 [CoverUrlCache] 持久化。
   final CoverCacheGateway coverCacheGateway;
@@ -741,6 +821,11 @@ final class AppDependencies {
       standardService: standardBookSourceService,
       localBookContentService: localBookContentService,
       textProcessor: const ReaderTextProcessor(),
+      processedContentCache: readerProcessedContentCache,
+      currentUserId: currentUserScope.requireUserId,
+      currentUserGeneration: () => currentUserScope.generation,
+      onForegroundLoadStarted:
+          readerProcessedContentStartupPreloader.cancelForForegroundReader,
       cancellationTokenFactory: createHttpCancellationToken,
       logger: logger,
     );

@@ -10,6 +10,7 @@ import '../ui/change_book_source/change_book_source_route.dart';
 import '../ui/search/search_route.dart';
 import '../ui/bookshelf/bookshelf_route.dart';
 import '../ui/reader/book_reader_route.dart';
+import '../ui/reader/reader_page_route.dart';
 import '../ui/local_book_import/local_book_import_route.dart';
 import '../ui/log_management/log_management_route.dart';
 import '../ui/crash_report_management/crash_report_management_route.dart';
@@ -20,6 +21,7 @@ import '../ui/download_management/download_management_route.dart';
 import '../help/logging/app_logger.dart';
 import 'app_dependencies.dart';
 import 'app_route.dart';
+import 'reader_transition_spec.dart';
 
 /// 统一负责把路由名称映射为页面，并在入口处注入页面依赖。
 final class AppRouter {
@@ -192,8 +194,19 @@ final class AppRouter {
                 'bookId=${appLogDiagnosticId(normalizedReaderArguments.bookUrl)} '
                 'initialChapterIndex=${normalizedReaderArguments.initialChapterIndex}',
           );
-          return MaterialPageRoute<void>(
+          /// 缺少新转场参数的旧路由使用中心封面降级，不查询来源 Widget。
+          final ReaderTransitionSpec transitionSpec =
+              normalizedReaderArguments.transitionSpec ??
+              ReaderTransitionSpec.centered(
+                kind: ReaderTransitionKind.fallback,
+                coverUrl:
+                    normalizedReaderArguments.initialBook?.customCoverUrl ??
+                    normalizedReaderArguments.initialBook?.coverUrl,
+              );
+          return ReaderPageRoute(
             settings: settings,
+            book: normalizedReaderArguments.initialBook,
+            transitionSpec: transitionSpec,
             builder: (BuildContext context) {
               return BookReaderRoute(
                 dependencies: dependencies,
@@ -201,6 +214,8 @@ final class AppRouter {
                 initialChapterIndex: normalizedReaderArguments.initialChapterIndex,
                 initialMessage: normalizedReaderArguments.initialMessage,
                 initialBook: normalizedReaderArguments.initialBook,
+                initialIsInBookshelf:
+                    normalizedReaderArguments.initialIsInBookshelf,
                 initialChapters: normalizedReaderArguments.initialChapters,
                 entry: normalizedReaderArguments.entry,
               );

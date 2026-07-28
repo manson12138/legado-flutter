@@ -17,6 +17,8 @@ import '../dao/book_content_process_dao.dart';
 import '../dao/cache_dao.dart';
 import '../dao/replace_rule_dao.dart';
 import '../local/data_error.dart';
+import '../local/preferences/app_preferences_store.dart';
+import '../local/preferences/versioned_app_preference_migrator.dart';
 
 /// 组合阅读缓存、书签和替换规则 DAO，实现 M08 阅读数据边界。
 final class ReaderRepository
@@ -27,15 +29,31 @@ final class ReaderRepository
         ReaderCacheGateway,
         CoverCacheGateway {
   /// 创建阅读数据 Repository。
-  const ReaderRepository(
+  ReaderRepository(
     this._cacheDao,
     this._bookmarkDao,
     this._bookContentProcessDao,
     this._replaceRuleDao,
-  );
+    this._preferencesStore, {
+    required void Function(String bookUrl, String chapterUrl)
+        onChapterContentChanged,
+    required void Function(String bookUrl) onBookContentChanged,
+  }) : _onChapterContentChanged = onChapterContentChanged,
+       _onBookContentChanged = onBookContentChanged,
+       _displayConfigMigrator =
+           VersionedAppPreferenceMigrator(_preferencesStore);
 
-  /// 通用缓存 DAO，用于正文、锚点和显示配置。
+  /// 通用缓存 DAO，用于正文、锚点、封面和旧显示配置迁移。
   final CacheDao _cacheDao;
+
+  /// 阅读显示配置使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 阅读显示配置逐键迁移器。
+  final VersionedAppPreferenceMigrator _displayConfigMigrator;
+
+  /// 进程内显示配置快照；App 启动后预加载一次，阅读路由不再等待持久化读取才能画首帧。
+  ReaderDisplayConfig _currentDisplayConfig = const ReaderDisplayConfig();
 
   /// 书签 DAO。
   final BookmarkDao _bookmarkDao;
@@ -45,6 +63,17 @@ final class ReaderRepository
 
   /// 替换规则 DAO。
   final ReplaceRuleDao _replaceRuleDao;
+
+  /// 原始单章正文写入或删除成功后通知应用级处理结果失效。
+  final void Function(String bookUrl, String chapterUrl)
+      _onChapterContentChanged;
+
+  /// 原始整书正文批量删除成功后通知应用级处理结果失效。
+  final void Function(String bookUrl) _onBookContentChanged;
+
+  /// 返回替换规则表最近一次提交修订，不触发 SQLite 查询。
+  @override
+  int get contentRevision => _replaceRuleDao.contentRevision;
 
   /// 观察指定章节全部未删除正文标注。
   @override
@@ -141,20 +170,22 @@ final class ReaderRepository
     String chapterUrl,
     String content,
     int deadline,
-  ) {
-    return guardDataOperation<void>(
+  ) async {
+    await guardDataOperation<void>(
       () => _cacheDao.upsert(
         Cache(key: _contentKey(bookUrl, chapterUrl), value: content, deadline: deadline),
       ),
     );
+    _onChapterContentChanged(bookUrl, chapterUrl);
   }
 
   /// 删除指定章节的原始正文缓存。
   @override
-  Future<void> removeChapterContent(String bookUrl, String chapterUrl) {
-    return guardDataOperation<void>(
+  Future<void> removeChapterContent(String bookUrl, String chapterUrl) async {
+    await guardDataOperation<void>(
       () => _cacheDao.delete(_contentKey(bookUrl, chapterUrl)),
     );
+    _onChapterContentChanged(bookUrl, chapterUrl);
   }
 
   /// 批量删除一本书指定章节的原始正文缓存。
@@ -162,12 +193,13 @@ final class ReaderRepository
   Future<void> removeChapterContents(
     String bookUrl,
     List<String> chapterUrls,
-  ) {
+  ) async {
     /// 不泄漏原始 URL 的正文缓存键集合。
     final List<String> keys = chapterUrls
         .map((String chapterUrl) => _contentKey(bookUrl, chapterUrl))
         .toList(growable: false);
-    return guardDataOperation<void>(() => _cacheDao.deleteAll(keys));
+    await guardDataOperation<void>(() => _cacheDao.deleteAll(keys));
+    _onBookContentChanged(bookUrl);
   }
 
   /// 读取稳定正文锚点；损坏的旧缓存按无锚点处理。
@@ -227,18 +259,33 @@ final class ReaderRepository
   @override
   Future<ReaderDisplayConfig> getDisplayConfig(String bookUrl) {
     return guardDataOperation<ReaderDisplayConfig>(() async {
-      /// 持久化的显示配置 JSON。
-      String? value = await _cacheDao.getValidValue(
-        _globalConfigKey,
-        DateTime.now().millisecondsSinceEpoch,
+      final AppPreferenceMigrationResult<String> migration =
+          await _displayConfigMigrator.migrate<String>(
+        valueKey: _globalConfigKey,
+        migrationVersionKey: _globalConfigMigrationKey,
+        targetVersion: 1,
+        readCurrentValue: () =>
+            _nonEmptyString(_preferencesStore.readString(_globalConfigKey)),
+        writeCurrentValue: (String value) =>
+            _preferencesStore.writeString(_globalConfigKey, value),
+        readLegacyValue: () async {
+          String? value = await _cacheDao.getValidValue(
+            _legacyGlobalConfigKey,
+            DateTime.now().millisecondsSinceEpoch,
+          );
+          value ??= await _cacheDao.getValidValue(
+            _legacyConfigKey(bookUrl),
+            DateTime.now().millisecondsSinceEpoch,
+          );
+          return value;
+        },
+        decodeLegacyValue: _nonEmptyString,
       );
-      /// 兼容已按书籍保存的旧配置：仅在全局配置不存在时读取并迁移一次。
-      value ??= await _cacheDao.getValidValue(
-        _legacyConfigKey(bookUrl),
-        DateTime.now().millisecondsSinceEpoch,
-      );
+      /// MMKV 中已经存在或本次迁移成功的显示配置 JSON。
+      final String? value = migration.value;
       if (value == null || value.isEmpty) {
-        return const ReaderDisplayConfig();
+        _currentDisplayConfig = const ReaderDisplayConfig();
+        return _currentDisplayConfig;
       }
       try {
         /// 收窄后的显示配置对象。
@@ -253,7 +300,7 @@ final class ReaderRepository
         );
         /// 是否已经执行“左右分页 + 覆盖翻页”的默认值迁移。
         final bool hasHorizontalCoverDefault = horizontalCoverDefaultVersion >= 1;
-        return ReaderDisplayConfig(
+        _currentDisplayConfig = ReaderDisplayConfig(
           fontSize: _double(decoded['fontSize'], 18),
           lineHeight: _double(decoded['lineHeight'], 1.7),
           paragraphSpacing: _double(decoded['paragraphSpacing'], 12),
@@ -372,11 +419,25 @@ final class ReaderRepository
               ? decoded['rightEdgeSwipeToCloseEnabled'] as bool
               : false,
         );
+        return _currentDisplayConfig;
       } on FormatException {
-        return const ReaderDisplayConfig();
+        _currentDisplayConfig = const ReaderDisplayConfig();
+        return _currentDisplayConfig;
       }
     });
   }
+
+  /// App 启动后仅在 MMKV 已有新键时预解码显示配置，不提前结束旧单书配置迁移。
+  Future<void> preloadDisplayConfig() async {
+    if (!_preferencesStore.contains(_globalConfigKey)) {
+      return;
+    }
+    await getDisplayConfig('');
+  }
+
+  /// 返回已加载到进程内的显示配置，不执行 MMKV、SQLite 或 JSON 解码。
+  @override
+  ReaderDisplayConfig get currentDisplayConfig => _currentDisplayConfig;
 
   /// 保存单书显示配置，期限为永久。
   @override
@@ -433,8 +494,17 @@ final class ReaderRepository
             config.rightEdgeSwipeToCloseEnabled,
       });
       /// 阅读显示设置为全局偏好，切换书籍和重启 App 后仍应一致生效。
-      return _cacheDao.upsert(Cache(key: _globalConfigKey, value: value));
+      if (!_preferencesStore.writeString(_globalConfigKey, value)) {
+        throw StateError('阅读显示配置偏好写入失败');
+      }
+      _currentDisplayConfig = config;
+      return Future<void>.value();
     });
+  }
+
+  /// 将空字符串视为损坏或缺失的显示配置。
+  String? _nonEmptyString(String? value) {
+    return value?.trim().isNotEmpty == true ? value : null;
   }
 
   /// 将数字字段收窄为 double，非法类型使用默认值。
@@ -568,9 +638,15 @@ final class ReaderRepository
   /// 生成不泄漏原始 URL 的锚点缓存键。
   String _anchorKey(String bookUrl) => 'reader:anchor:${_digest(bookUrl)}';
 
-  /// 生成不泄漏原始 URL 的显示配置缓存键。
-  /// 全局阅读显示配置缓存键，不包含书籍标识。
-  static const String _globalConfigKey = 'reader:config:global';
+  /// 全局阅读显示配置的新 MMKV 键，不包含书籍标识。
+  static const String _globalConfigKey = 'reader.display_config.v1';
+
+  /// 全局阅读显示配置迁移版本键。
+  static const String _globalConfigMigrationKey =
+      'migration.reader.display_config.v1';
+
+  /// 全局阅读显示配置的旧 SQLite 键。
+  static const String _legacyGlobalConfigKey = 'reader:config:global';
 
   /// 旧版按书籍存储的配置键，仅用于首次迁移读取。
   String _legacyConfigKey(String bookUrl) => 'reader:config:${_digest(bookUrl)}';

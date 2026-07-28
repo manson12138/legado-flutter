@@ -85,17 +85,24 @@ final class ChangeBookSourceUseCase {
   const ChangeBookSourceUseCase(
     this._bookshelfGateway,
     this._readerCacheGateway, {
+    required void Function(String oldBookUrl, String newBookUrl)
+    onProcessedContentInvalidated,
     required Future<void> Function(
       String eventName, {
       Map<String, Object?> props,
     }) analyticsRecorder,
-  }) : _analyticsRecorder = analyticsRecorder;
+  }) : _onProcessedContentInvalidated = onProcessedContentInvalidated,
+       _analyticsRecorder = analyticsRecorder;
 
   /// 提供书籍主键与目录原子替换能力的数据边界。
   final BookshelfGateway _bookshelfGateway;
 
   /// 提供稳定阅读锚点和单书显示配置复制能力的缓存边界。
   final ReaderCacheGateway _readerCacheGateway;
+
+  /// 整书换源事务成功后清除旧、新主键下的应用级处理后正文。
+  final void Function(String oldBookUrl, String newBookUrl)
+  _onProcessedContentInvalidated;
 
   /// 整书换源成功后的匿名事件旁路。
   final Future<void> Function(
@@ -205,6 +212,7 @@ final class ChangeBookSourceUseCase {
     if (transactionResult case AppFailure<void>(error: final AppError error)) {
       return AppFailure<ChangeBookSourceResult>(error);
     }
+    _onProcessedContentInvalidated(oldBook.bookUrl, migratedBook.bookUrl);
     /// 缓存读取结束后固定的旧稳定锚点，便于在异步写入中安全收窄。
     final ReaderPositionAnchor? anchor = oldAnchor;
     if (options.migrateReadingProgress && anchor != null) {

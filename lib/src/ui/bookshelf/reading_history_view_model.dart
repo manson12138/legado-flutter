@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../../app/bookshelf_layout_preferences.dart';
 import '../../app/bookshelf_history_startup_preloader.dart';
+import '../../app/reader_transition_spec.dart';
 import '../../domain/gateway/reading_history_gateway.dart';
 import '../../domain/model/book.dart';
 import 'reading_history_contract.dart';
@@ -54,8 +55,11 @@ final class ReadingHistoryViewModel {
   /// 处理阅读历史页面操作。
   void onIntent(ReadingHistoryIntent intent) {
     switch (intent) {
-      case OpenReadingHistoryBookIntent(bookUrl: final String bookUrl):
-        _openBook(bookUrl);
+      case OpenReadingHistoryBookIntent(
+        bookUrl: final String bookUrl,
+        transitionSpec: final transitionSpec,
+      ):
+        _openBook(bookUrl, transitionSpec: transitionSpec);
       case ToggleReadingHistoryLayoutIntent():
         _layoutChangedByUser = true;
         final ReadingHistoryLayoutMode layoutMode =
@@ -168,10 +172,18 @@ final class ReadingHistoryViewModel {
   }
 
   /// 从内存快照找到目标书籍并发出阅读器导航。
-  void _openBook(String bookUrl) {
+  void _openBook(
+    String bookUrl, {
+    required ReaderTransitionSpec? transitionSpec,
+  }) {
     for (final Book book in _allBooks) {
       if (book.bookUrl == bookUrl) {
-        _effectController.add(OpenReadingHistoryReaderEffect(book));
+        _effectController.add(
+          OpenReadingHistoryReaderEffect(
+            book,
+            transitionSpec: transitionSpec,
+          ),
+        );
         return;
       }
     }

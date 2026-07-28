@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../../app/bookshelf_layout_preferences.dart';
 import '../../app/bookshelf_history_startup_preloader.dart';
+import '../../app/reader_transition_spec.dart';
 import '../../domain/gateway/book_group_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/model/book.dart';
@@ -116,8 +117,11 @@ final class BookshelfViewModel {
       case ToggleBookshelfSortOrderIntent():
         _emit(_state.copyWith(descending: !_state.descending));
         _rebuild();
-      case TapBookshelfBookIntent(bookUrl: final String bookUrl):
-        _tapBook(bookUrl);
+      case TapBookshelfBookIntent(
+        bookUrl: final String bookUrl,
+        transitionSpec: final transitionSpec,
+      ):
+        _tapBook(bookUrl, transitionSpec: transitionSpec);
       case LongPressBookshelfBookIntent(bookUrl: final String bookUrl):
         _emit(_state.copyWith(selectionMode: true, selectedBookUrls: <String>{bookUrl}));
       case SelectAllBookshelfBooksIntent():
@@ -304,7 +308,10 @@ final class BookshelfViewModel {
   }
 
   /// 点击书籍时按选择模式切换选择或导航阅读器。
-  void _tapBook(String bookUrl) {
+  void _tapBook(
+    String bookUrl, {
+    required ReaderTransitionSpec? transitionSpec,
+  }) {
     if (_state.selectionMode) {
       /// 可修改选择集合。
       final Set<String> selected = Set<String>.from(_state.selectedBookUrls);
@@ -317,7 +324,12 @@ final class BookshelfViewModel {
     /// 目标书籍。
     final Book? book = _findBook(bookUrl);
     if (book != null) {
-      _effectController.add(OpenBookshelfReaderEffect(book));
+      _effectController.add(
+        OpenBookshelfReaderEffect(
+          book,
+          transitionSpec: transitionSpec,
+        ),
+      );
     }
   }
 

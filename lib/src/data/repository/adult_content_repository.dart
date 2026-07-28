@@ -11,13 +11,15 @@ import '../../domain/model/cache.dart';
 import '../../help/error/app_error.dart';
 import '../../help/logging/app_logger.dart';
 import '../dao/cache_dao.dart';
+import '../local/preferences/app_preferences_store.dart';
+import '../local/preferences/versioned_app_preference_migrator.dart';
 
 /// 使用内置 assets 词库/域名表 + 通用缓存表实现成人内容屏蔽领域边界。
 ///
 /// 对应 Android `help.AdultContentFilter` + `help.source.SourceHelp.list18Plus`：
 /// 关键词库判定书名/作者/分类/简介/书源名称/分组/备注，域名黑名单额外判定书源地址。
-/// 复用项目已有 `caches` 通用缓存表保存“是否屏蔽”开关和远程更新后的词库覆盖，
-/// 不引入新的本地持久化依赖。
+/// MMKV 保存“是否屏蔽”开关；项目已有 `caches` 表继续保存远程词库覆盖，
+/// 避免把批量规则和事务读取迁入偏好存储。
 final class AdultContentRepository implements AdultContentGateway {
   /// 创建成人内容屏蔽 Repository。
   AdultContentRepository(
@@ -25,11 +27,20 @@ final class AdultContentRepository implements AdultContentGateway {
     this._assetBundle,
     this._httpClient,
     this._logger, {
+    required AppPreferencesStore preferencesStore,
     required void Function() notifySourceVisibilityChanged,
-  }) : _notifySourceVisibilityChanged = notifySourceVisibilityChanged;
+  }) : _preferencesStore = preferencesStore,
+       _enabledMigrator = VersionedAppPreferenceMigrator(preferencesStore),
+       _notifySourceVisibilityChanged = notifySourceVisibilityChanged;
 
   /// 通用缓存 DAO，只在数据层持有。
   final CacheDao _cacheDao;
+
+  /// 成人内容屏蔽开关使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 成人内容屏蔽开关逐键迁移器。
+  final VersionedAppPreferenceMigrator _enabledMigrator;
 
   /// 启动期读取 Flutter assets 内置词库/域名表的资源入口。
   final AssetBundle _assetBundle;
@@ -50,8 +61,17 @@ final class AdultContentRepository implements AdultContentGateway {
   /// 屏蔽规则的应用进程内单调修订号。
   int _ruleRevision = 0;
 
-  /// 是否屏蔽成人内容的开关缓存键。
-  static const String _enabledCacheKey = 'flutter_adult_content_blocking_enabled';
+  /// 是否屏蔽成人内容的新 MMKV 键。
+  static const String _enabledCacheKey =
+      'content_filter.adult_blocking_enabled.v1';
+
+  /// 成人内容屏蔽开关迁移版本键。
+  static const String _enabledMigrationKey =
+      'migration.content_filter.adult_blocking_enabled.v1';
+
+  /// 成人内容屏蔽开关的旧 SQLite 键。
+  static const String _legacyEnabledCacheKey =
+      'flutter_adult_content_blocking_enabled';
 
   /// 远程更新后落地的关键词覆盖缓存键。
   static const String _keywordOverrideCacheKey = 'flutter_adult_content_keywords_override';
@@ -76,6 +96,9 @@ final class AdultContentRepository implements AdultContentGateway {
   /// 内存态屏蔽开关缓存，避免搜索等高频路径反复读取数据库。
   bool? _enabledCache;
 
+  /// 首次迁移和读取屏蔽开关时复用的单飞任务。
+  Future<bool>? _enabledLoadFuture;
+
   /// 内存态关键词缓存。
   Set<String>? _keywordCache;
 
@@ -86,16 +109,52 @@ final class AdultContentRepository implements AdultContentGateway {
   Stream<int> get ruleChanges => _ruleChangesController.stream;
 
   @override
-  Future<bool> isBlockingEnabled({DatabaseExecutor? executor}) async {
+  Future<bool> isBlockingEnabled({DatabaseExecutor? executor}) {
     /// 已经读取过的开关值。
     final bool? cached = _enabledCache;
     if (cached != null) {
-      return cached;
+      return Future<bool>.value(cached);
     }
-    /// 缓存表中保存的开关文本；不存在时按默认开启处理。
-    final String? raw =
-        (await _cacheDao.get(_enabledCacheKey, executor: executor))?.value;
-    final bool enabled = raw == null || raw == 'true';
+    final Future<bool>? existing = _enabledLoadFuture;
+    if (existing != null) {
+      return existing;
+    }
+    final Future<bool> load = _loadBlockingEnabledWithRetry(executor);
+    _enabledLoadFuture = load;
+    return load;
+  }
+
+  /// 初始化失败时释放单飞句柄，让后续调用可以重新尝试迁移。
+  Future<bool> _loadBlockingEnabledWithRetry(
+    DatabaseExecutor? executor,
+  ) async {
+    try {
+      return await _loadBlockingEnabled(executor);
+    } on Object {
+      _enabledLoadFuture = null;
+      rethrow;
+    }
+  }
+
+  /// 迁移并读取成人内容屏蔽开关；缺失或损坏时保持默认开启。
+  Future<bool> _loadBlockingEnabled(DatabaseExecutor? executor) async {
+    final AppPreferenceMigrationResult<bool> result =
+        await _enabledMigrator.migrate<bool>(
+      valueKey: _enabledCacheKey,
+      migrationVersionKey: _enabledMigrationKey,
+      targetVersion: 1,
+      readCurrentValue: () => _preferencesStore.readBool(_enabledCacheKey),
+      writeCurrentValue: (bool value) =>
+          _preferencesStore.writeBool(_enabledCacheKey, value),
+      readLegacyValue: () async =>
+          (await _cacheDao.get(
+            _legacyEnabledCacheKey,
+            executor: executor,
+          ))
+              ?.value,
+      decodeLegacyValue: _decodeBooleanPreference,
+    );
+    final bool enabled = result.value ?? true;
     _enabledCache = enabled;
     return enabled;
   }
@@ -107,11 +166,21 @@ final class AdultContentRepository implements AdultContentGateway {
     if (previous == enabled) {
       return;
     }
-    await _cacheDao.upsert(
-      Cache(key: _enabledCacheKey, value: enabled ? 'true' : 'false'),
-    );
+    if (!_preferencesStore.writeBool(_enabledCacheKey, enabled)) {
+      throw StateError('成人内容屏蔽偏好写入失败');
+    }
     _enabledCache = enabled;
+    _enabledLoadFuture = Future<bool>.value(enabled);
     _publishRulesChanged();
+  }
+
+  /// 严格解析旧 SQLite 布尔文本，损坏值按默认开启处理。
+  bool? _decodeBooleanPreference(String rawValue) {
+    return switch (rawValue) {
+      'true' => true,
+      'false' => false,
+      _ => null,
+    };
   }
 
   @override

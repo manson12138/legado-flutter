@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
@@ -64,20 +65,46 @@ final class _HistoryList extends StatelessWidget {
       padding: const EdgeInsets.all(SpacingToken.medium),
       itemCount: state.books.length,
       itemBuilder: (BuildContext context, int index) {
+        /// 当前历史书籍。
         final Book book = state.books[index];
-        return Card(
-          key: ValueKey<String>('history-${book.bookUrl}'),
-          child: ListTile(
-            onTap: () => onIntent(OpenReadingHistoryBookIntent(book.bookUrl)),
-            leading: SizedBox(
-              width: 36,
-              height: 50,
-              child: _HistoryCover(book: book),
+        /// 本次按下时形成的一次性封面几何。
+        ReaderTransitionSpec? transitionSpec;
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapDown: (TapDownDetails details) {
+            /// 列表项左上角的全局坐标。
+            final Offset tileOrigin =
+                details.globalPosition - details.localPosition;
+            transitionSpec = ReaderTransitionSpec.fromRect(
+              kind: ReaderTransitionKind.history,
+              coverUrl: book.customCoverUrl ?? book.coverUrl,
+              sourceRect: Rect.fromLTWH(
+                tileOrigin.dx + 16,
+                tileOrigin.dy + 16,
+                36,
+                50,
+              ),
+            );
+          },
+          child: Card(
+            key: ValueKey<String>('history-${book.bookUrl}'),
+            child: ListTile(
+              onTap: () => onIntent(
+                OpenReadingHistoryBookIntent(
+                  book.bookUrl,
+                  transitionSpec: transitionSpec,
+                ),
+              ),
+              leading: SizedBox(
+                width: 36,
+                height: 50,
+                child: _HistoryCover(book: book),
+              ),
+              title: Text(book.name),
+              subtitle: Text('${book.author}\n${book.durChapterTitle ?? '已阅读'}'),
+              isThreeLine: true,
+              trailing: const Icon(Icons.chevron_right),
             ),
-            title: Text(book.name),
-            subtitle: Text('${book.author}\n${book.durChapterTitle ?? '已阅读'}'),
-            isThreeLine: true,
-            trailing: const Icon(Icons.chevron_right),
           ),
         );
       },
@@ -124,24 +151,60 @@ final class _HistoryGrid extends StatelessWidget {
           ),
           itemCount: state.books.length,
           itemBuilder: (BuildContext context, int index) {
+            /// 当前历史书籍。
             final Book book = state.books[index];
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: BookGridLayout.cardHorizontalInset),
               child: Card(
                 key: ValueKey<String>('history-grid-${book.bookUrl}'),
                 clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: () => onIntent(OpenReadingHistoryBookIntent(book.bookUrl)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      Expanded(child: _HistoryCover(book: book)),
-                      Padding(
-                        padding: const EdgeInsets.all(SpacingToken.xSmall),
-                        child: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (
+                          BuildContext context,
+                          BoxConstraints coverConstraints,
+                        ) {
+                          /// 本次封面按下时形成的一次性几何。
+                          ReaderTransitionSpec? transitionSpec;
+                          return InkWell(
+                            onTapDown: (TapDownDetails details) {
+                              transitionSpec = ReaderTransitionSpec.fromTap(
+                                kind: ReaderTransitionKind.history,
+                                coverUrl:
+                                    book.customCoverUrl ?? book.coverUrl,
+                                globalPosition: details.globalPosition,
+                                localPosition: details.localPosition,
+                                sourceSize: coverConstraints.biggest,
+                              );
+                            },
+                            onTap: () => onIntent(
+                              OpenReadingHistoryBookIntent(
+                                book.bookUrl,
+                                transitionSpec: transitionSpec,
+                              ),
+                            ),
+                            child: _HistoryCover(book: book),
+                          );
+                        },
                       ),
-                    ],
-                  ),
+                    ),
+                    InkWell(
+                      onTap: () => onIntent(
+                        OpenReadingHistoryBookIntent(book.bookUrl),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(SpacingToken.xSmall),
+                        child: Text(
+                          book.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             );

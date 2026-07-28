@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
@@ -38,6 +39,9 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
 
   /// 当前已经交给 Navigator 展示的书架冲突状态。
   BookInfoShelfConflictDialog? _shownShelfConflict;
+
+  /// 是否已有详情到阅读器的导航在栈中，阻止快速重复创建路由。
+  bool _openingReader = false;
 
   /// 创建 ViewModel 并开始监听 Effect。
   @override
@@ -133,16 +137,17 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
           initialChapterIndex: chapterIndex,
           initialBook: book,
           initialChapters: chapters,
+          transitionSpec: ReaderTransitionSpec.centered(
+            kind: ReaderTransitionKind.detail,
+            coverUrl: book.customCoverUrl ?? book.coverUrl,
+          ),
           entry: 'detail',
         );
         if (widget.arguments.returnReaderResult) {
           Navigator.of(context).pop(readerArguments);
           return;
         }
-        Navigator.of(context).pushNamed(
-          AppRoute.reader,
-          arguments: readerArguments,
-        );
+        unawaited(_openReader(readerArguments));
       case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openFullSourceChange(bookUrl));
       case CopyBookInfoTextEffect(
@@ -152,6 +157,22 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         unawaited(_copyText(text, message));
       case ShareBookInfoEffect(title: final String title, text: final String text):
         unawaited(_shareBookInfo(title: title, text: text));
+    }
+  }
+
+  /// 单飞打开阅读器，并在阅读器返回详情后恢复入口可用状态。
+  Future<void> _openReader(ReaderRouteArguments arguments) async {
+    if (_openingReader || !mounted) {
+      return;
+    }
+    _openingReader = true;
+    try {
+      await Navigator.of(context).pushNamed<void>(
+        AppRoute.reader,
+        arguments: arguments,
+      );
+    } finally {
+      _openingReader = false;
     }
   }
 

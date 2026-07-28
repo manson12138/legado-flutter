@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/model/app_account.dart';
 import '../domain/gateway/authentication_gateway.dart';
+import '../data/local/preferences/app_preferences_bootstrap.dart';
+import '../data/local/preferences/app_preferences_store.dart';
 import '../ui/theme/app_theme.dart';
 import 'app_dependencies.dart';
 import 'app_access_coordinator.dart';
@@ -59,18 +61,24 @@ final class _LegadoBootstrapAppState extends State<LegadoBootstrapApp> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      _createDependenciesAfterFirstFrame();
+      unawaited(_createDependenciesAfterFirstFrame());
     });
   }
 
-  /// 在首帧提交后创建数据库、网络、JS、下载和阅读业务对象，避免阻塞原生启动页。
-  void _createDependenciesAfterFirstFrame() {
+  /// 在首帧提交后初始化偏好并创建完整业务对象，避免阻塞原生启动页。
+  Future<void> _createDependenciesAfterFirstFrame() async {
     try {
+      final AppPreferencesStore preferencesStore =
+          await AppPreferencesBootstrap.initialize(logger: widget.logger);
+      if (!mounted) {
+        return;
+      }
       final AppDependencies dependencies = AppDependencies.create(
         logger: widget.logger,
         logManager: widget.logManager,
         crashReportManager: widget.crashReportManager,
         remoteAppConfig: widget.remoteAppConfig,
+        preferencesStore: preferencesStore,
       );
       if (!mounted) {
         return;
@@ -157,7 +165,8 @@ final class LegadoApp extends StatefulWidget {
 }
 
 /// 保存当前会话主题模式，并把修改能力向“我的”页面传递。
-final class _LegadoAppState extends State<LegadoApp> {
+final class _LegadoAppState extends State<LegadoApp>
+    with WidgetsBindingObserver {
   /// 写死的管理员账号；该账号进入主界面后不执行 App 准入或版本检查。
   static const String _administratorUsername = 'admin';
 
@@ -188,6 +197,7 @@ final class _LegadoAppState extends State<LegadoApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _startupSplashStopwatch.start();
     widget.dependencies.authenticationGateway.session.addListener(
       _onAuthenticationSessionChanged,
@@ -198,6 +208,14 @@ final class _LegadoAppState extends State<LegadoApp> {
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       unawaited(_restoreAuthenticationSession());
     });
+  }
+
+  /// 系统内存压力时立即释放可重建的应用级处理后正文。
+  @override
+  void didHaveMemoryPressure() {
+    widget.dependencies.readerProcessedContentStartupPreloader
+        .handleMemoryPressure();
+    widget.dependencies.readerProcessedContentCache.clear();
   }
 
   /// 修改当前会话主题，并触发整个应用重新应用颜色方案。
@@ -213,6 +231,7 @@ final class _LegadoAppState extends State<LegadoApp> {
   /// 释放主题监听器，避免应用组合根销毁后保留监听资源。
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.dependencies.authenticationGateway.session.removeListener(
       _onAuthenticationSessionChanged,
     );
@@ -222,6 +241,8 @@ final class _LegadoAppState extends State<LegadoApp> {
     widget.dependencies.bookshelfHistoryAutoRefreshService.cancel(
       reason: 'app_disposed',
     );
+    widget.dependencies.readerProcessedContentStartupPreloader.dispose();
+    widget.dependencies.readerProcessedContentCache.clear();
     widget.dependencies.currentUserScope.dispose();
     widget.dependencies.appAccessCoordinator.dispose();
     unawaited(widget.dependencies.adultContentGateway.dispose());
@@ -302,6 +323,9 @@ final class _LegadoAppState extends State<LegadoApp> {
       );
       widget.dependencies.bookshelfHistoryStartupPreloader.invalidate();
       widget.dependencies.downloadCoordinator.invalidateUserSession();
+      widget.dependencies.readerProcessedContentStartupPreloader
+          .invalidateUserSession();
+      widget.dependencies.readerProcessedContentCache.clear();
       _hasStartedMainBackgroundServices = false;
     }
     /// 会话变更必须先切换本地作用域，避免游客与账号页面相互读取记录。
@@ -372,8 +396,31 @@ final class _LegadoAppState extends State<LegadoApp> {
   Future<void> _preloadBookshelfHistory() async {
     try {
       await widget.dependencies.bookshelfHistoryStartupPreloader.preload();
+      if (mounted && _startupPhase.value == _AppStartupPhase.ready) {
+        _scheduleReaderProcessedContentPreload();
+      }
     } catch (_) {
       // 预加载只优化首屏，不应把本地读取失败扩大为认证或启动失败。
+    }
+  }
+
+  /// 在主界面完成一帧后安排最近阅读当前章预热，避免与启动遮罩退出动画竞争。
+  void _scheduleReaderProcessedContentPreload() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted || _startupPhase.value != _AppStartupPhase.ready) {
+        return;
+      }
+      unawaited(_preloadReaderProcessedContent());
+    });
+  }
+
+  /// 缓存限定正文预热失败只影响下次进入的加速效果，不改变启动与阅读正确性。
+  Future<void> _preloadReaderProcessedContent() async {
+    try {
+      await widget.dependencies.readerProcessedContentStartupPreloader
+          .preload();
+    } catch (_) {
+      // 页面仍会按原管线从持久缓存或书源加载，启动优化失败无需阻断主界面。
     }
   }
 
@@ -516,6 +563,7 @@ final class _LegadoAppState extends State<LegadoApp> {
       tag: appStartupLogTag,
       message: 'stage=authentication_restore_finished app_ready=true',
     );
+    _scheduleReaderProcessedContentPreload();
   }
 
   /// 等待下一绘制帧结束，确保业务 Navigator 和 Overlay 已完成挂载。

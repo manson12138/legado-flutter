@@ -7,6 +7,8 @@ import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
 import 'reader_edge_swipe_exit.dart';
+import 'reader_entry_shell.dart';
+import 'reader_intro_page.dart';
 import 'reader_menu_overlay.dart';
 import 'reader_page_layout.dart';
 import 'reader_selection_region.dart';
@@ -66,18 +68,44 @@ final class ReaderScreen extends StatelessWidget {
                   top: avoidsSystemBars,
                   right: avoidsSystemBars,
                   bottom: avoidsSystemBars,
-                  child: _buildBody(context),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (
+                      Widget child,
+                      Animation<double> animation,
+                    ) {
+                      /// 只使用合成层友好的透明度和轻微位移，不触发正文重复排版。
+                      final Animation<Offset> offset = Tween<Offset>(
+                        begin: const Offset(0.025, 0),
+                        end: Offset.zero,
+                      ).animate(animation);
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: offset,
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: _buildBody(context),
+                  ),
                 ),
               ),
             ),
           ),
-          Positioned.fill(
-            child: ReaderMenuOverlay(
-              state: state,
-              onIntent: onIntent,
+          if (state.content != null && !state.showIntroPage)
+            Positioned.fill(
+              child: ReaderMenuOverlay(
+                state: state,
+                onIntent: onIntent,
+              ),
             ),
-          ),
-          if (state.menuVisible && !state.isInBookshelf)
+          if (state.content != null &&
+              !state.showIntroPage &&
+              state.menuVisible &&
+              !state.isInBookshelf)
             Positioned(
               right: SpacingToken.large,
               bottom: 176,
@@ -108,16 +136,49 @@ final class ReaderScreen extends StatelessWidget {
 
   /// 根据加载状态构建初始化、错误或可持续显示的正文区域。
   Widget _buildBody(BuildContext context) {
+    if (state.showIntroPage) {
+      return ReaderIntroPage(
+        key: const ValueKey<String>('reader-intro'),
+        state: state,
+        onAttemptEnter: () =>
+            onIntent(const AttemptEnterReaderContentIntent()),
+        onRetry: () => onIntent(
+          state.chapters.isEmpty
+              ? const InitializeReaderIntent()
+              : const RetryReaderChapterIntent(),
+        ),
+        onBack: () => onIntent(const CloseReaderIntent()),
+      );
+    }
     if (state.loadState == ReaderLoadState.error) {
-      return _ReaderErrorBody(
-        message: state.errorMessage ?? '章节正文加载失败',
-        onRetry: () => onIntent(const RetryReaderChapterIntent()),
+      return ReaderEntryShell(
+        key: const ValueKey<String>('reader-error'),
+        book: state.book,
+        chapterTitle: state.currentChapter?.title ?? '',
+        statusMessage: '阅读内容暂时无法打开',
+        errorMessage: state.errorMessage ?? '章节正文加载失败',
+        textColor: Color(state.config.textColorValue),
+        onRetry: () => onIntent(
+          state.chapters.isEmpty
+              ? const InitializeReaderIntent()
+              : const RetryReaderChapterIntent(),
+        ),
+        onBack: () => onIntent(const CloseReaderIntent()),
       );
     }
     /// 当前可继续展示的正文；相邻章节加载时保留旧章，避免列表刷新和空白转圈。
     final ReaderChapterContent? content = state.content;
     if (content == null) {
-      return const Center(child: CircularProgressIndicator());
+      return ReaderEntryShell(
+        key: const ValueKey<String>('reader-recovery'),
+        book: state.book,
+        chapterTitle: state.currentChapter?.title ?? '',
+        statusMessage: state.chapters.isEmpty
+            ? '正在恢复目录和阅读位置'
+            : '正在准备本章内容',
+        textColor: Color(state.config.textColorValue),
+        onBack: () => onIntent(const CloseReaderIntent()),
+      );
     }
     /// 当前章节的分页正文组件。
     final Widget pagedContent = ReaderPagedContent(
@@ -152,24 +213,69 @@ final class ReaderScreen extends StatelessWidget {
     } else {
       readableContent = pagedContent;
     }
-    return Stack(
-      children: <Widget>[
-        Positioned.fill(
-          child: IgnorePointer(
-            ignoring: state.loadState == ReaderLoadState.loading,
-            child: readableContent,
+    return _ReaderContentVisibilityReporter(
+      key: const ValueKey<String>('reader-content'),
+      onVisible: () =>
+          onIntent(const ReaderContentBecameVisibleIntent()),
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: state.loadState == ReaderLoadState.loading,
+              child: readableContent,
+            ),
           ),
-        ),
-        if (state.loadState == ReaderLoadState.loading)
-          const Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            child: LinearProgressIndicator(minHeight: 2),
-          ),
-      ],
+          if (state.loadState == ReaderLoadState.loading)
+            const Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+        ],
+      ),
     );
   }
+}
+
+/// 在正文组件完成首帧后回报可见状态，不持有动画、订阅或业务对象。
+final class _ReaderContentVisibilityReporter extends StatefulWidget {
+  /// 创建正文可见回报包装器。
+  const _ReaderContentVisibilityReporter({
+    required this.onVisible,
+    required this.child,
+    super.key,
+  });
+
+  /// 正文完成首帧后的单次回调。
+  final VoidCallback onVisible;
+
+  /// 实际正文组件。
+  final Widget child;
+
+  /// 创建只负责单次回报的状态。
+  @override
+  State<_ReaderContentVisibilityReporter> createState() =>
+      _ReaderContentVisibilityReporterState();
+}
+
+/// 安排单个帧后回调，并在路由释放后拒绝调用。
+final class _ReaderContentVisibilityReporterState
+    extends State<_ReaderContentVisibilityReporter> {
+  /// 首次插入正文树时安排可见回报。
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) {
+      if (mounted) {
+        widget.onVisible();
+      }
+    });
+  }
+
+  /// 透传正文，不引入额外布局层。
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// 在相邻章节之间保持旧页，并按当前覆盖或仿真策略进入新章节。
@@ -370,42 +476,6 @@ final class _ReaderChapterPageTurnSwitchState
         ],
       ),
       child: page,
-    );
-  }
-}
-
-/// 展示明确错误和强制刷新重试入口。
-final class _ReaderErrorBody extends StatelessWidget {
-  /// 创建阅读错误视图。
-  const _ReaderErrorBody({required this.message, required this.onRetry});
-
-  /// 用户可见错误摘要。
-  final String message;
-
-  /// 重试回调。
-  final VoidCallback onRetry;
-
-  /// 构建居中错误状态。
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(SpacingToken.large),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const Icon(Icons.menu_book_outlined, size: 48),
-            const SizedBox(height: SpacingToken.medium),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: SpacingToken.medium),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('重新获取正文'),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

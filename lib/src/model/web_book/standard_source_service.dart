@@ -9,7 +9,8 @@ import '../../api/js/script_context.dart';
 import '../../api/js/js_engine.dart';
 import '../../api/js/webview_script_bridge.dart';
 import '../../data/dao/cache_dao.dart';
-import '../../domain/model/cache.dart';
+import '../../data/local/preferences/app_preferences_store.dart';
+import '../../data/local/preferences/versioned_app_preference_migrator.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
@@ -39,9 +40,13 @@ final class StandardBookSourceService {
     this._parser,
     LegadoJavaScriptService javaScriptService,
     this._cacheDao,
+    AppPreferencesStore preferencesStore,
     this._webViewBridge,
     this._logger,
   ) : _javaScriptService = javaScriptService,
+      _preferencesStore = preferencesStore,
+      _searchInteractionMigrator =
+          VersionedAppPreferenceMigrator(preferencesStore),
       _ruleEvaluator = LegadoRuleEvaluator(javaScriptService);
 
   /// 统一 HTTP 客户端。
@@ -59,14 +64,29 @@ final class StandardBookSourceService {
   /// 执行 `loginCheckJs` 并保留对象返回值的 JavaScript 服务。
   final LegadoJavaScriptService _javaScriptService;
 
-  /// 保存搜索期交互策略的通用缓存 DAO。
+  /// 书源运行变量等脚本兼容缓存使用的通用缓存 DAO。
   final CacheDao _cacheDao;
+
+  /// 搜索期交互开关使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 搜索期交互开关逐键迁移器。
+  final VersionedAppPreferenceMigrator _searchInteractionMigrator;
 
   /// 执行 URL 选项 `webView/webJs/webViewDelayTime` 的后台页面边界。
   final WebViewScriptBridge _webViewBridge;
 
-  /// 搜索期书源登录和验证交互设置缓存键。
-  static const String _searchInteractionSettingKey = 'setting_search_source_interaction';
+  /// 搜索期书源登录和验证交互设置的新 MMKV 键。
+  static const String _searchInteractionSettingKey =
+      'search.source_interaction.v1';
+
+  /// 搜索期交互设置迁移版本键。
+  static const String _searchInteractionMigrationKey =
+      'migration.search.source_interaction.v1';
+
+  /// 搜索期交互设置的旧 SQLite 键。
+  static const String _legacySearchInteractionSettingKey =
+      'setting_search_source_interaction';
 
   /// 当前会话是否允许搜索脚本申请用户交互；启动和未读取设置时默认关闭。
   bool _allowSearchInteraction = false;
@@ -82,20 +102,40 @@ final class StandardBookSourceService {
 
   /// 读取持久化的搜索期登录与验证交互设置；缺失或损坏值均按关闭处理。
   Future<bool> loadSearchInteractionSetting() async {
-    /// 缓存表中保存的布尔文本。
-    final String? value = (await _cacheDao.get(_searchInteractionSettingKey))?.value;
-    _allowSearchInteraction = value == 'true';
+    final AppPreferenceMigrationResult<bool> result =
+        await _searchInteractionMigrator.migrate<bool>(
+      valueKey: _searchInteractionSettingKey,
+      migrationVersionKey: _searchInteractionMigrationKey,
+      targetVersion: 1,
+      readCurrentValue: () =>
+          _preferencesStore.readBool(_searchInteractionSettingKey),
+      writeCurrentValue: (bool value) =>
+          _preferencesStore.writeBool(_searchInteractionSettingKey, value),
+      readLegacyValue: () async =>
+          (await _cacheDao.get(_legacySearchInteractionSettingKey))?.value,
+      decodeLegacyValue: _decodeBooleanPreference,
+    );
+    _allowSearchInteraction = result.value ?? false;
     _searchInteractionSettingLoaded = true;
     return _allowSearchInteraction;
   }
 
   /// 保存搜索期登录与验证交互设置，并立即更新后续脚本上下文。
   Future<void> setSearchInteractionAllowed(bool allowed) async {
+    if (!_preferencesStore.writeBool(_searchInteractionSettingKey, allowed)) {
+      throw StateError('搜索期交互偏好写入失败');
+    }
     _allowSearchInteraction = allowed;
     _searchInteractionSettingLoaded = true;
-    await _cacheDao.upsert(
-      Cache(key: _searchInteractionSettingKey, value: allowed.toString()),
-    );
+  }
+
+  /// 严格解析旧 SQLite 布尔文本，损坏值交给默认关闭策略处理。
+  bool? _decodeBooleanPreference(String rawValue) {
+    return switch (rawValue) {
+      'true' => true,
+      'false' => false,
+      _ => null,
+    };
   }
 
   /// 根据业务操作返回脚本交互策略；只有显式开启后的搜索允许提出交互申请。

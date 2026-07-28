@@ -87,12 +87,14 @@ final class FileAppLogger implements AppLogger, AppLogManager {
     required String message,
     String tag = appLogTag,
     Object? error,
+    StackTrace? stackTrace,
   }) {
     _enqueue(
       level: AppLogLevel.warning,
       message: message,
       tag: tag,
       error: error,
+      stackTrace: stackTrace,
     );
   }
 

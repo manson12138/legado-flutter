@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/reader_transition_spec.dart';
 import '../../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import '../components/app_scaffold.dart';
 import '../components/book_cover.dart';
@@ -352,41 +353,66 @@ final class _BookshelfList extends StatelessWidget {
             : item.book.totalChapterNum > 0
                 ? '共 ${item.book.totalChapterNum} 章'
                 : null;
-        return Card(
-          key: ValueKey<String>(item.book.bookUrl),
-          color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
-          child: ListTile(
-            onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
-            onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
-            leading: SizedBox(
-              width: 28,
-              height: 40,
-              child: BookCover(
-                coverUrl: item.displayCoverUrl,
-                semanticLabel: '${item.book.name}封面',
-                bookName: item.book.name,
-                bookAuthor: item.book.author,
+        /// 本次按下时形成的一次性封面几何，不进入状态也不跨重建保存。
+        ReaderTransitionSpec? transitionSpec;
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapDown: (TapDownDetails details) {
+            /// 列表项左上角的全局坐标。
+            final Offset tileOrigin =
+                details.globalPosition - details.localPosition;
+            transitionSpec = ReaderTransitionSpec.fromRect(
+              kind: ReaderTransitionKind.bookshelf,
+              coverUrl: item.displayCoverUrl,
+              sourceRect: Rect.fromLTWH(
+                tileOrigin.dx + 16,
+                tileOrigin.dy + 16,
+                28,
+                40,
               ),
+            );
+          },
+          child: Card(
+            key: ValueKey<String>(item.book.bookUrl),
+            color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
+            child: ListTile(
+              onTap: () => onIntent(
+                TapBookshelfBookIntent(
+                  item.book.bookUrl,
+                  transitionSpec: transitionSpec,
+                ),
+              ),
+              onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
+              leading: SizedBox(
+                width: 28,
+                height: 40,
+                child: BookCover(
+                  coverUrl: item.displayCoverUrl,
+                  semanticLabel: '${item.book.name}封面',
+                  bookName: item.book.name,
+                  bookAuthor: item.book.author,
+                ),
+              ),
+              title: Text(item.book.name),
+              subtitle: Text('${item.book.author}\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
+              isThreeLine: true,
+              trailing: state.selectionMode
+                  ? Checkbox(
+                      value: selected,
+                      onChanged: (bool? value) => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        if (chapterBadgeLabel != null) Badge(label: Text(chapterBadgeLabel)),
+                        IconButton(
+                          onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
+                          icon: const Icon(Icons.info_outline),
+                          tooltip: '书籍详情',
+                        ),
+                      ],
+                    ),
             ),
-            title: Text(item.book.name),
-            subtitle: Text('${item.book.author}\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
-            isThreeLine: true,
-            trailing: state.selectionMode
-                ? Checkbox(
-                    value: selected,
-                    onChanged: (bool? value) => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
-                  )
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      if (chapterBadgeLabel != null) Badge(label: Text(chapterBadgeLabel)),
-                      IconButton(
-                        onPressed: () => onIntent(OpenBookshelfBookInfoIntent(item.book.bookUrl)),
-                        icon: const Icon(Icons.info_outline),
-                        tooltip: '书籍详情',
-                      ),
-                    ],
-                  ),
           ),
         );
       },
@@ -459,43 +485,66 @@ final class _BookshelfGrid extends StatelessWidget {
                   children: <Widget>[
                     Expanded(
                       // 封面区域单独响应点击：进入阅读，和下方书名作者区域的详情跳转分开。
-                      child: InkWell(
-                        onTap: () => onIntent(TapBookshelfBookIntent(item.book.bookUrl)),
-                        onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: <Widget>[
-                            BookCover(
-                              coverUrl: item.displayCoverUrl,
-                              semanticLabel: '${item.book.name}封面',
-                              borderRadius: BorderRadius.zero,
-                              bookName: item.book.name,
-                              bookAuthor: item.book.author,
-                            ),
-                            if (selected)
-                              const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
-                            if (chapterStatusText != null)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: SpacingToken.xSmall,
-                                    vertical: 2,
-                                  ),
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    chapterStatusText,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: unreadFontSize, color: Colors.grey.shade700),
-                                  ),
-                                ),
+                      child: LayoutBuilder(
+                        builder: (
+                          BuildContext context,
+                          BoxConstraints coverConstraints,
+                        ) {
+                          /// 本次封面按下时形成的一次性几何。
+                          ReaderTransitionSpec? transitionSpec;
+                          return InkWell(
+                            onTapDown: (TapDownDetails details) {
+                              transitionSpec = ReaderTransitionSpec.fromTap(
+                                kind: ReaderTransitionKind.bookshelf,
+                                coverUrl: item.displayCoverUrl,
+                                globalPosition: details.globalPosition,
+                                localPosition: details.localPosition,
+                                sourceSize: coverConstraints.biggest,
+                              );
+                            },
+                            onTap: () => onIntent(
+                              TapBookshelfBookIntent(
+                                item.book.bookUrl,
+                                transitionSpec: transitionSpec,
                               ),
-                          ],
-                        ),
+                            ),
+                            onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: <Widget>[
+                                BookCover(
+                                  coverUrl: item.displayCoverUrl,
+                                  semanticLabel: '${item.book.name}封面',
+                                  borderRadius: BorderRadius.zero,
+                                  bookName: item.book.name,
+                                  bookAuthor: item.book.author,
+                                ),
+                                if (selected)
+                                  const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
+                                if (chapterStatusText != null)
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: SpacingToken.xSmall,
+                                        vertical: 2,
+                                      ),
+                                      color: Colors.white.withValues(alpha: 0.5),
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        chapterStatusText,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(fontSize: unreadFontSize, color: Colors.grey.shade700),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     ),
                     // 书名作者区域单独响应点击：正常模式下进入详情，选择模式下仍然切换选中。

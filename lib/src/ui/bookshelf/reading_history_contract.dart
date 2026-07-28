@@ -1,3 +1,4 @@
+import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
 
 /// 阅读历史的显示布局；只影响 UI，不影响历史快照数据。
@@ -58,10 +59,16 @@ sealed class ReadingHistoryIntent {
 /// 打开一条历史书籍。
 final class OpenReadingHistoryBookIntent extends ReadingHistoryIntent {
   /// 创建历史阅读 Intent。
-  const OpenReadingHistoryBookIntent(this.bookUrl);
+  const OpenReadingHistoryBookIntent(
+    this.bookUrl, {
+    this.transitionSpec,
+  });
 
   /// 目标书籍稳定 URL。
   final String bookUrl;
+
+  /// 点击瞬间形成的一次性封面转场参数。
+  final ReaderTransitionSpec? transitionSpec;
 }
 
 /// 切换历史书籍列表和封面网格显示。
@@ -85,8 +92,14 @@ sealed class ReadingHistoryEffect {
 /// 请求从历史入口打开阅读器。
 final class OpenReadingHistoryReaderEffect extends ReadingHistoryEffect {
   /// 创建历史阅读器导航 Effect。
-  const OpenReadingHistoryReaderEffect(this.book);
+  const OpenReadingHistoryReaderEffect(
+    this.book, {
+    this.transitionSpec,
+  });
 
   /// 当前历史书籍快照。
   final Book book;
+
+  /// 原样交给阅读路由的一次性封面转场参数。
+  final ReaderTransitionSpec? transitionSpec;
 }

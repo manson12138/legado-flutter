@@ -31,6 +31,9 @@ abstract interface class ReaderCacheGateway {
   /// 读取一本书的显示和替换配置。
   Future<ReaderDisplayConfig> getDisplayConfig(String bookUrl);
 
+  /// 返回进程内最近一次完成加载或保存的显示配置，供阅读路由同步建立首帧。
+  ReaderDisplayConfig get currentDisplayConfig;
+
   /// 保存一本书的显示和替换配置。
   Future<void> saveDisplayConfig(String bookUrl, ReaderDisplayConfig config);
 }

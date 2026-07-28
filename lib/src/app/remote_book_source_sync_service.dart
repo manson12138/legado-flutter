@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../api/remote_app/remote_app_api.dart';
 import '../api/remote_app/remote_app_service_config.dart';
 import '../data/dao/cache_dao.dart';
+import '../data/local/preferences/app_preferences_store.dart';
 import '../domain/gateway/authentication_gateway.dart';
 import '../domain/model/book_source.dart';
 import '../domain/model/book_source_import_result.dart';
@@ -146,6 +147,7 @@ final class RemoteBookSourceSyncService {
     CacheDao cacheDao,
     this._authenticationGateway,
     RemoteAppServiceConfig config,
+    AppPreferencesStore preferencesStore,
     this._logger,
   ) : _cacheDao = cacheDao,
        _sourceSuccessRateReporter = SourceSuccessRateReporter(
@@ -158,6 +160,7 @@ final class RemoteBookSourceSyncService {
          cacheDao,
          _authenticationGateway,
          config,
+         preferencesStore,
        );
 
   /// 远端 App API。

@@ -6,6 +6,8 @@ import 'dart:math';
 import '../api/remote_app/remote_app_api.dart';
 import '../api/remote_app/remote_app_service_config.dart';
 import '../data/dao/cache_dao.dart';
+import '../data/local/preferences/app_preferences_store.dart';
+import '../data/local/preferences/versioned_app_preference_migrator.dart';
 import '../domain/gateway/authentication_gateway.dart';
 import '../domain/model/cache.dart';
 
@@ -17,7 +19,9 @@ final class AnalyticsRecorder {
     this._cacheDao,
     this._authenticationGateway,
     this._config,
-  );
+    this._preferencesStore,
+  ) : _consentMigrator =
+           VersionedAppPreferenceMigrator(_preferencesStore);
 
   /// 远端 App API。
   final RemoteAppApi _api;
@@ -31,8 +35,22 @@ final class AnalyticsRecorder {
   /// 集中版本名、构建号和平台配置。
   final RemoteAppServiceConfig _config;
 
-  /// 用户授权缓存键。
+  /// 用户授权使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 用户授权逐键迁移器。
+  final VersionedAppPreferenceMigrator _consentMigrator;
+
+  /// 用户授权的新 MMKV 键。
   static const String _consentCacheKey =
+      'privacy.analytics_consent.v1';
+
+  /// 用户授权迁移版本键。
+  static const String _consentMigrationKey =
+      'migration.privacy.analytics_consent.v1';
+
+  /// 用户授权的旧 SQLite 键。
+  static const String _legacyConsentCacheKey =
       'remote_app_analytics_consent_v1';
 
   /// 新协议埋点队列键；旧 v1 载荷不能安全迁移 eventId。
@@ -60,6 +78,12 @@ final class AnalyticsRecorder {
 
   /// 避免同一进程重复访问旧队列缓存。
   bool _legacyQueueCleared = false;
+
+  /// 当前进程已确认的统计授权值，避免每个埋点重复访问持久层。
+  bool? _enabledCache;
+
+  /// 首次迁移和读取统计授权时复用的单飞任务。
+  Future<bool>? _enabledLoadFuture;
 
   /// 后端允许的事件与属性字段。
   static const Map<String, Set<String>> _allowedProps =
@@ -224,16 +248,59 @@ final class AnalyticsRecorder {
   };
 
   /// 返回用户是否主动允许匿名分析。
-  Future<bool> isEnabled() async {
+  Future<bool> isEnabled() {
+    final bool? cached = _enabledCache;
+    if (cached != null) {
+      return Future<bool>.value(cached);
+    }
+    final Future<bool>? existing = _enabledLoadFuture;
+    if (existing != null) {
+      return existing;
+    }
+    final Future<bool> load = _loadEnabledWithRetry();
+    _enabledLoadFuture = load;
+    return load;
+  }
+
+  /// 初始化失败时释放单飞句柄，让后续调用可以重新尝试迁移。
+  Future<bool> _loadEnabledWithRetry() async {
+    try {
+      return await _loadEnabled();
+    } on Object {
+      _enabledLoadFuture = null;
+      rethrow;
+    }
+  }
+
+  /// 迁移并读取统计授权；未授权时同时清理可能残留的 SQLite 队列。
+  Future<bool> _loadEnabled() async {
     if (!_legacyQueueCleared) {
       await _cacheDao.delete(_legacyQueueCacheKey);
       _legacyQueueCleared = true;
     }
-    return (await _cacheDao.get(_consentCacheKey))?.value == 'true';
+    final AppPreferenceMigrationResult<bool> result =
+        await _consentMigrator.migrate<bool>(
+      valueKey: _consentCacheKey,
+      migrationVersionKey: _consentMigrationKey,
+      targetVersion: 1,
+      readCurrentValue: () => _preferencesStore.readBool(_consentCacheKey),
+      writeCurrentValue: (bool value) =>
+          _preferencesStore.writeBool(_consentCacheKey, value),
+      readLegacyValue: () async =>
+          (await _cacheDao.get(_legacyConsentCacheKey))?.value,
+      decodeLegacyValue: _decodeBooleanPreference,
+    );
+    final bool enabled = result.value ?? false;
+    _enabledCache = enabled;
+    if (!enabled) {
+      await _cacheDao.delete(_queueCacheKey);
+    }
+    return enabled;
   }
 
   /// 保存授权；关闭时立即清队列且不记录 enabled=false。
   Future<void> setEnabled(bool enabled) async {
+    await isEnabled();
     if (!enabled) {
       _flushTimer?.cancel();
       _flushTimer = null;
@@ -243,12 +310,11 @@ final class AnalyticsRecorder {
         await _cacheDao.delete(_legacyQueueCacheKey);
         _legacyQueueCleared = true;
       }
-      await _cacheDao.upsert(
-        Cache(
-          key: _consentCacheKey,
-          value: enabled ? 'true' : 'false',
-        ),
-      );
+      if (!_preferencesStore.writeBool(_consentCacheKey, enabled)) {
+        throw StateError('匿名统计授权偏好写入失败');
+      }
+      _enabledCache = enabled;
+      _enabledLoadFuture = Future<bool>.value(enabled);
       if (!enabled) {
         await _cacheDao.delete(_queueCacheKey);
       }
@@ -259,6 +325,15 @@ final class AnalyticsRecorder {
         props: const <String, Object?>{'enabled': true},
       );
     }
+  }
+
+  /// 严格解析旧 SQLite 布尔文本，损坏值按未授权处理。
+  bool? _decodeBooleanPreference(String rawValue) {
+    return switch (rawValue) {
+      'true' => true,
+      'false' => false,
+      _ => null,
+    };
   }
 
   /// 校验、聚合并持久化一个匿名事件；未授权时不产生任何记录。

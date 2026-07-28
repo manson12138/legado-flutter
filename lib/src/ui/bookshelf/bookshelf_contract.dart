@@ -1,3 +1,4 @@
+import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_group.dart';
 import '../../model/bookshelf/bookshelf_refresh_coordinator.dart';
@@ -229,9 +230,15 @@ final class ToggleBookshelfSortOrderIntent extends BookshelfIntent {
 /// 打开或选择一本书。
 final class TapBookshelfBookIntent extends BookshelfIntent {
   /// 创建点击 Intent。
-  const TapBookshelfBookIntent(this.bookUrl);
+  const TapBookshelfBookIntent(
+    this.bookUrl, {
+    this.transitionSpec,
+  });
   /// 书籍稳定 URL。
   final String bookUrl;
+
+  /// 点击瞬间形成的一次性封面转场参数。
+  final ReaderTransitionSpec? transitionSpec;
 }
 
 /// 长按进入选择模式。
@@ -347,9 +354,15 @@ sealed class BookshelfEffect {
 /// 打开 M8 阅读器边界。
 final class OpenBookshelfReaderEffect extends BookshelfEffect {
   /// 创建阅读导航 Effect。
-  const OpenBookshelfReaderEffect(this.book);
+  const OpenBookshelfReaderEffect(
+    this.book, {
+    this.transitionSpec,
+  });
   /// 阅读器所需完整书籍上下文。
   final Book book;
+
+  /// 原样交给阅读路由的一次性封面转场参数。
+  final ReaderTransitionSpec? transitionSpec;
 }
 
 /// 打开书籍详情。

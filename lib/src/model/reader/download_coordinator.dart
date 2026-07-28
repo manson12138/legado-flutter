@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import '../../api/http/http_contract.dart';
 import '../../api/js/script_context.dart';
 import '../../data/dao/cache_dao.dart';
+import '../../data/local/preferences/app_preferences_store.dart';
+import '../../data/local/preferences/versioned_app_preference_migrator.dart';
 import '../../domain/gateway/book_source_gateway.dart';
 import '../../domain/gateway/bookshelf_gateway.dart';
 import '../../domain/gateway/chapter_gateway.dart';
@@ -11,7 +13,6 @@ import '../../domain/gateway/download_gateway.dart';
 import '../../domain/gateway/reader_cache_gateway.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
-import '../../domain/model/cache.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/download_task.dart';
@@ -46,6 +47,7 @@ final class DownloadCoordinator {
     required AppLogger logger,
     required DownloadBackgroundService backgroundService,
     required CacheDao cacheDao,
+    required AppPreferencesStore preferencesStore,
     required Future<bool> Function() analyticsEnabled,
     required Future<void> Function(
       String eventName, {
@@ -64,7 +66,10 @@ final class DownloadCoordinator {
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger,
        _backgroundService = backgroundService,
-       _cacheDao = cacheDao,
+       _legacyCacheDao = cacheDao,
+       _preferencesStore = preferencesStore,
+       _maximumConcurrencyMigrator =
+           VersionedAppPreferenceMigrator(preferencesStore),
        _analyticsEnabled = analyticsEnabled,
        _analyticsRecorder = analyticsRecorder;
 
@@ -74,8 +79,16 @@ final class DownloadCoordinator {
   /// 用户未保存设置时使用的全局章节下载并发数。
   static const int defaultMaximumConcurrency = 5;
 
-  /// 持久化全局章节下载并发数的缓存键。
+  /// 持久化全局章节下载并发数的新 MMKV 键。
   static const String _maximumConcurrencySettingKey =
+      'download.maximum_concurrency.v1';
+
+  /// 下载并发设置迁移版本键。
+  static const String _maximumConcurrencyMigrationKey =
+      'migration.download.maximum_concurrency.v1';
+
+  /// 下载并发设置的旧 SQLite 键。
+  static const String _legacyMaximumConcurrencySettingKey =
       'setting_download_maximum_concurrency';
 
   /// 单章最大自动重试次数，超过后转为失败状态并等待用户手动重试。
@@ -145,8 +158,14 @@ final class DownloadCoordinator {
   /// Android 前台服务与 iOS 有限后台任务的统一平台边界。
   final DownloadBackgroundService _backgroundService;
 
-  /// 全局下载并发设置持久化访问；复用既有 `caches` 表，不改变下载任务 Schema。
-  final CacheDao _cacheDao;
+  /// 只在首次迁移时读取旧下载并发值的 SQLite 缓存 DAO。
+  final CacheDao _legacyCacheDao;
+
+  /// 下载并发设置使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 下载并发设置逐键迁移器。
+  final VersionedAppPreferenceMigrator _maximumConcurrencyMigrator;
 
   /// 只在用户已授权时创建批次计时器。
   final Future<bool> Function() _analyticsEnabled;
@@ -258,28 +277,55 @@ final class DownloadCoordinator {
     /// 防止异常调用突破 Android 对齐的安全上限或写入零并发导致队列停滞。
     final int normalized = value.clamp(1, maximumConcurrencyLimit).toInt();
     await loadMaximumConcurrency();
-    await _cacheDao.upsert(
-      Cache(key: _maximumConcurrencySettingKey, value: normalized.toString()),
-    );
+    if (!_preferencesStore.writeInt(
+      _maximumConcurrencySettingKey,
+      normalized,
+    )) {
+      throw StateError('下载并发偏好写入失败');
+    }
     _maximumConcurrency = normalized;
     _kick();
   }
 
   /// 从通用缓存恢复并发设置，并把损坏数据回写为可用的默认值。
   Future<int> _loadMaximumConcurrency() async {
-    final String? rawValue =
-        (await _cacheDao.get(_maximumConcurrencySettingKey))?.value;
-    final int? parsed = int.tryParse(rawValue ?? '');
-    final int normalized = parsed == null
-        ? defaultMaximumConcurrency
-        : parsed.clamp(1, maximumConcurrencyLimit).toInt();
+    final AppPreferenceMigrationResult<int> result =
+        await _maximumConcurrencyMigrator.migrate<int>(
+      valueKey: _maximumConcurrencySettingKey,
+      migrationVersionKey: _maximumConcurrencyMigrationKey,
+      targetVersion: 1,
+      readCurrentValue: () => _validMaximumConcurrency(
+        _preferencesStore.readInt(_maximumConcurrencySettingKey),
+      ),
+      writeCurrentValue: (int value) =>
+          _preferencesStore.writeInt(_maximumConcurrencySettingKey, value),
+      readLegacyValue: () async =>
+          (await _legacyCacheDao.get(_legacyMaximumConcurrencySettingKey))
+              ?.value,
+      decodeLegacyValue: (String rawValue) =>
+          _validMaximumConcurrency(int.tryParse(rawValue)),
+    );
+    final int? migratedValue = result.value;
+    final int normalized = migratedValue ?? defaultMaximumConcurrency;
     _maximumConcurrency = normalized;
-    if (rawValue != normalized.toString()) {
-      await _cacheDao.upsert(
-        Cache(key: _maximumConcurrencySettingKey, value: normalized.toString()),
-      );
+    if (result.value == null &&
+        !_preferencesStore.writeInt(
+          _maximumConcurrencySettingKey,
+          normalized,
+        )) {
+      throw StateError('下载并发默认偏好写入失败');
     }
     return normalized;
+  }
+
+  /// 将下载并发数限制到当前调度器支持的安全范围。
+  int? _validMaximumConcurrency(int? value) {
+    if (value == null ||
+        value < 1 ||
+        value > maximumConcurrencyLimit) {
+      return null;
+    }
+    return value;
   }
 
   /// 观察一本书的下载任务，供面板展示实时状态。

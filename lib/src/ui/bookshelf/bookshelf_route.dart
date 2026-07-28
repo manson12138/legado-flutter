@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
@@ -61,6 +62,9 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   double _pageProgress = 0;
   /// 当前已展示的业务对话框。
   BookshelfDialog? _shownDialog;
+
+  /// 是否已有书架或历史阅读导航在栈中，阻止快速双击创建重复阅读器。
+  bool _openingReader = false;
 
   /// 创建 ViewModel 并监听 Effect。
   @override
@@ -207,12 +211,16 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       return;
     }
     switch (effect) {
-      case OpenReadingHistoryReaderEffect(book: final Book book):
-        Navigator.of(context).pushNamed(
-          AppRoute.reader,
-          arguments: ReaderRouteArguments(
-            bookUrl: book.bookUrl,
+      case OpenReadingHistoryReaderEffect(
+        book: final Book book,
+        transitionSpec: final ReaderTransitionSpec? transitionSpec,
+      ):
+        unawaited(
+          _openReader(
+            book: book,
             entry: 'history',
+            isInBookshelf: null,
+            transitionSpec: transitionSpec,
           ),
         );
     }
@@ -224,18 +232,22 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       return;
     }
     switch (effect) {
-      case OpenBookshelfReaderEffect(book: final Book book):
+      case OpenBookshelfReaderEffect(
+        book: final Book book,
+        transitionSpec: final ReaderTransitionSpec? transitionSpec,
+      ):
         /// 【搜书诊断日志】现有产品路径从书架点击书籍后进入阅读路由。
         widget.dependencies.logger.info(
           tag: bookReaderEntryLogTag,
           message: '书架点击书籍，准备进入阅读器 bookId=${appLogDiagnosticId(book.bookUrl)} '
               'originId=${appLogDiagnosticId(book.origin)} chapterCount=${book.totalChapterNum}',
         );
-        Navigator.of(context).pushNamed(
-          AppRoute.reader,
-          arguments: ReaderRouteArguments(
-            bookUrl: book.bookUrl,
+        unawaited(
+          _openReader(
+            book: book,
             entry: 'bookshelf',
+            isInBookshelf: true,
+            transitionSpec: transitionSpec,
           ),
         );
       case OpenBookshelfBookInfoEffect(book: final Book book):
@@ -262,6 +274,33 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         Navigator.of(context).pushNamed(AppRoute.localBookImport);
       case OpenBookshelfChangeSourceEffect(book: final Book book):
         unawaited(_openChangeSource(book));
+    }
+  }
+
+  /// 单飞打开阅读器，并让同一转场参数同时服务进入与返回动画。
+  Future<void> _openReader({
+    required Book book,
+    required String entry,
+    required bool? isInBookshelf,
+    required ReaderTransitionSpec? transitionSpec,
+  }) async {
+    if (_openingReader || !mounted) {
+      return;
+    }
+    _openingReader = true;
+    try {
+      await Navigator.of(context).pushNamed<void>(
+        AppRoute.reader,
+        arguments: ReaderRouteArguments(
+          bookUrl: book.bookUrl,
+          initialBook: book,
+          initialIsInBookshelf: isInBookshelf,
+          transitionSpec: transitionSpec,
+          entry: entry,
+        ),
+      );
+    } finally {
+      _openingReader = false;
     }
   }
 

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 
 import '../../api/http/http_contract.dart';
 import '../../domain/gateway/book_source_gateway.dart';
@@ -16,6 +15,7 @@ import '../web_book/standard_source_parser.dart';
 import '../local_book/local_book_parser.dart';
 import '../local_book/local_book_service.dart';
 import 'reader_text_processor.dart';
+import 'reader_processed_content_cache.dart';
 
 /// 阅读正文管线或书源边界失败时抛出的明确错误。
 final class ReadBookException implements Exception {
@@ -39,6 +39,10 @@ final class ReadBookCoordinator {
     required StandardBookSourceService standardService,
     required LocalBookContentService localBookContentService,
     required ReaderTextProcessor textProcessor,
+    required ReaderProcessedContentCache processedContentCache,
+    required int Function() currentUserId,
+    required int Function() currentUserGeneration,
+    required void Function() onForegroundLoadStarted,
     required HttpCancellationToken Function() cancellationTokenFactory,
     required AppLogger logger,
   }) : _sourceGateway = sourceGateway,
@@ -47,6 +51,10 @@ final class ReadBookCoordinator {
        _standardService = standardService,
        _localBookContentService = localBookContentService,
        _textProcessor = textProcessor,
+       _processedContentCache = processedContentCache,
+       _currentUserId = currentUserId,
+       _currentUserGeneration = currentUserGeneration,
+       _onForegroundLoadStarted = onForegroundLoadStarted,
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger;
 
@@ -68,14 +76,23 @@ final class ReadBookCoordinator {
   /// 后台 isolate 正文处理器。
   final ReaderTextProcessor _textProcessor;
 
+  /// 跨阅读路由复用的应用级有界处理后正文 LRU。
+  final ReaderProcessedContentCache _processedContentCache;
+
+  /// 返回当前游客或登录账号的本地作用域 ID。
+  final int Function() _currentUserId;
+
+  /// 返回当前用户作用域切换代次，拒绝旧会话晚到结果。
+  final int Function() _currentUserGeneration;
+
+  /// 当前可见章节开始加载时立即取消应用启动期低优先级正文预热。
+  final void Function() _onForegroundLoadStarted;
+
   /// HTTP 取消令牌工厂。
   final HttpCancellationToken Function() _cancellationTokenFactory;
 
   /// 【搜书诊断日志】项目统一日志接口，用于记录正文缓存、获取、处理与预加载。
   final AppLogger _logger;
-
-  /// 最多保留当前章和前后章的内存 LRU 缓存。
-  final LinkedHashMap<String, ReaderChapterContent> _memoryCache = LinkedHashMap<String, ReaderChapterContent>();
 
   /// 当前用户可见章节请求令牌，优先级高于预加载。
   HttpCancellationToken? _currentToken;
@@ -100,6 +117,7 @@ final class ReadBookCoordinator {
     String? nextChapterUrl,
     bool forceRefresh = false,
   }) async {
+    _onForegroundLoadStarted();
     _generation += 1;
     /// 当前请求独占世代。
     final int generation = _generation;
@@ -276,29 +294,33 @@ final class ReadBookCoordinator {
     );
   }
 
-  /// 释放当前请求、预加载和有限内存缓存。
+  /// 释放当前请求和预加载；应用级正文 LRU 继续服务下一次阅读路由。
   void dispose() {
     _logger.info(
       tag: bookReaderContentLogTag,
-      message: '正文协调器释放 generation=$_generation memoryCacheCount=${_memoryCache.length} '
+      message: '正文协调器释放 generation=$_generation '
           'preloadCount=${_preloadTokens.length} hasCurrentRequest=${_currentToken != null}',
     );
     _generation += 1;
     _currentToken?.cancel('阅读页面已关闭');
     _currentToken = null;
     _cancelPreloads('阅读页面已关闭');
-    _memoryCache.clear();
     _preloadFailureCounts.clear();
   }
 
-  /// 清除指定章节的内存处理结果缓存。
+  /// 清除指定书籍章节的应用级处理结果缓存。
   ///
   /// 单章换源或离线下载把新正文直接写入持久缓存后，若该章节此刻正被阅读，内存 LRU
   /// 里仍会留着旧正文——不清掉的话，下一次 [loadChapter] 会先命中这份过期内存结果，
   /// 用户看不到刚替换或刚下载的新内容，需要等内存缓存自然被挤出才会生效。
-  void invalidateChapter(String chapterUrl) {
-    _memoryCache.remove('$chapterUrl#replace=true');
-    _memoryCache.remove('$chapterUrl#replace=false');
+  void invalidateChapter(String bookUrl, String chapterUrl) {
+    _processedContentCache.invalidateChapter(bookUrl, chapterUrl);
+  }
+
+  /// 正文处理配置变化时清除当前书全部处理结果和仍在运行的旧配置任务。
+  void invalidateProcessingConfiguration(String bookUrl) {
+    _cancelPreloads('正文处理配置变化');
+    _processedContentCache.invalidateBook(bookUrl);
   }
 
   /// iOS/Android 触发内存警告时取消非关键预加载并清空可重建的章节内存缓存。
@@ -307,7 +329,7 @@ final class ReadBookCoordinator {
   /// 阅读；下一次切章按原管线从持久缓存或书源恢复。
   void handleMemoryPressure() {
     _cancelPreloads('系统内存压力');
-    _memoryCache.clear();
+    _processedContentCache.clear();
   }
 
   /// 执行单章缓存、网络和处理管线。
@@ -323,18 +345,26 @@ final class ReadBookCoordinator {
     final String chapterId = appLogDiagnosticId(chapter.url);
     /// 【搜书诊断日志】单章缓存、网络与处理总耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
-    /// 配置参与缓存键，替换规则开关变化时不复用旧处理结果。
-    final String memoryKey = '${chapter.url}#replace=${config.useReplaceRules}'
-        '#chinese=${config.chineseConversionMode.name}'
-        '#reSegment=${config.reSegmentContent}';
+    if (forceRefresh) {
+      _processedContentCache.invalidateChapter(book.bookUrl, chapter.url);
+    }
+    /// 本次查询和处理共享的短生命周期缓存令牌。
+    ReaderProcessedContentCacheToken processedCacheToken =
+        _beginProcessedCacheTask(
+          book: book,
+          chapter: chapter,
+          config: config,
+        );
+    try {
     if (!forceRefresh) {
-      /// 命中的内存处理结果。
-      final ReaderChapterContent? memory = _memoryCache.remove(memoryKey);
+      /// 命中的应用级处理后正文。
+      final ReaderChapterContent? memory = _processedContentCache.take(
+        processedCacheToken,
+      );
       if (memory != null) {
-        _memoryCache[memoryKey] = memory;
         _logger.debug(
           tag: bookReaderContentLogTag,
-          message: '章节命中内存缓存 chapterId=$chapterId textLength=${memory.text.length} '
+          message: '章节命中应用级处理后缓存 chapterId=$chapterId textLength=${memory.text.length} '
               'elapsedMs=${stopwatch.elapsedMilliseconds}',
         );
         return memory;
@@ -451,6 +481,13 @@ final class ReadBookCoordinator {
         rawContent,
         DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch,
       );
+      /// 原始正文写入会使旧令牌失效；为本次新正文重新建立可提交身份。
+      _processedContentCache.end(processedCacheToken);
+      processedCacheToken = _beginProcessedCacheTask(
+        book: book,
+        chapter: chapter,
+        config: config,
+      );
       _logger.debug(
         tag: bookReaderContentLogTag,
         message: '章节原始正文缓存完成 chapterId=$chapterId contentLength=${rawContent.length}',
@@ -490,10 +527,11 @@ final class ReadBookCoordinator {
       );
       throw ReadBookException(error.message);
     }
-    _memoryCache[memoryKey] = content;
-    while (_memoryCache.length > 3) {
-      _memoryCache.remove(_memoryCache.keys.first);
+    if (token.isCancelled ||
+        processedCacheToken.key.userGeneration != _currentUserGeneration()) {
+      throw const ReadBookException('章节请求已取消');
     }
+    _processedContentCache.store(processedCacheToken, content);
     _logger.info(
       tag: bookReaderContentLogTag,
       message: '章节正文处理完成 chapterId=$chapterId textLength=${content.text.length} '
@@ -501,6 +539,27 @@ final class ReadBookCoordinator {
           'fromCache=${content.fromCache} elapsedMs=${stopwatch.elapsedMilliseconds}',
     );
     return content;
+    } finally {
+      _processedContentCache.end(processedCacheToken);
+    }
+  }
+
+  /// 使用当前用户、正文配置和规则修订创建一次受失效控制的缓存任务。
+  ReaderProcessedContentCacheToken _beginProcessedCacheTask({
+    required Book book,
+    required BookChapter chapter,
+    required ReaderDisplayConfig config,
+  }) {
+    return _processedContentCache.begin(
+      userId: _currentUserId(),
+      userGeneration: _currentUserGeneration(),
+      bookUrl: book.bookUrl,
+      chapterUrl: chapter.url,
+      useReplaceRules: config.useReplaceRules,
+      chineseConversionMode: config.chineseConversionMode,
+      reSegmentContent: config.reSegmentContent,
+      replaceRuleRevision: _replaceRuleGateway.contentRevision,
+    );
   }
 
   /// 取消全部低优先级预加载令牌。

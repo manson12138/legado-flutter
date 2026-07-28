@@ -1,5 +1,6 @@
 import '../domain/model/book.dart';
 import '../domain/model/book_chapter.dart';
+import 'reader_transition_spec.dart';
 
 /// 集中声明应用内稳定路由名称，避免页面散落硬编码字符串。
 abstract final class AppRoute {
@@ -66,7 +67,9 @@ final class ReaderRouteArguments {
     this.initialChapterIndex,
     this.initialMessage,
     this.initialBook,
+    this.initialIsInBookshelf,
     this.initialChapters = const <BookChapter>[],
+    this.transitionSpec,
     this.entry = 'bookshelf',
   });
 
@@ -79,11 +82,17 @@ final class ReaderRouteArguments {
   /// 路由替换后需要由新阅读页面展示的一次性提示。
   final String? initialMessage;
 
-  /// 尚未加入书架时由详情页传入的书籍快照。
+  /// 书架、历史或详情入口已经持有的书籍快照。
   final Book? initialBook;
+
+  /// 路由入口已经确认的书架成员事实；为空时阅读器在后台补查。
+  final bool? initialIsInBookshelf;
 
   /// 尚未加入书架时由详情页传入的完整目录快照。
   final List<BookChapter> initialChapters;
+
+  /// 本次进入与返回共用的短生命周期封面转场参数。
+  final ReaderTransitionSpec? transitionSpec;
 
   /// 匿名埋点允许的阅读入口：bookshelf、detail 或 history。
   final String entry;

@@ -32,7 +32,11 @@ final class ReaderViewModel {
     required this.bookUrl,
     this.initialChapterIndex,
     this.initialBook,
+    this.initialIsInBookshelf,
     this.initialChapters = const <BookChapter>[],
+    required ReaderDisplayConfig initialDisplayConfig,
+    required bool initialShowIntroPage,
+    required void Function() markIntroSeen,
     this.entry = 'bookshelf',
     required BookshelfGateway bookshelfGateway,
     required ReadingHistoryGateway readingHistoryGateway,
@@ -66,8 +70,38 @@ final class ReaderViewModel {
        _recordReadingHistory = recordReadingHistory,
        _addBookToBookshelf = addBookToBookshelf,
        _analyticsRecorder = analyticsRecorder,
+       _markIntroSeen = markIntroSeen,
        _logger = logger {
-    _state = ReaderUiState(menuVisible: _claimInitialMenuVisibility());
+    /// 只接受主键匹配的路由书籍快照，避免错误参数污染首帧。
+    final Book? routeBook =
+        initialBook?.bookUrl == bookUrl ? initialBook : null;
+    /// 只接受全部属于当前书籍的目录快照。
+    final List<BookChapter> routeChapters =
+        initialChapters.isNotEmpty &&
+            initialChapters.every(
+              (BookChapter chapter) => chapter.bookUrl == bookUrl,
+            )
+        ? initialChapters
+        : const <BookChapter>[];
+    /// 首帧优先使用明确路由章节，其次使用书籍快照中的稳定旧索引。
+    final int requestedChapterIndex =
+        initialChapterIndex ?? routeBook?.durChapterIndex ?? 0;
+    /// 有目录快照时立即收窄索引；无目录时先保留非负值供恢复壳展示。
+    final int shellChapterIndex = routeChapters.isEmpty
+        ? math.max(0, requestedChapterIndex)
+        : requestedChapterIndex
+              .clamp(0, routeChapters.length - 1)
+              .toInt();
+    _state = ReaderUiState(
+      book: routeBook,
+      chapters: routeChapters,
+      currentChapterIndex: shellChapterIndex,
+      config: initialDisplayConfig,
+      isInBookshelf: initialIsInBookshelf ?? false,
+      showIntroPage: initialShowIntroPage,
+      menuVisible: _claimInitialMenuVisibility(),
+    );
+    _introRequiresPersistence = initialShowIntroPage;
   }
 
   /// 当前 App 进程是否已经至少打开过一次阅读器；不持久化，进程重启后重新首显。
@@ -88,8 +122,11 @@ final class ReaderViewModel {
   /// 详情目录入口指定的初始章节索引；为空时恢复稳定锚点或旧进度。
   final int? initialChapterIndex;
 
-  /// 详情页直接阅读时提供的未入架书籍快照。
+  /// 书架、历史或详情入口提供的书籍快照。
   final Book? initialBook;
+
+  /// 路由入口已经确认的书架成员事实；为空时初始化期间并行补查。
+  final bool? initialIsInBookshelf;
 
   /// 详情页直接阅读时提供的未入架目录快照。
   final List<BookChapter> initialChapters;
@@ -142,6 +179,9 @@ final class ReaderViewModel {
     Map<String, Object?> props,
   }) _analyticsRecorder;
 
+  /// 正文首帧实际可见后写入当前用户与书籍对应的 MMKV 首次标记。
+  final void Function() _markIntroSeen;
+
   /// 【搜书诊断日志】项目统一日志接口，用于记录阅读入口和章节状态。
   final AppLogger _logger;
 
@@ -174,6 +214,18 @@ final class ReaderViewModel {
 
   /// 是否已释放页面资源。
   bool _disposed = false;
+
+  /// 是否正在执行入口初始化，阻止恢复页连续点击重试创建重复本地查询。
+  bool _initializing = false;
+
+  /// 当前先导页是否仍需要在正文实际可见后写入持久化标记。
+  bool _introRequiresPersistence = false;
+
+  /// 最近一次正文未就绪滑动提示时间，避免连续手势反复创建 Snackbar。
+  int _lastIntroBlockedPromptMilliseconds = 0;
+
+  /// 最近一次可见章节从发起到内容就绪的耗时，正文首帧后用于匿名分桶。
+  int _pendingReaderOpenElapsedMilliseconds = 0;
 
   /// 是否已经进入保存并退出流程，防止系统返回和边缘手势重复关闭路由。
   bool _closing = false;
@@ -216,6 +268,10 @@ final class ReaderViewModel {
     switch (intent) {
       case InitializeReaderIntent():
         unawaited(_initialize());
+      case AttemptEnterReaderContentIntent():
+        _attemptEnterReaderContent();
+      case ReaderContentBecameVisibleIntent():
+        _handleReaderContentVisible();
       case UpdateReaderScrollIntent(characterOffset: final int characterOffset):
         _updateScroll(characterOffset);
       case OpenPreviousChapterIntent():
@@ -237,7 +293,7 @@ final class ReaderViewModel {
       ):
         unawaited(_openChapter(chapterIndex, characterOffset: characterOffset));
       case RetryReaderChapterIntent(forceRefresh: final bool forceRefresh):
-        unawaited(_loadCurrentChapter(forceRefresh: forceRefresh));
+        unawaited(_retryCurrentChapter(forceRefresh: forceRefresh));
       case RefreshReaderChaptersIntent(scope: final ReaderRefreshScope scope):
         unawaited(_refreshChapters(scope));
       case ToggleReaderMenuIntent():
@@ -354,6 +410,9 @@ final class ReaderViewModel {
 
   /// 初始化书籍、目录、配置、稳定锚点和兼容进度。
   Future<void> _initialize() async {
+    if (_initializing || _disposed) {
+      return;
+    }
     /// 【搜书诊断日志】阅读器初始化不可逆书籍标识。
     final String bookId = appLogDiagnosticId(bookUrl);
     /// 【搜书诊断日志】阅读器初始化耗时计时器。
@@ -364,16 +423,66 @@ final class ReaderViewModel {
       _emit(_state.copyWith(loadState: ReaderLoadState.error, errorMessage: '阅读入口缺少书籍 URL'));
       return;
     }
+    _initializing = true;
     try {
-      /// 当前精确 URL 对应的书架书；成员资格只由此查询决定。
-      final Book? shelfBook = await _bookshelfGateway.getBook(bookUrl);
-      /// 详情路由提供且主键匹配的书籍快照。
+      /// 详情、书架或历史路由提供且主键匹配的书籍快照。
       final Book? routeBook =
           initialBook?.bookUrl == bookUrl ? initialBook : null;
-      /// 书架不存在时读取持久阅读历史快照。
-      final Book? historyBook = shelfBook == null && routeBook == null
-          ? await _readingHistoryGateway.getHistoryBook(bookUrl)
+      /// 路由提供且全部属于当前书籍的目录快照。
+      final List<BookChapter> routeChapters =
+          initialChapters.isNotEmpty &&
+              initialChapters.every(
+                (BookChapter chapter) => chapter.bookUrl == bookUrl,
+              )
+          ? List<BookChapter>.unmodifiable(initialChapters)
+          : const <BookChapter>[];
+      /// 已知书架成员时复用路由书籍；已知非成员时不查书架；未知时后台补查。
+      final Future<Book?> shelfBookFuture = switch (initialIsInBookshelf) {
+        true => Future<Book?>.value(routeBook),
+        false => Future<Book?>.value(),
+        null => _bookshelfGateway.getBook(bookUrl),
+      };
+      /// 只有完全缺少路由书籍快照时才并行补查历史书籍事实。
+      final Future<Book?> historyBookFuture = routeBook == null
+          ? _readingHistoryGateway.getHistoryBook(bookUrl)
+          : Future<Book?>.value();
+      /// MMKV 显示配置、稳定锚点和旧进度互不依赖，立即并行启动。
+      final Future<ReaderDisplayConfig> configFuture =
+          _cacheGateway.getDisplayConfig(bookUrl);
+      final Future<ReaderPositionAnchor?> stableAnchorFuture =
+          _cacheGateway.getPositionAnchor(bookUrl);
+      final Future<AppResult<ReadingProgress?>> progressFuture =
+          _restoreReadingProgress.execute(bookUrl);
+      /// 书架入口在成员事实已知时同步启动目录查询，避免等待书籍查询后才开始。
+      final Future<AppResult<List<BookChapter>>>? knownShelfChaptersFuture =
+          routeBook != null &&
+              routeChapters.isEmpty &&
+              (initialIsInBookshelf == true || entry == 'bookshelf')
+          ? _loadBookChapters.execute(bookUrl)
           : null;
+      /// 历史入口同样并行启动自己的目录快照查询。
+      final Future<List<BookChapter>>? knownHistoryChaptersFuture =
+          routeBook != null &&
+              routeChapters.isEmpty &&
+              entry == 'history'
+          ? _readingHistoryGateway.getHistoryChapters(bookUrl)
+          : null;
+      /// 当前精确 URL 对应的书架书；成员资格只由此查询或路由明确事实决定。
+      final Book? shelfBook = await shelfBookFuture;
+      /// 与书架查询同时启动的历史书籍结果。
+      final Book? historyBook = await historyBookFuture;
+      if (_disposed) {
+        return;
+      }
+      /// 并行任务已经启动，此处汇合最终显示配置、稳定锚点和兼容进度。
+      final ReaderDisplayConfig config = await configFuture;
+      final ReaderPositionAnchor? stableAnchor =
+          await stableAnchorFuture;
+      final AppResult<ReadingProgress?> progressResult =
+          await progressFuture;
+      if (_disposed) {
+        return;
+      }
       /// 阅读器实际使用的书籍事实。
       final Book? book = shelfBook ?? routeBook ?? historyBook;
       if (book == null) {
@@ -385,11 +494,17 @@ final class ReaderViewModel {
         await _recordReaderOpenFailure(book: null, failureKind: 'unknown');
         return;
       }
+      /// 当前入口最终确认的书架成员资格。
+      final bool isInBookshelf =
+          shelfBook != null || initialIsInBookshelf == true;
       /// 根据书架、详情路由或历史来源读取完整目录。
       final List<BookChapter> chapters;
-      if (shelfBook != null) {
+      if (routeChapters.isNotEmpty) {
+        chapters = routeChapters;
+      } else if (isInBookshelf) {
         final AppResult<List<BookChapter>> chaptersResult =
-            await _loadBookChapters.execute(bookUrl);
+            await (knownShelfChaptersFuture ??
+                _loadBookChapters.execute(bookUrl));
         if (chaptersResult is AppFailure<List<BookChapter>>) {
           _logger.error(
             tag: bookReaderEntryLogTag,
@@ -399,7 +514,7 @@ final class ReaderViewModel {
           _emit(
             _state.copyWith(
               book: book,
-              isInBookshelf: true,
+              isInBookshelf: isInBookshelf,
               loadState: ReaderLoadState.error,
               errorMessage: chaptersResult.error.message,
             ),
@@ -412,15 +527,12 @@ final class ReaderViewModel {
         }
         chapters =
             (chaptersResult as AppSuccess<List<BookChapter>>).value;
-      } else if (routeBook != null &&
-          initialChapters.isNotEmpty &&
-          initialChapters.every(
-            (BookChapter chapter) => chapter.bookUrl == bookUrl,
-          )) {
-        chapters = List<BookChapter>.unmodifiable(initialChapters);
       } else {
-        chapters =
-            await _readingHistoryGateway.getHistoryChapters(bookUrl);
+        chapters = await (knownHistoryChaptersFuture ??
+            _readingHistoryGateway.getHistoryChapters(bookUrl));
+      }
+      if (_disposed) {
+        return;
       }
       if (chapters.isEmpty) {
         _logger.warning(
@@ -430,7 +542,7 @@ final class ReaderViewModel {
         _emit(
           _state.copyWith(
             book: book,
-            isInBookshelf: shelfBook != null,
+            isInBookshelf: isInBookshelf,
             loadState: ReaderLoadState.error,
             errorMessage: '书籍目录为空，请先在详情页刷新目录',
           ),
@@ -451,7 +563,7 @@ final class ReaderViewModel {
         _emit(
           _state.copyWith(
             book: book,
-            isInBookshelf: shelfBook != null,
+            isInBookshelf: isInBookshelf,
             loadState: ReaderLoadState.error,
             errorMessage: '目录中没有可阅读章节',
           ),
@@ -459,12 +571,6 @@ final class ReaderViewModel {
         await _recordReaderOpenFailure(book: book, failureKind: 'decode');
         return;
       }
-      /// 单书显示配置。
-      final ReaderDisplayConfig config = await _cacheGateway.getDisplayConfig(bookUrl);
-      /// 稳定章节地址和字符锚点。
-      final ReaderPositionAnchor? stableAnchor = await _cacheGateway.getPositionAnchor(bookUrl);
-      /// 兼容 M02 书籍字段的旧阅读进度。
-      final AppResult<ReadingProgress?> progressResult = await _restoreReadingProgress.execute(bookUrl);
       /// 可用旧进度。
       final ReadingProgress? progress = progressResult is AppSuccess<ReadingProgress?>
           ? progressResult.value
@@ -502,15 +608,21 @@ final class ReaderViewModel {
             context: stableAnchor?.context ?? '',
           ),
           config: config,
-          isInBookshelf: shelfBook != null,
+          isInBookshelf: isInBookshelf,
           loadState: ReaderLoadState.loading,
           clearError: true,
         ),
       );
-      _subscribeBookmarks(book);
-      _subscribeContentProcesses(book.bookUrl, chapterIndex);
       _effectController.add(EnterReaderSystemEffect(config));
       await _loadCurrentChapter();
+      if (_disposed) {
+        return;
+      }
+      /// 书签和正文标注不阻塞正文首个可读页面，正文就绪后再建立订阅。
+      if (_state.loadState == ReaderLoadState.ready) {
+        _subscribeBookmarks(book);
+        _subscribeContentProcesses(book.bookUrl, chapterIndex);
+      }
       if (_state.loadState != ReaderLoadState.ready) {
         await _recordReaderOpenFailure(
           book: book,
@@ -534,12 +646,96 @@ final class ReaderViewModel {
         book: _state.book,
         failureKind: 'unknown',
       );
+    } finally {
+      _initializing = false;
     }
   }
 
-  /// 首章可读后记录历史快照和匿名 reader_opened 事件。
+  /// 正文未就绪时保留先导页并节流提示，就绪后只切换内存状态。
+  void _attemptEnterReaderContent() {
+    if (!_state.showIntroPage) {
+      return;
+    }
+    if (_state.loadState == ReaderLoadState.ready &&
+        _state.content != null) {
+      _emit(
+        _state.copyWith(
+          showIntroPage: false,
+          menuVisible: false,
+        ),
+      );
+      return;
+    }
+    /// 当前手势发生时间，用单个整数完成节流，不创建 Timer。
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastIntroBlockedPromptMilliseconds < 1200) {
+      return;
+    }
+    _lastIntroBlockedPromptMilliseconds = now;
+    _effectController.add(
+      ShowReaderMessageEffect(
+        _state.loadState == ReaderLoadState.error
+            ? '本章加载失败，请先重试'
+            : '章节正在准备，完成后即可阅读',
+      ),
+    );
+  }
+
+  /// 正文组件完成首帧后提交首次标记、历史快照和匿名打开事件。
+  void _handleReaderContentVisible() {
+    if (_state.showIntroPage ||
+        _state.loadState != ReaderLoadState.ready ||
+        _state.content == null) {
+      return;
+    }
+    if (_introRequiresPersistence) {
+      _introRequiresPersistence = false;
+      try {
+        _markIntroSeen();
+      } on Object catch (error, stackTrace) {
+        _logger.warning(
+          tag: bookReaderEntryLogTag,
+          message: '首次阅读先导页状态保存失败',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _effectController.add(
+          const ShowReaderMessageEffect('先导页状态保存失败，下次可能再次显示'),
+        );
+      }
+    }
+    unawaited(
+      _recordSuccessfulReaderOpen(
+        _pendingReaderOpenElapsedMilliseconds,
+      ),
+    );
+  }
+
+  /// 重试当前章节，并在首次成功后补齐不阻塞首显的书签与正文标注订阅。
+  Future<void> _retryCurrentChapter({required bool forceRefresh}) async {
+    await _loadCurrentChapter(forceRefresh: forceRefresh);
+    if (_disposed || _state.loadState != ReaderLoadState.ready) {
+      return;
+    }
+    final Book? book = _state.book;
+    if (book == null) {
+      return;
+    }
+    if (_bookmarkSubscription == null) {
+      _subscribeBookmarks(book);
+    }
+    if (_contentProcessSubscription == null) {
+      _subscribeContentProcesses(
+        book.bookUrl,
+        _state.currentChapterIndex,
+      );
+    }
+  }
+
+  /// 正文首帧实际可见后记录历史快照和匿名 reader_opened 事件。
   Future<void> _recordSuccessfulReaderOpen(int elapsedMilliseconds) async {
-    if ((_initialOpenReported && _historySnapshotRecorded) ||
+    if (_disposed ||
+        (_initialOpenReported && _historySnapshotRecorded) ||
         _recordingSuccessfulOpen) {
       return;
     }
@@ -564,6 +760,9 @@ final class ReaderViewModel {
               historyBook,
               _state.chapters,
             );
+        if (_disposed) {
+          return;
+        }
         if (historyResult is AppFailure<void>) {
           _logger.error(
             tag: bookReaderEntryLogTag,
@@ -579,6 +778,9 @@ final class ReaderViewModel {
         }
       }
       if (_initialOpenReported) {
+        return;
+      }
+      if (_disposed) {
         return;
       }
       _initialOpenReported = true;
@@ -838,6 +1040,8 @@ final class ReaderViewModel {
       /// 根据附近正文修正正文变化后的字符位置。
       final int restoredOffset = _relocateAnchor(content.text, _state.anchor);
       _pendingCharacterOffset = restoredOffset;
+      _pendingReaderOpenElapsedMilliseconds =
+          stopwatch.elapsedMilliseconds;
       /// 已修正的稳定锚点。
       final ReaderPositionAnchor anchor = _buildAnchor(chapter, content.text, restoredOffset);
       _emit(
@@ -862,7 +1066,6 @@ final class ReaderViewModel {
         currentIndex: _state.currentChapterIndex,
         config: _state.config,
       );
-      await _recordSuccessfulReaderOpen(stopwatch.elapsedMilliseconds);
     } on ReadBookException catch (error) {
       if (generation == _loadGeneration) {
         _logger.error(
@@ -1457,6 +1660,7 @@ final class ReaderViewModel {
     if (previous.useReplaceRules != config.useReplaceRules ||
         previous.chineseConversionMode != config.chineseConversionMode ||
         previous.reSegmentContent != config.reSegmentContent) {
+      _coordinator.invalidateProcessingConfiguration(bookUrl);
       await _loadCurrentChapter();
       return;
     }
@@ -1831,7 +2035,7 @@ final class ReaderViewModel {
     final BookChapter chapter = _state.chapters[chapterIndex];
     try {
       await _cacheGateway.saveChapterContent(book.bookUrl, chapter.url, content, 0);
-      _coordinator.invalidateChapter(chapter.url);
+      _coordinator.invalidateChapter(book.bookUrl, chapter.url);
       try {
         await _analyticsRecorder(
           'chapter_source_change_completed',

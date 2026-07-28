@@ -220,6 +220,7 @@ final class ReaderUiState {
     this.refreshingChapters = false,
     this.isInBookshelf = false,
     this.addingToBookshelf = false,
+    this.showIntroPage = false,
   }) : chapters = List<BookChapter>.unmodifiable(chapters),
        bookmarks = List<Bookmark>.unmodifiable(bookmarks),
        replaceRules = List<ReplaceRule>.unmodifiable(replaceRules),
@@ -296,6 +297,9 @@ final class ReaderUiState {
   /// 阅读器加入书架事务是否正在执行。
   final bool addingToBookshelf;
 
+  /// 当前书籍是否仍停留在首次阅读先导页，正文就绪也不会自动跳过。
+  final bool showIntroPage;
+
   /// 当前章节；目录为空或索引越界时为 null。
   BookChapter? get currentChapter {
     if (currentChapterIndex < 0 || currentChapterIndex >= chapters.length) {
@@ -353,6 +357,7 @@ final class ReaderUiState {
     bool? refreshingChapters,
     bool? isInBookshelf,
     bool? addingToBookshelf,
+    bool? showIntroPage,
     bool clearContent = false,
     bool clearError = false,
     bool clearSheet = false,
@@ -390,6 +395,7 @@ final class ReaderUiState {
       refreshingChapters: refreshingChapters ?? this.refreshingChapters,
       isInBookshelf: isInBookshelf ?? this.isInBookshelf,
       addingToBookshelf: addingToBookshelf ?? this.addingToBookshelf,
+      showIntroPage: showIntroPage ?? this.showIntroPage,
     );
   }
 }
@@ -404,6 +410,18 @@ sealed class ReaderIntent {
 final class InitializeReaderIntent extends ReaderIntent {
   /// 创建初始化 Intent。
   const InitializeReaderIntent();
+}
+
+/// 尝试从首次先导页进入正文；正文未就绪时由 ViewModel 节流提示。
+final class AttemptEnterReaderContentIntent extends ReaderIntent {
+  /// 创建进入正文 Intent。
+  const AttemptEnterReaderContentIntent();
+}
+
+/// 正文组件已经完成至少一帧绘制，用于准确提交首次先导页 MMKV 标记。
+final class ReaderContentBecameVisibleIntent extends ReaderIntent {
+  /// 创建正文可见 Intent。
+  const ReaderContentBecameVisibleIntent();
 }
 
 /// 更新首个可见字符位置；ViewModel 会节流持久化。

@@ -21,6 +21,40 @@ final class ReaderTextProcessException implements Exception {
   String toString() => 'ReaderTextProcessException($message)';
 }
 
+/// 标识一次正文后台处理已经被更高优先级任务取消。
+final class ReaderTextProcessCancelledException implements Exception {
+  /// 创建不携带正文或用户输入的取消异常。
+  const ReaderTextProcessCancelledException();
+}
+
+/// 允许启动预热等低优先级调用主动终止正文处理 isolate。
+final class ReaderTextProcessCancellationToken {
+  /// 创建尚未取消的处理令牌。
+  ReaderTextProcessCancellationToken();
+
+  /// 首次取消时完成，供处理器与后台结果竞争。
+  final Completer<void> _cancelled = Completer<void>();
+
+  /// 是否已经收到取消请求。
+  bool get isCancelled => _cancelled.isCompleted;
+
+  /// 首次取消后完成的 Future。
+  Future<void> get whenCancelled => _cancelled.future;
+
+  /// 幂等取消本次处理。
+  void cancel() {
+    if (!_cancelled.isCompleted) {
+      _cancelled.complete();
+    }
+  }
+}
+
+/// [ReaderTextProcessCancellationToken] 在 isolate 返回前完成时使用的内部结果。
+final class _ReaderTextProcessCancelledResult {
+  /// 创建无状态取消标记。
+  const _ReaderTextProcessCancelledResult();
+}
+
 /// 在独立 isolate 完成正文净化、替换和分块，避免大章节阻塞 UI isolate。
 final class ReaderTextProcessor {
   /// 创建无状态正文处理器。
@@ -37,22 +71,35 @@ final class ReaderTextProcessor {
     required ReaderChineseConversionMode chineseConversionMode,
     required bool reSegmentContent,
     required bool fromCache,
+    ReaderTextProcessCancellationToken? cancellationToken,
   }) async {
+    if (cancellationToken?.isCancelled == true) {
+      throw const ReaderTextProcessCancelledException();
+    }
     /// 按设置转换且保持图片资源标记原样的正文。
     final String convertedContent = await _convertChineseText(
       rawContent,
       chineseConversionMode,
     );
+    if (cancellationToken?.isCancelled == true) {
+      throw const ReaderTextProcessCancelledException();
+    }
     /// 与正文使用同一模式转换后的章节显示标题。
     final String convertedTitle = await _convertChineseText(
       displayTitle,
       chineseConversionMode,
     );
+    if (cancellationToken?.isCancelled == true) {
+      throw const ReaderTextProcessCancelledException();
+    }
     /// 与正文使用同一模式转换后的书名，用于准确识别重复标题。
     final String convertedBookName = await _convertChineseText(
       book.name,
       chineseConversionMode,
     );
+    if (cancellationToken?.isCancelled == true) {
+      throw const ReaderTextProcessCancelledException();
+    }
     /// 接收后台处理结果和 isolate 错误的端口。
     final ReceivePort resultPort = ReceivePort();
     /// 传给 isolate 的可发送请求数据。
@@ -75,9 +122,19 @@ final class ReaderTextProcessor {
     );
     try {
       /// 首个处理成功或后台错误事件。
-      final Object? message = await resultPort.first.timeout(
-        _processingTimeout(replaceRules),
-      );
+      final Future<Object?> resultFuture = resultPort.first;
+      final Object? message = await (cancellationToken == null
+              ? resultFuture
+              : Future.any<Object?>(<Future<Object?>>[
+                  resultFuture,
+                  cancellationToken.whenCancelled.then<Object?>(
+                    (_) => const _ReaderTextProcessCancelledResult(),
+                  ),
+                ]))
+          .timeout(_processingTimeout(replaceRules));
+      if (message is _ReaderTextProcessCancelledResult) {
+        throw const ReaderTextProcessCancelledException();
+      }
       if (message is! Map<Object?, Object?>) {
         throw const ReaderTextProcessException('正文后台处理返回了无效结果');
       }

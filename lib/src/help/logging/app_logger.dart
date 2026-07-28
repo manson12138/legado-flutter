@@ -172,11 +172,12 @@ abstract interface class AppLogger {
   /// 记录正常的重要状态变化。
   void info({required String message, String tag = appLogTag});
 
-  /// 记录可恢复异常，并可附带原始错误对象。
+  /// 记录可恢复异常，并可附带原始错误对象与堆栈。
   void warning({
     required String message,
     String tag = appLogTag,
     Object? error,
+    StackTrace? stackTrace,
   });
 
   /// 记录导致操作失败的错误及可选堆栈。

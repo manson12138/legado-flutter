@@ -13,6 +13,13 @@ final class ReplaceRuleDao {
   /// Flutter 独立数据库入口。
   final LegadoDatabase _database;
 
+  /// 返回替换规则表最近一次提交修订，不执行数据库查询。
+  int get contentRevision {
+    return _database.changeNotifier.revisionForTables(
+      <String>{DatabaseTables.replaceRules},
+    );
+  }
+
   /// 按手动顺序读取全部替换规则。
   Future<List<ReplaceRule>> getAll() async {
     /// 已打开的数据库连接。

@@ -4,11 +4,19 @@ import '../../api/remote_app/remote_app_api.dart';
 import '../../api/remote_app/remote_app_service_config.dart';
 import '../../domain/model/cache.dart';
 import '../dao/cache_dao.dart';
+import '../local/preferences/app_preferences_store.dart';
+import '../local/preferences/versioned_app_preference_migrator.dart';
 
 /// 缓存远端启动配置并提供过滤规则的仓储。
 final class RemoteAppConfigurationRepository {
   /// 创建远端配置仓储。
-  RemoteAppConfigurationRepository(this._api, this._cacheDao, this._config);
+  RemoteAppConfigurationRepository(
+    this._api,
+    this._cacheDao,
+    this._config,
+    this._preferencesStore,
+  ) : _announcementReadMigrator =
+           VersionedAppPreferenceMigrator(_preferencesStore);
 
   /// 已签名的 API。
   final RemoteAppApi _api;
@@ -16,6 +24,12 @@ final class RemoteAppConfigurationRepository {
   final CacheDao _cacheDao;
   /// 当前安装包的产品、版本和渠道身份，用于隔离不同版本的准入缓存。
   final RemoteAppServiceConfig _config;
+
+  /// 已读公告集合使用的 MMKV 存储边界。
+  final AppPreferencesStore _preferencesStore;
+
+  /// 已读公告集合逐键迁移器。
+  final VersionedAppPreferenceMigrator _announcementReadMigrator;
   /// 最近成功启动聚合响应的缓存键。
   static const String bootstrapCacheKey = 'remote_app_bootstrap_v1';
   /// 已确认准入和升级状态的持久化缓存键。
@@ -26,8 +40,20 @@ final class RemoteAppConfigurationRepository {
   static const String announcementsCacheKey = 'remote_app_announcements_v1';
   /// 功能开关缓存键。
   static const String featureFlagsCacheKey = 'remote_app_feature_flags_v1';
-  /// 已读公告标识集合的缓存键。
-  static const String readAnnouncementIdsCacheKey = 'remote_app_read_announcement_ids_v1';
+  /// 已读公告标识集合的新 MMKV 键。
+  static const String readAnnouncementIdsCacheKey =
+      'remote_app.read_announcement_ids.v1';
+
+  /// 已读公告标识集合迁移版本键。
+  static const String _readAnnouncementIdsMigrationKey =
+      'migration.remote_app.read_announcement_ids.v1';
+
+  /// 已读公告标识集合的旧 SQLite 键。
+  static const String _legacyReadAnnouncementIdsCacheKey =
+      'remote_app_read_announcement_ids_v1';
+
+  /// 已读公告标识最多保留数量，防止 MMKV 值无界增长。
+  static const int _maximumReadAnnouncementIds = 500;
 
   /// 拉取并缓存启动配置。
   Future<Map<String, Object?>> refreshBootstrap() async {
@@ -168,15 +194,23 @@ final class RemoteAppConfigurationRepository {
   Future<List<Map<String, Object?>>> loadUnreadAnnouncements() async {
     List<Object?> values;
     try { values = await refreshAnnouncements(); } catch (_) { values = await _readCachedList(announcementsCacheKey); }
-    final Set<String> readIds = await _readStringSet(readAnnouncementIdsCacheKey);
+    final Set<String> readIds = await _readAnnouncementIds();
     return values.whereType<Map<Object?, Object?>>().map((Map<Object?, Object?> item) => item.map<String, Object?>((Object? key, Object? value) => key is String ? MapEntry<String, Object?>(key, value) : throw const FormatException('公告字段无效'))).where((Map<String, Object?> item) => item['id'] != null && !readIds.contains('${item['id']}')).toList(growable: false);
   }
 
   /// 将用户已关闭的公告标记为已读，避免同一公告在后续启动重复打扰。
   Future<void> markAnnouncementRead(Object id) async {
-    final Set<String> ids = await _readStringSet(readAnnouncementIdsCacheKey);
-    ids.add('$id');
-    await _cacheDao.upsert(Cache(key: readAnnouncementIdsCacheKey, value: jsonEncode(ids.toList(growable: false))));
+    final Set<String> ids = await _readAnnouncementIds();
+    final String normalizedId = '$id';
+    ids.remove(normalizedId);
+    ids.add(normalizedId);
+    final Set<String> bounded = _boundedAnnouncementIds(ids);
+    if (!_preferencesStore.writeString(
+      readAnnouncementIdsCacheKey,
+      jsonEncode(bounded.toList(growable: false)),
+    )) {
+      throw StateError('已读公告偏好写入失败');
+    }
   }
 
   /// 从缓存读取 JSON 列表；缓存不存在或损坏时返回空列表。
@@ -186,9 +220,52 @@ final class RemoteAppConfigurationRepository {
     try { final Object? decoded = jsonDecode(raw); return decoded is List<Object?> ? decoded : <Object?>[]; } on FormatException { return <Object?>[]; }
   }
 
-  /// 从缓存读取字符串集合；缓存不存在或损坏时返回空集合。
-  Future<Set<String>> _readStringSet(String key) async {
-    final List<Object?> values = await _readCachedList(key);
-    return values.whereType<String>().toSet();
+  /// 迁移并读取已读公告集合；损坏值按空集合处理。
+  Future<Set<String>> _readAnnouncementIds() async {
+    final AppPreferenceMigrationResult<Set<String>> result =
+        await _announcementReadMigrator.migrate<Set<String>>(
+      valueKey: readAnnouncementIdsCacheKey,
+      migrationVersionKey: _readAnnouncementIdsMigrationKey,
+      targetVersion: 1,
+      readCurrentValue: () => _decodeAnnouncementIds(
+        _preferencesStore.readString(readAnnouncementIdsCacheKey),
+      ),
+      writeCurrentValue: (Set<String> value) =>
+          _preferencesStore.writeString(
+            readAnnouncementIdsCacheKey,
+            jsonEncode(value.toList(growable: false)),
+          ),
+      readLegacyValue: () async =>
+          (await _cacheDao.get(_legacyReadAnnouncementIdsCacheKey))?.value,
+      decodeLegacyValue: (String rawValue) =>
+          _decodeAnnouncementIds(rawValue),
+    );
+    return Set<String>.from(result.value ?? const <String>{});
+  }
+
+  /// 严格解码并限制已读公告集合大小。
+  Set<String>? _decodeAnnouncementIds(String? rawValue) {
+    if (rawValue == null) {
+      return null;
+    }
+    try {
+      final Object? decoded = jsonDecode(rawValue);
+      if (decoded is! List<Object?>) {
+        return null;
+      }
+      return _boundedAnnouncementIds(decoded.whereType<String>().toSet());
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// 只保留最近插入的有限数量公告 ID。
+  Set<String> _boundedAnnouncementIds(Set<String> values) {
+    if (values.length <= _maximumReadAnnouncementIds) {
+      return Set<String>.from(values);
+    }
+    return values
+        .skip(values.length - _maximumReadAnnouncementIds)
+        .toSet();
   }
 }

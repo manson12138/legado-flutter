@@ -29,8 +29,15 @@ final class ConsoleAppLogger implements AppLogger {
     required String message,
     String tag = appLogTag,
     Object? error,
+    StackTrace? stackTrace,
   }) {
-    _write(level: AppLogLevel.warning, message: message, tag: tag, error: error);
+    _write(
+      level: AppLogLevel.warning,
+      message: message,
+      tag: tag,
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 
   /// 输出操作失败信息、原始错误及堆栈。

@@ -33,7 +33,7 @@ enum ReaderPageLineKind {
 /// 保存分页器已经测量完成的一行内容及其稳定正文位置。
 final class ReaderPageLine {
   /// 创建不可变分页行。
-  const ReaderPageLine({
+  const ReaderPageLine({ 
     required this.kind,
     required this.text,
     required this.height,

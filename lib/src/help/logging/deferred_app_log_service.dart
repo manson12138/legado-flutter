@@ -29,8 +29,18 @@ final class DeferredAppLogService implements AppLogger, AppLogManager {
       _logger.info(message: message, tag: tag);
 
   @override
-  void warning({required String message, String tag = appLogTag, Object? error}) =>
-      _logger.warning(message: message, tag: tag, error: error);
+  void warning({
+    required String message,
+    String tag = appLogTag,
+    Object? error,
+    StackTrace? stackTrace,
+  }) =>
+      _logger.warning(
+        message: message,
+        tag: tag,
+        error: error,
+        stackTrace: stackTrace,
+      );
 
   @override
   void error({required String message, String tag = appLogTag, Object? error, StackTrace? stackTrace}) =>
