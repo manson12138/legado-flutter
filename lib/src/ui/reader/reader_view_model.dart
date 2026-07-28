@@ -36,7 +36,9 @@ final class ReaderViewModel {
     this.initialChapters = const <BookChapter>[],
     required ReaderDisplayConfig initialDisplayConfig,
     required bool initialShowIntroPage,
+    required bool initialMenuVisible,
     required void Function() markIntroSeen,
+    required void Function() markInitialMenuShown,
     this.entry = 'bookshelf',
     required BookshelfGateway bookshelfGateway,
     required ReadingHistoryGateway readingHistoryGateway,
@@ -71,6 +73,7 @@ final class ReaderViewModel {
        _addBookToBookshelf = addBookToBookshelf,
        _analyticsRecorder = analyticsRecorder,
        _markIntroSeen = markIntroSeen,
+       _markInitialMenuShown = markInitialMenuShown,
        _logger = logger {
     /// 只接受主键匹配的路由书籍快照，避免错误参数污染首帧。
     final Book? routeBook =
@@ -99,21 +102,10 @@ final class ReaderViewModel {
       config: initialDisplayConfig,
       isInBookshelf: initialIsInBookshelf ?? false,
       showIntroPage: initialShowIntroPage,
-      menuVisible: _claimInitialMenuVisibility(),
+      menuVisible: initialMenuVisible,
     );
     _introRequiresPersistence = initialShowIntroPage;
-  }
-
-  /// 当前 App 进程是否已经至少打开过一次阅读器；不持久化，进程重启后重新首显。
-  static bool _hasOpenedReaderInProcess = false;
-
-  /// 仅为本进程第一个阅读器保留工具栏默认可见状态。
-  static bool _claimInitialMenuVisibility() {
-    if (_hasOpenedReaderInProcess) {
-      return false;
-    }
-    _hasOpenedReaderInProcess = true;
-    return true;
+    _menuAutoShowRequiresPersistence = initialMenuVisible;
   }
 
   /// 路由提供的稳定书籍 URL。
@@ -182,6 +174,9 @@ final class ReaderViewModel {
   /// 正文首帧实际可见后写入当前用户与书籍对应的 MMKV 首次标记。
   final void Function() _markIntroSeen;
 
+  /// 工具栏首次真正可见后写入设备安装周期的一次性 MMKV 标记。
+  final void Function() _markInitialMenuShown;
+
   /// 【搜书诊断日志】项目统一日志接口，用于记录阅读入口和章节状态。
   final AppLogger _logger;
 
@@ -220,6 +215,9 @@ final class ReaderViewModel {
 
   /// 当前先导页是否仍需要在正文实际可见后写入持久化标记。
   bool _introRequiresPersistence = false;
+
+  /// 当前路由是否仍需在工具栏实际可见后提交本安装周期的一次性标记。
+  bool _menuAutoShowRequiresPersistence = false;
 
   /// 最近一次正文未就绪滑动提示时间，避免连续手势反复创建 Snackbar。
   int _lastIntroBlockedPromptMilliseconds = 0;
@@ -661,7 +659,6 @@ final class ReaderViewModel {
       _emit(
         _state.copyWith(
           showIntroPage: false,
-          menuVisible: false,
         ),
       );
       return;
@@ -701,6 +698,19 @@ final class ReaderViewModel {
         );
         _effectController.add(
           const ShowReaderMessageEffect('先导页状态保存失败，下次可能再次显示'),
+        );
+      }
+    }
+    if (_menuAutoShowRequiresPersistence && _state.menuVisible) {
+      _menuAutoShowRequiresPersistence = false;
+      try {
+        _markInitialMenuShown();
+      } on Object catch (error, stackTrace) {
+        _logger.warning(
+          tag: bookReaderEntryLogTag,
+          message: '阅读器工具栏一次性展示状态保存失败',
+          error: error,
+          stackTrace: stackTrace,
         );
       }
     }

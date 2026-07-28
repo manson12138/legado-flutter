@@ -42,6 +42,13 @@ PODS:
     - FlutterMacOS
   - jsf (1.1.0):
     - Flutter
+  - MMKV (2.4.0):
+    - MMKVCore (~> 2.4.0)
+  - mmkv_ios (2.4.0):
+    - Flutter
+    - FlutterMacOS
+    - MMKV (< 2.5, >= 2.4.0)
+  - MMKVCore (2.4.0)
   - mobile_scanner (7.0.0):
     - Flutter
     - FlutterMacOS
@@ -69,6 +76,7 @@ DEPENDENCIES:
   - flutter_open_chinese_convert (from `.symlinks/plugins/flutter_open_chinese_convert/ios`)
   - flutter_secure_storage_darwin (from `.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - jsf (from `.symlinks/plugins/jsf/ios`)
+  - mmkv_ios (from `.symlinks/plugins/mmkv_ios/darwin`)
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
   - pdfx (from `.symlinks/plugins/pdfx/ios`)
   - share_plus (from `.symlinks/plugins/share_plus/ios`)
@@ -77,6 +85,9 @@ DEPENDENCIES:
   - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
 
 SPEC REPOS:
+  https://mirrors.tuna.tsinghua.edu.cn/git/CocoaPods/Specs.git:
+    - MMKV
+    - MMKVCore
   trunk:
     - DKImagePickerController
     - DKPhotoGallery
@@ -95,6 +106,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/flutter_secure_storage_darwin/darwin"
   jsf:
     :path: ".symlinks/plugins/jsf/ios"
+  mmkv_ios:
+    :path: ".symlinks/plugins/mmkv_ios/darwin"
   mobile_scanner:
     :path: ".symlinks/plugins/mobile_scanner/darwin"
   pdfx:
@@ -116,6 +129,9 @@ SPEC CHECKSUMS:
   flutter_open_chinese_convert: 8b440f57a1666d3deb57b3c9da6318685a061812
   flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
   jsf: dced649526b6cdecfa22a7b229a5017f32c35efb
+  MMKV: 86859fdfa2b0b21db1fd6e48788474a6416a2c77
+  mmkv_ios: 92c9ad54c630cdd783f8711d082710b3dd1ec5ea
+  MMKVCore: 3d16ce9f7d411e135020915fde98a056859a1efa
   mobile_scanner: 9157936403f5a0644ca3779a38ff8404c5434a93
   OpenCC: 290dcf27e18ef926aa4fbc0f0a9c116c36145bc5
   pdfx: 77f4dddc48361fbb01486fa2bdee4532cbb97ef3
@@ -126,6 +142,6 @@ SPEC CHECKSUMS:
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 
-PODFILE CHECKSUM: 1ed29d9b46671f03ef694bc47101878276a513de
+PODFILE CHECKSUM: 825d7966b6eb478ab37e9268e7ce6089cd6f3108
 
 COCOAPODS: 1.16.2

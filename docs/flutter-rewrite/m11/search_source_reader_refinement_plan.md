@@ -20,7 +20,7 @@
 | 书源列表 | `ui/book_source/`、`BookSourceRepository.watchAll` | 可输入搜索词，但没有“总书源/分组”筛选入口 | 显式加入总书源和从现存分组派生的筛选项；列表仍执行屏蔽规则 |
 | 服务器书源同步 | `app/remote_book_source_sync_service.dart` → `ImportBookSourcesUseCase` → `BookSourceRepository.importSourceJson` | 同步复用本地导入链路，会调用 `AdultContentGateway.isAdultSource` 并丢弃命中书源 | 新增仅供服务器同步的受控导入入口：保留所有服务器返回书源，仍遵循 JSON 校验、冲突覆盖和事务；显示/搜索时再过滤 |
 | 书源默认启用 | `BookSource`、导入解码器、书源编辑草稿 | 类型值已存在，默认 `enabled=true` | 文字书源（`bookSourceType == 0`）保持默认开启；视频、音乐、漫画等非文字类型默认关闭；显式携带 `enabled=false` 时不覆盖用户值 |
-| 阅读器菜单 | `ReaderUiState.menuVisible` | 默认值为 `true`，每个新 `ReaderViewModel` 都会显示工具栏 | 使用本进程级首次打开标记：只在 App 进程首个阅读器默认显示，后续打开默认隐藏；用户点按仍可显示 |
+| 阅读器菜单 | `ReaderUiState.menuVisible` | 默认值为 `true`，每个新 `ReaderViewModel` 都会显示工具栏 | 使用设备安装周期标记：App 安装后只自动显示一次，覆盖安装、重启和账号切换都保持隐藏；用户点按仍可显示 |
 | 阅读设置 | `ReaderRepository.getDisplayConfig/saveDisplayConfig` | 配置按 `reader:config:<bookUrl digest>` 保存，因此杀进程后仅同书恢复 | 改为全局阅读显示配置键；首次读全局值，不存在时兼容迁移当前书籍旧键；任意书籍修改后写全局值，打开任意书都会读取 |
 | 阅读器配色 | `reader_menu_overlay.dart`、`reader_settings_sheet.dart`、目录/书签 BottomSheet | 正文背景色与文字色未作为所有面板的统一主题 | 以 `ReaderDisplayConfig.backgroundColorValue/textColorValue` 计算面板 Surface、标题/正文、分割线、图标和交互色；目录、书签、设置及其余阅读器 Sheet 一致应用，不创建独立色彩持久化字段 |
 
@@ -39,14 +39,14 @@
 4. 将成人内容屏蔽拆为“导入准入”与“显示/搜索可见性”两个调用点。普通手动导入保持原有准入过滤；服务器同步走新入口，不过滤关键词/域名。书源管理列表和搜索候选统一调用可见性判断，避免只在 UI 文本过滤而遗漏域名。
 5. 在导入解码和编辑保存的默认值层处理非文字类型默认关闭，不改动已存在书源的启用状态。服务器同步按同一默认策略落库。
 6. 将阅读配置从单书缓存迁移为全局缓存键，保留旧键只读迁移兼容。配置写入使用单个 JSON，避免每个设置项分别 I/O；不涉及 SQLite 表结构，因此不提升 schemaVersion 或 app build number。
-7. ReaderRoute 创建 ViewModel 时从一个轻量的进程内会话状态读取“是否已打开过阅读器”。首个路由使用 `menuVisible=true`，后续为 `false`；不会把该一次性视觉状态持久化，杀死 App 后可重新首显。
+7. ReaderRoute 创建 ViewModel 时通过类型化 `ReaderMenuPreferences` 领取“本安装是否已经自动展示过工具栏”的设备级状态。未展示时首个路由使用 `menuVisible=true`，正文和工具栏实际进入可见帧后写入 `reader.menu_auto_shown.v1.device`；覆盖安装、重启和账号切换不重置，卸载或清除应用数据后重新首显。
 8. 提取阅读器面板颜色解析的纯 UI helper，并传给所有 ReaderSheet。避免在滚动列表逐项创建主题对象；面板主题在构建时按当前配置计算一次，动画继续使用现有 BottomSheet/Overlay 动画。
 
 ## 涉及文件
 
 - 搜索：`lib/src/ui/search/search_contract.dart`、`search_view_model.dart`、`search_screen.dart`、`search_route.dart`、`lib/src/model/web_book/book_search_coordinator.dart`。
 - 书源：`lib/src/domain/gateway/book_source_gateway.dart`、`lib/src/data/dao/book_source_dao.dart`、`lib/src/data/repository/book_source_repository.dart`、`lib/src/domain/usecase/import_book_sources_use_case.dart`、`lib/src/app/remote_book_source_sync_service.dart`、`lib/src/ui/book_source/`。
-- 阅读：`lib/src/data/repository/reader_repository.dart`、`lib/src/ui/reader/reader_contract.dart`、`reader_view_model.dart`、`reader_route.dart`、`reader_menu_overlay.dart`、`reader_settings_sheet.dart`、`reader_action_sheets.dart`。
+- 阅读：`lib/src/data/repository/reader_repository.dart`、`lib/src/app/reader_menu_preferences.dart`、`lib/src/ui/reader/reader_contract.dart`、`reader_view_model.dart`、`reader_route.dart`、`reader_menu_overlay.dart`、`reader_settings_sheet.dart`、`reader_action_sheets.dart`。
 - 文档索引：`docs/flutter-rewrite/AI_PROJECT_INDEX.md`。
 
 ## 验收清单（由用户执行）
@@ -56,7 +56,7 @@
 3. 书源页可切换总书源与任意分组，且屏蔽词/域名命中的书源不可见；搜索也不会调度这些书源。
 4. 同步服务器书源后，命中屏蔽词或域名的书源仍落库，但不出现在书源列表或搜索候选中。
 5. 新导入/新建的文字书源默认启用；视频、音乐、漫画等默认停用；已有书源状态不被改写。
-6. App 进程第一次打开阅读器显示工具栏，之后打开其他书默认隐藏；重启 App 后再次首开显示。
+6. App 安装后第一次实际进入正文时显示工具栏，之后打开其他书默认隐藏；重启 App、覆盖安装和切换账号后仍不再自动显示，卸载重装后重新显示一次。
 7. 修改阅读设置后，关闭 App、打开另一书籍，字体、布局、亮度/方向等设置一致恢复；旧单书配置在无全局配置时可迁移一次。
 8. 切换阅读配色后，设置、目录、书签、搜索、换源和下载等阅读器面板的前景/背景均可读且颜色一致。
 
@@ -70,6 +70,6 @@
 - 服务器游标同步通过 `ImportBookSourcesUseCase` 显式关闭导入准入过滤，仍保留解码、事务、冲突覆盖和错误统计；手动导入维持原有屏蔽行为。
 - `BookSourceRepository.watchAll` 与 `BookSearchCoordinator` 已在书源列表展示和搜索调度前调用屏蔽词/域名检查，已同步但被屏蔽的书源不会显示或执行。
 - 搜索筛选、书源分组、匹配模式均仅存在于 `SearchViewModel`，不写入数据库或偏好；页面销毁后自动失效。
-- 阅读配置保存键已改为全局键，旧按书籍键只读兼容；菜单首显状态只存于 App 进程内；所有 `ReaderSheet` 通过路由层主题继承阅读背景和文字配色。
+- 阅读配置保存键已改为全局键，旧按书籍键只读兼容；菜单首显状态使用设备安装周期 MMKV 标记，并只在工具栏实际可见后提交；所有 `ReaderSheet` 通过路由层主题继承阅读背景和文字配色。
 - 书源管理分组筛选已改为下拉选择；搜索页展开的书源候选区固定为独立滚动列表，避免候选数量过多时撑高页面。
 - 修正搜索书源面板的分组 `Wrap`：分组改为紧凑的弹出菜单，避免大量分组在 `Column` 中参与全量布局造成 RenderFlex 溢出；书源页分组也使用同风格的筛选胶囊触发菜单。

@@ -289,6 +289,24 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     }
     _openingReader = true;
     try {
+      /// FLUTTER_REWRITE_DEBUG_LOG：只记录导航开始和一次性转场 ID，不输出书籍或封面地址。
+      final ReaderTransitionSpec? diagnosticTransitionSpec =
+          transitionSpec;
+      if (diagnosticTransitionSpec != null &&
+          (diagnosticTransitionSpec.kind ==
+                  ReaderTransitionKind.bookshelf ||
+              diagnosticTransitionSpec.kind ==
+                  ReaderTransitionKind.history)) {
+        widget.dependencies.logger.info(
+          tag: readerCoverTransitionLogTag,
+          message: '$readerCoverTransitionDebugLogMarker '
+              'event=navigation_push '
+              'transitionId=${diagnosticTransitionSpec.id} '
+              'entry=${diagnosticTransitionSpec.kind.name} '
+              'sourceRectPresent='
+              '${diagnosticTransitionSpec.sourceRect != null}',
+        );
+      }
       await Navigator.of(context).pushNamed<void>(
         AppRoute.reader,
         arguments: ReaderRouteArguments(

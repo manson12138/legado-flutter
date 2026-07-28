@@ -1,5 +1,12 @@
 import 'dart:ui';
 
+/// FLUTTER_REWRITE_DEBUG_LOG：阅读器封面转场性能排查统一日志 Tag。
+const String readerCoverTransitionLogTag = 'READER_COVER_TRANSITION';
+
+/// FLUTTER_REWRITE_DEBUG_LOG：标识本轮只为转场性能排查存在的日志与辅助代码。
+const String readerCoverTransitionDebugLogMarker =
+    'FLUTTER_REWRITE_DEBUG_LOG';
+
 /// 阅读器封面转场的入口类型，决定完整开书或轻量详情动画。
 enum ReaderTransitionKind {
   /// 从书架封面进入，使用真实 cell 起点到全屏的放大淡出动画。

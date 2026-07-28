@@ -119,6 +119,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
     /// MMKV 中没有当前用户与书籍的完成标记时，首帧直接建立先导页状态。
     final bool initialShowIntroPage =
         !widget.dependencies.readerIntroPreferences.hasSeen(widget.bookUrl);
+    /// 当前安装尚未实际展示过工具栏时，仅允许本阅读路由领取一次自动展示资格。
+    final bool initialMenuVisible =
+        widget.dependencies.readerMenuPreferences.claimInitialVisibility();
     _viewModel = ReaderViewModel(
       bookUrl: widget.bookUrl,
       initialChapterIndex: widget.initialChapterIndex,
@@ -128,8 +131,12 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       initialDisplayConfig:
           widget.dependencies.readerCacheGateway.currentDisplayConfig,
       initialShowIntroPage: initialShowIntroPage,
+      initialMenuVisible: initialMenuVisible,
       markIntroSeen: () {
         widget.dependencies.readerIntroPreferences.markSeen(widget.bookUrl);
+      },
+      markInitialMenuShown: () {
+        widget.dependencies.readerMenuPreferences.markShown();
       },
       entry: widget.entry,
       bookshelfGateway: widget.dependencies.bookshelfGateway,

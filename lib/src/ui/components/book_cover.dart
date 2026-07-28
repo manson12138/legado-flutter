@@ -23,6 +23,8 @@ final class BookCover extends StatefulWidget {
     this.bookName,
     this.bookAuthor,
     this.onExhausted,
+    this.onTransitionCacheLookup,
+    this.onTransitionImageFrame,
     super.key,
   });
 
@@ -40,6 +42,12 @@ final class BookCover extends StatefulWidget {
   final String? bookAuthor;
   /// 自身地址和缓存候选都无法显示时的回调，供调用方切换到自己另外掌握的候选地址。
   final VoidCallback? onExhausted;
+  /// FLUTTER_REWRITE_DEBUG_LOG：仅供阅读转场统计同步缓存检查耗时与命中状态。
+  final void Function(Duration elapsed, bool cacheHit)?
+      onTransitionCacheLookup;
+  /// FLUTTER_REWRITE_DEBUG_LOG：仅供阅读转场记录图片帧时机及是否同步命中解码缓存。
+  final void Function(bool wasSynchronouslyLoaded)?
+      onTransitionImageFrame;
 
   /// 创建加载状态。
   @override
@@ -166,8 +174,10 @@ final class _BookCoverState extends State<BookCover> {
       return ClipRRect(borderRadius: widget.borderRadius, child: fallback(context, null, null));
     }
     /// 首帧成功解码时记录成功地址。
-    void handleFrame(int? frame) {
+    void handleFrame(int? frame, bool wasSynchronouslyLoaded) {
       if (frame != null) {
+        // FLUTTER_REWRITE_DEBUG_LOG：回调只传递时机，不传递 URL、路径或图片内容。
+        widget.onTransitionImageFrame?.call(wasSynchronouslyLoaded);
         WidgetsBinding.instance.addPostFrameCallback((_) => _rememberSuccess(value));
       }
     }
@@ -177,11 +187,26 @@ final class _BookCoverState extends State<BookCover> {
     /// 网络或本地图片组件。
     final Widget image;
     if (uri?.scheme == 'http' || uri?.scheme == 'https') {
+      /// FLUTTER_REWRITE_DEBUG_LOG：只有转场传入诊断回调时才创建同步缓存检查计时器。
+      final Stopwatch? transitionCacheLookupStopwatch =
+          widget.onTransitionCacheLookup == null
+          ? null
+          : (Stopwatch()..start());
       /// 已经落盘的本地缓存；命中时直接读本地文件，完全不发起网络请求。
       final File? cachedFile = MediaCacheDownloader.instance.lookupCachedFileSync(
         value,
         MediaCategory.cover,
       );
+      /// FLUTTER_REWRITE_DEBUG_LOG：同步缓存检查的可空耗时，普通封面不采集。
+      final Duration? transitionCacheLookupElapsed =
+          transitionCacheLookupStopwatch?.elapsed;
+      if (transitionCacheLookupElapsed != null) {
+        // FLUTTER_REWRITE_DEBUG_LOG：只报告耗时和布尔命中，不暴露封面地址或文件路径。
+        widget.onTransitionCacheLookup?.call(
+          transitionCacheLookupElapsed,
+          cachedFile != null,
+        );
+      }
       if (cachedFile != null) {
         image = Image.file(
           cachedFile,
@@ -190,7 +215,7 @@ final class _BookCoverState extends State<BookCover> {
           semanticLabel: widget.semanticLabel,
           errorBuilder: fallback,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            handleFrame(frame);
+            handleFrame(frame, wasSynchronouslyLoaded);
             return child;
           },
         );
@@ -202,7 +227,7 @@ final class _BookCoverState extends State<BookCover> {
           semanticLabel: widget.semanticLabel,
           errorBuilder: fallback,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            handleFrame(frame);
+            handleFrame(frame, wasSynchronouslyLoaded);
             return child;
           },
         );
@@ -219,7 +244,7 @@ final class _BookCoverState extends State<BookCover> {
         semanticLabel: widget.semanticLabel,
         errorBuilder: fallback,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-          handleFrame(frame);
+          handleFrame(frame, wasSynchronouslyLoaded);
           return child;
         },
       );

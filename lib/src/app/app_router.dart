@@ -203,10 +203,23 @@ final class AppRouter {
                     normalizedReaderArguments.initialBook?.customCoverUrl ??
                     normalizedReaderArguments.initialBook?.coverUrl,
               );
+          if (transitionSpec.kind == ReaderTransitionKind.bookshelf ||
+              transitionSpec.kind == ReaderTransitionKind.history) {
+            // FLUTTER_REWRITE_DEBUG_LOG：记录路由工厂已经完成参数归一化的时间点。
+            dependencies.logger.info(
+              tag: readerCoverTransitionLogTag,
+              message: '$readerCoverTransitionDebugLogMarker '
+                  'event=route_created transitionId=${transitionSpec.id} '
+                  'entry=${transitionSpec.kind.name} '
+                  'hasInitialBook='
+                  '${normalizedReaderArguments.initialBook != null}',
+            );
+          }
           return ReaderPageRoute(
             settings: settings,
             book: normalizedReaderArguments.initialBook,
             transitionSpec: transitionSpec,
+            logger: dependencies.logger,
             builder: (BuildContext context) {
               return BookReaderRoute(
                 dependencies: dependencies,

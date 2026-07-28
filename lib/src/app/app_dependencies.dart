@@ -110,6 +110,7 @@ import 'search_preferences.dart';
 import 'remote_book_source_sync_service.dart';
 import 'guest_book_source_import_service.dart';
 import 'reader_intro_preferences.dart';
+import 'reader_menu_preferences.dart';
 import 'reader_processed_content_startup_preloader.dart';
 
 /// 保存应用级共享依赖的组合根容器。
@@ -136,6 +137,7 @@ final class AppDependencies {
     required this.readerProcessedContentCache,
     required this.readerProcessedContentStartupPreloader,
     required this.readerIntroPreferences,
+    required this.readerMenuPreferences,
     required this.coverCacheGateway,
     required this.searchHistoryGateway,
     required this.searchPreferences,
@@ -431,6 +433,9 @@ final class AppDependencies {
       preferencesStore,
       currentUserScope.requireUserId,
     );
+    /// 阅读器工具栏按设备安装周期只自动展示一次，不随书籍或账号切换重置。
+    final ReaderMenuPreferences readerMenuPreferences =
+        ReaderMenuPreferences(preferencesStore);
     // BookCover 深埋在书架/搜索/详情等无状态 Screen 里，不经过路由层依赖注入；
     // 用组合根这一次性调用把持久化实现接进去，避免逐个页面 Screen/Route 都要新增
     // 参数传递这套跨页面展示缓存。
@@ -559,6 +564,7 @@ final class AppDependencies {
       readerProcessedContentStartupPreloader:
           readerProcessedContentStartupPreloader,
       readerIntroPreferences: readerIntroPreferences,
+      readerMenuPreferences: readerMenuPreferences,
       coverCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
       searchPreferences: SearchPreferences(preferencesStore, cacheDao),
@@ -667,6 +673,9 @@ final class AppDependencies {
 
   /// 按当前用户和书籍摘要隔离的首次阅读先导页偏好。
   final ReaderIntroPreferences readerIntroPreferences;
+
+  /// 设备安装周期内只自动展示一次的阅读器工具栏偏好。
+  final ReaderMenuPreferences readerMenuPreferences;
 
   /// 跨页面“已知可显示封面地址”缓存边界，供 [CoverUrlCache] 持久化。
   final CoverCacheGateway coverCacheGateway;

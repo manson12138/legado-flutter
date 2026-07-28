@@ -107,11 +107,11 @@ Flutter 只正确修正 X、没有像 Android 一样使用更新后的 X 联动�
 暂退阅读系统模式并避免叠加双阅读器路由的方案见
 [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md)；
 当前为 `PROPOSED`，等待用户确认执行。
-用户已确认采用官方 MMKV 2.4.x 并接受 Android 仅 64 位。项目级持久化清单、首批九组十键偏好迁移、
+用户已确认采用官方 MMKV 2.4.x 并接受 Android 仅 64 位。项目级持久化清单、当前十组十一个键偏好迁移、
 SQLite/安全存储保留边界、首帧后 MMKV 初始化与兼容迁移，以及阅读器书籍快照复用、首次先导页、
 重复恢复页、最长 300 毫秒转场和应用级有界处理后正文 LRU 的当前合并实施方案见
 [`m11/mmkv_and_reader_entry_loading_optimization_plan.md`](./m11/mmkv_and_reader_entry_loading_optimization_plan.md)；
-当前为 `IN_PROGRESS`：阶段 A 基础设施、阶段 B 九组十键迁移、阶段 C1 书籍快照/恢复壳/并行初始化、
+当前为 `IN_PROGRESS`：阶段 A 基础设施、阶段 B 及后续十组十一个键迁移、阶段 C1 书籍快照/恢复壳/并行初始化、
 阶段 C2 首次先导页/滑动阻断/正文首帧成功语义、阶段 C3 封面进入/返回转场，以及阶段
 D1～D3 应用级有界处理后正文 LRU/完整失效/内存压力与最近阅读当前章缓存限定启动预热均已写入，
 等待用户统一验证。
@@ -120,11 +120,13 @@ D1～D3 应用级有界处理后正文 LRU/完整失效/内存压力与最近阅
 [`m11/reader_entry_warmup_and_first_open_design.md`](./m11/reader_entry_warmup_and_first_open_design.md)
 已标记为 `SUPERSEDED`。
 用户要求把书架/历史到阅读器的现有 250ms 中心移动与 3D 开书动画，替换为“从被点击 cell 的真实封面
-位置放大，接近全屏后才开始淡出并逐步露出文章”的转场。静态分析、最长 300ms 的重叠时序、真实
+位置放大，从动画首帧开始按先快后慢节奏淡出并在 200ms 完全透明、逐步露出文章”的转场。静态分析、最长 300ms 的重叠时序、真实
 RenderBox 起点测量、返回淡出、降级行为和性能/内存边界见
 [`m11/bookshelf_history_reader_cover_transition_design.md`](./m11/bookshelf_history_reader_cover_transition_design.md)；
-当前代码已写入：书架/历史列表与网格读取真实封面矩形，300ms 内接近全屏后才淡出，返回只做
-200ms 淡出，等待用户真机验证。
+当前代码已写入：书架/历史列表与网格读取真实封面矩形，从动画首帧开始按先快后慢节奏淡出并在 200ms 完全透明，返回只做
+200ms 淡出；首次开书卡顿排查已按用户要求临时加入统一 Tag
+`READER_COVER_TRANSITION`、统一标识 `FLUTTER_REWRITE_DEBUG_LOG` 的导航阶段、FrameTiming、
+同步封面缓存检查、图片首帧和汇总日志，不输出书籍、封面地址、文件路径或正文，等待用户回传日志。
 
 ## 3. 总体启动链
 
@@ -201,7 +203,7 @@ lib/main.dart
 | `/book-info` | `ui/book_info/book_info_route.dart` / `book_info_screen.dart` | `BookInfoViewModel` | 必须传 `BookInfoRouteArguments`；主操作区提供显式“更新目录”按钮并复用详情与完整目录刷新链路 |
 | `/bookshelf` | `ui/bookshelf/bookshelf_route.dart` / `bookshelf_screen.dart` / `reading_history_screen.dart` / `book_grid_layout.dart` / `app/bookshelf_layout_preferences.dart` | `BookshelfViewModel`、`ReadingHistoryViewModel` | 内部书架/历史 `PageView`；实时书架、独立阅读历史、分组、排序、批量操作；书架与历史共用封面网格规格，列表/网格排版通过 MMKV 持久化并在重启后恢复，历史默认网格；书架失去可见性时退出选择模式 |
 | `/local-books/import` | `ui/local_book_import/local_book_import_route.dart` / `local_book_import_screen.dart` | `LocalBookImportViewModel` | 系统文件选择和导入 |
-| `/reader` | `ui/reader/book_reader_route.dart` / `reader_entry_shell.dart` / `reader_intro_page.dart` / `reader_page_route.dart`，转场参数见 `app/reader_transition_spec.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；书架、历史和详情入口传 `initialBook`，详情可附带 `initialChapters`，旧 URL 路由才兼容补查；PDF 分流到 `PdfReaderRoute`，文本入口与正文未就绪阶段使用书籍恢复/错误壳而非圆形 loading；首次先导页展示书籍和章节信息，未就绪左滑节流提示，就绪后左滑/按钮进入且正文首帧后才写 MMKV 标记；书架/历史从真实 cell 封面位置用最长 300ms 放大到接近全屏后淡出并露出文章，返回只做 200ms 淡出，详情入口保持轻量转场；来源无效或减少动态效果时自动降级，参数不持有来源 Widget/Context/Key；先导页左滑进入正文主动让出已开启的物理退出边缘；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart`，正文短按由不参与手势竞技场的 `reader_tap_region.dart` 识别，避免与长按选词冲突；`reader_simulation_page_turn.dart` 提供纯 Flutter 仿真卷页几何、页背和阴影；`reader_edge_swipe_exit.dart` 提供左侧默认开启、右侧默认关闭且可独立配置的双侧物理边缘向内滑动退出，并复用统一保存关闭链路 |
+| `/reader` | `ui/reader/book_reader_route.dart` / `reader_entry_shell.dart` / `reader_intro_page.dart` / `reader_page_route.dart`，转场参数见 `app/reader_transition_spec.dart`，工具栏一次性状态见 `app/reader_menu_preferences.dart` | `ReaderViewModel` | 必须传非空 `bookUrl`；书架、历史和详情入口传 `initialBook`，详情可附带 `initialChapters`，旧 URL 路由才兼容补查；PDF 分流到 `PdfReaderRoute`，文本入口与正文未就绪阶段使用书籍恢复/错误壳而非圆形 loading；首次先导页展示书籍和章节信息，未就绪左滑节流提示，就绪后左滑/按钮进入且正文首帧后才写 MMKV 标记；顶部和底部工具栏按设备安装周期只自动显示一次，覆盖安装、重启和账号切换不重置；书架/历史从真实 cell 封面位置用最长 300ms 放大，并从动画首帧开始按先快后慢节奏淡出、在 200ms 完全透明，返回只做 200ms 淡出，详情入口保持轻量转场；来源无效或减少动态效果时自动降级，参数不持有来源 Widget/Context/Key；先导页左滑进入正文主动让出已开启的物理退出边缘；菜单与刷新入口在 `reader_menu_overlay.dart`，设置在 `reader_settings_sheet.dart`，搜索/书签/替换/标注管理在 `reader_action_sheets.dart`，连续与分页选区共用 `reader_selection_region.dart`，正文短按由不参与手势竞技场的 `reader_tap_region.dart` 识别，避免与长按选词冲突；`reader_simulation_page_turn.dart` 提供纯 Flutter 仿真卷页几何、页背和阴影；`reader_edge_swipe_exit.dart` 提供左侧默认开启、右侧默认关闭且可独立配置的双侧物理边缘向内滑动退出，并复用统一保存关闭链路 |
 | `/books/change-source` | `ui/change_book_source/change_book_source_route.dart` / `change_book_source_screen.dart` | `ChangeBookSourceViewModel` | 必须传当前书架旧 `bookUrl`；成功返回 `ChangeBookSourceResult` 新主键 |
 
 页面修改的默认阅读集合是同目录下的：
@@ -506,8 +508,8 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 | 游客书源管理不显示账号云同步按钮；“更多”增加游客专用 URL 输入，HTTP/HTTPS 返回 JSON 复用现有导入确认，非 URL 邀请码兑换内存态游客凭证并按 50 条游标分页导入；登录账号旧逻辑保持不变；代码已写入，等待用户验证 | [`m11/guest_book_source_url_and_invitation_import_design.md`](./m11/guest_book_source_url_and_invitation_import_design.md) |
 | 小说阅读器左右物理边缘镜像向内滑动退出；左侧默认开启、右侧默认关闭并可独立持久化，复用保存进度后的统一关闭链路，普通正文起手继续翻页；与原生选区、菜单、系统返回和全部阅读模式的手势分流代码已写入，等待用户双端真机验证 | [`m08/03_reader_edge_swipe_exit_design.md`](./m08/03_reader_edge_swipe_exit_design.md) |
 | 搜索书名/作者/其他分类栏使用 PageView 连续位置驱动单块滑动背景，消除独立背景交叉淡入淡出的闪烁；阅读器顶部增加书籍详情图标，并处理进度保存、阅读系统状态恢复和重复阅读器路由；代码已写入，等待用户运行验证 | [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md) |
-| MMKV 首批迁移与阅读器无 loading 合并方案：阶段 A、阶段 B 九组十键、阶段 C1～C3，以及阶段 D1～D3 三章/约 4 MiB 应用级处理后正文 LRU、完整失效、内存压力和最近阅读当前章缓存限定启动预热代码已写入，等待用户统一验证 | [`m11/mmkv_and_reader_entry_loading_optimization_plan.md`](./m11/mmkv_and_reader_entry_loading_optimization_plan.md) |
-| 书架/历史点击封面从真实 cell 位置放大，总时长不超过 300ms，接近全屏后才淡出并逐步露出文章；返回只做 200ms 淡出，不复用可能失效的旧 cell 位置；代码已写入，等待用户真机验证 | [`m11/bookshelf_history_reader_cover_transition_design.md`](./m11/bookshelf_history_reader_cover_transition_design.md) |
+| MMKV 首批迁移与阅读器无 loading 合并方案：阶段 A、阶段 B 及后续十组十一个键、阶段 C1～C3，以及阶段 D1～D3 三章/约 4 MiB 应用级处理后正文 LRU、完整失效、内存压力和最近阅读当前章缓存限定启动预热代码已写入，等待用户统一验证 | [`m11/mmkv_and_reader_entry_loading_optimization_plan.md`](./m11/mmkv_and_reader_entry_loading_optimization_plan.md) |
+| 书架/历史点击封面从真实 cell 位置放大，总时长不超过 300ms，从动画首帧开始按先快后慢节奏淡出并在 200ms 完全透明、逐步露出文章；返回只做 200ms 淡出，不复用可能失效的旧 cell 位置；临时 `READER_COVER_TRANSITION` 日志采集导航、UI/Raster 慢帧、同步封面缓存检查和图片首帧，等待用户回传 | [`m11/bookshelf_history_reader_cover_transition_design.md`](./m11/bookshelf_history_reader_cover_transition_design.md) |
 | 搜索关键字历史按登录用户隔离；代码已写入待用户验收，复用 `caches` 用户派生键、旧设备级历史删除、不升级 Schema，并保持搜索偏好为设备级 | [`m11/user_scoped_search_history_design.md`](./m11/user_scoped_search_history_design.md) |
 | 首帧前控制台降级、首帧后切换文件日志与日志管理入口 | `help/logging/deferred_app_log_service.dart`；启动编排见 [`m11/backend_api_integration/09_startup_initialization_performance_design.md`](./m11/backend_api_integration/09_startup_initialization_performance_design.md) |
 | App 16 个埋点事件、隐私边界、事件级 props 白名单、业务落点与待用户验证实施记录 | [`m11/backend_api_integration/08_analytics_event_catalog_proposal.md`](./m11/backend_api_integration/08_analytics_event_catalog_proposal.md)、[`m11/backend_api_integration/12_remaining_analytics_events_implementation_plan.md`](./m11/backend_api_integration/12_remaining_analytics_events_implementation_plan.md) |

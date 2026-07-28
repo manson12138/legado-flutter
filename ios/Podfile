@@ -1,3 +1,4 @@
+source 'https://mirrors.tuna.tsinghua.edu.cn/git/CocoaPods/Specs.git'
 # M10 第一批 iOS 适配固定 Deployment Target，必须与 Xcode 工程配置保持一致。
 platform :ios, '16.0'
 
