@@ -148,6 +148,12 @@ final class ReaderScreen extends StatelessWidget {
               : const RetryReaderChapterIntent(),
         ),
         onBack: () => onIntent(const CloseReaderIntent()),
+        leftEdgeSwipeToCloseEnabled:
+            state.config.leftEdgeSwipeToCloseEnabled &&
+            state.activeSheet == null,
+        rightEdgeSwipeToCloseEnabled:
+            state.config.rightEdgeSwipeToCloseEnabled &&
+            state.activeSheet == null,
       );
     }
     if (state.loadState == ReaderLoadState.error) {

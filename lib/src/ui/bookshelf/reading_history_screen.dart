@@ -7,6 +7,34 @@ import '../theme/app_tokens.dart';
 import 'book_grid_layout.dart';
 import 'reading_history_contract.dart';
 
+/// 读取历史 cell 中封面的真实全局矩形，只把不可变 Rect 交给阅读路由。
+Rect? _historyCoverGlobalRect(BuildContext? context) {
+  if (context == null) {
+    return null;
+  }
+  /// 当前封面对应的渲染对象。
+  final RenderObject? renderObject = context.findRenderObject();
+  if (renderObject is! RenderBox ||
+      !renderObject.attached ||
+      !renderObject.hasSize) {
+    return null;
+  }
+  /// 当前封面的实际布局尺寸。
+  final Size size = renderObject.size;
+  if (!size.width.isFinite ||
+      !size.height.isFinite ||
+      size.width <= 0 ||
+      size.height <= 0) {
+    return null;
+  }
+  /// 当前封面左上角的全局位置。
+  final Offset origin = renderObject.localToGlobal(Offset.zero);
+  if (!origin.dx.isFinite || !origin.dy.isFinite) {
+    return null;
+  }
+  return origin & size;
+}
+
 /// 展示所有已成功阅读书籍的独立历史内容页。
 final class ReadingHistoryScreen extends StatelessWidget {
   /// 创建历史纯 UI。
@@ -69,22 +97,20 @@ final class _HistoryList extends StatelessWidget {
         final Book book = state.books[index];
         /// 本次按下时形成的一次性封面几何。
         ReaderTransitionSpec? transitionSpec;
+        /// 当前可见历史列表项中封面 Builder 的短生命周期上下文。
+        BuildContext? coverContext;
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTapDown: (TapDownDetails details) {
-            /// 列表项左上角的全局坐标。
-            final Offset tileOrigin =
-                details.globalPosition - details.localPosition;
-            transitionSpec = ReaderTransitionSpec.fromRect(
-              kind: ReaderTransitionKind.history,
-              coverUrl: book.customCoverUrl ?? book.coverUrl,
-              sourceRect: Rect.fromLTWH(
-                tileOrigin.dx + 16,
-                tileOrigin.dy + 16,
-                36,
-                50,
-              ),
-            );
+          onTapDown: (TapDownDetails _) {
+            /// 点击时读取真实 leading 封面矩形，失效时由阅读路由中心降级。
+            final Rect? sourceRect = _historyCoverGlobalRect(coverContext);
+            transitionSpec = sourceRect == null
+                ? null
+                : ReaderTransitionSpec.fromRect(
+                    kind: ReaderTransitionKind.history,
+                    coverUrl: book.customCoverUrl ?? book.coverUrl,
+                    sourceRect: sourceRect,
+                  );
           },
           child: Card(
             key: ValueKey<String>('history-${book.bookUrl}'),
@@ -95,10 +121,15 @@ final class _HistoryList extends StatelessWidget {
                   transitionSpec: transitionSpec,
                 ),
               ),
-              leading: SizedBox(
-                width: 36,
-                height: 50,
-                child: _HistoryCover(book: book),
+              leading: Builder(
+                builder: (BuildContext context) {
+                  coverContext = context;
+                  return SizedBox(
+                    width: 36,
+                    height: 50,
+                    child: _HistoryCover(book: book),
+                  );
+                },
               ),
               title: Text(book.name),
               subtitle: Text('${book.author}\n${book.durChapterTitle ?? '已阅读'}'),
@@ -165,20 +196,24 @@ final class _HistoryGrid extends StatelessWidget {
                       child: LayoutBuilder(
                         builder: (
                           BuildContext context,
-                          BoxConstraints coverConstraints,
+                          BoxConstraints _,
                         ) {
                           /// 本次封面按下时形成的一次性几何。
                           ReaderTransitionSpec? transitionSpec;
                           return InkWell(
-                            onTapDown: (TapDownDetails details) {
-                              transitionSpec = ReaderTransitionSpec.fromTap(
-                                kind: ReaderTransitionKind.history,
-                                coverUrl:
-                                    book.customCoverUrl ?? book.coverUrl,
-                                globalPosition: details.globalPosition,
-                                localPosition: details.localPosition,
-                                sourceSize: coverConstraints.biggest,
-                              );
+                            onTapDown: (TapDownDetails _) {
+                              /// 网格 LayoutBuilder 与封面区域同尺寸，直接读取真实全局矩形。
+                              final Rect? sourceRect =
+                                  _historyCoverGlobalRect(context);
+                              transitionSpec = sourceRect == null
+                                  ? null
+                                  : ReaderTransitionSpec.fromRect(
+                                      kind: ReaderTransitionKind.history,
+                                      coverUrl:
+                                          book.customCoverUrl ??
+                                          book.coverUrl,
+                                      sourceRect: sourceRect,
+                                    );
                             },
                             onTap: () => onIntent(
                               OpenReadingHistoryBookIntent(

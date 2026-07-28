@@ -15,6 +15,36 @@ enum ReaderExitEdge {
   right,
 }
 
+/// 统一计算阅读器物理边缘命中范围，保证退出、翻页和先导页使用相同边界。
+final class ReaderEdgeSwipeHitTest {
+  /// 纯静态手势边界工具不允许创建实例。
+  const ReaderEdgeSwipeHitTest._();
+
+  /// 根据系统手势安全区计算可触达且不过度侵占正文的边缘宽度。
+  static double edgeWidth(double systemGestureInset) {
+    return math
+        .max(24, systemGestureInset + 6)
+        .clamp(24, 32)
+        .toDouble();
+  }
+
+  /// 判断指针是否命中当前已经开启的左侧或右侧边缘。
+  static bool isEnabledEdgePointer({
+    required double x,
+    required double viewportWidth,
+    required double leftEdgeWidth,
+    required double rightEdgeWidth,
+    required bool leftEnabled,
+    required bool rightEnabled,
+  }) {
+    if (viewportWidth <= 0) {
+      return false;
+    }
+    return (leftEnabled && x <= leftEdgeWidth) ||
+        (rightEnabled && x >= viewportWidth - rightEdgeWidth);
+  }
+}
+
 /// 只在双侧物理屏幕边缘起手时识别向内滑动退出，并保持正文手势继续参与竞技场。
 final class ReaderEdgeSwipeExitRegion extends StatefulWidget {
   /// 创建双侧边缘滑动退出区域。
@@ -146,15 +176,13 @@ final class _ReaderEdgeSwipeExitRegionState
         final EdgeInsets systemGestureInsets =
             MediaQuery.of(context).systemGestureInsets;
         /// 左侧候选命中宽度，最多向正文内扩展到 32 logical px。
-        final double leftEdgeWidth = math
-            .max(24, systemGestureInsets.left + 6)
-            .clamp(24, 32)
-            .toDouble();
+        final double leftEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+          systemGestureInsets.left,
+        );
         /// 右侧候选命中宽度，最多向正文内扩展到 32 logical px。
-        final double rightEdgeWidth = math
-            .max(24, systemGestureInsets.right + 6)
-            .clamp(24, 32)
-            .toDouble();
+        final double rightEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+          systemGestureInsets.right,
+        );
         /// 当前屏幕退出所需的距离，兼顾手机误触和大屏可达性。
         final double commitDistance =
             (viewportWidth * 0.18).clamp(56, 96).toDouble();
@@ -506,15 +534,15 @@ final class _ReaderEdgeHorizontalDragGestureRecognizer
     /// 指针相对阅读器物理视口的水平位置。
     final double x = event.localPosition.dx;
     /// 本次按下是否命中当前已开启的左侧物理边缘。
-    final bool isEnabledLeftEdge =
-        leftEnabled && x <= leftEdgeWidth;
-    /// 本次按下是否命中当前已开启的右侧物理边缘。
-    final bool isEnabledRightEdge =
-        rightEnabled && x >= viewportWidth - rightEdgeWidth;
     /// 【FLUTTER_REWRITE_DEBUG_LOG】本次按下是否位于允许加入竞技场的左右边缘范围。
-    final bool isEdgePointer =
-        viewportWidth > 0 &&
-        (isEnabledLeftEdge || isEnabledRightEdge);
+    final bool isEdgePointer = ReaderEdgeSwipeHitTest.isEnabledEdgePointer(
+      x: x,
+      viewportWidth: viewportWidth,
+      leftEdgeWidth: leftEdgeWidth,
+      rightEdgeWidth: rightEdgeWidth,
+      leftEnabled: leftEnabled,
+      rightEnabled: rightEnabled,
+    );
     // FLUTTER_REWRITE_DEBUG_LOG：该日志出现即证明 RawGestureDetector 已命中并收到 PointerDown。
     logger.info(
       tag: readerEdgeSwipeExitLogTag,

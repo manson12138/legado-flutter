@@ -11,6 +11,7 @@ import '../../help/logging/app_logger.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
 import 'reader_content_image.dart';
+import 'reader_edge_swipe_exit.dart';
 import 'reader_selection_region.dart';
 import 'reader_simulation_page_turn.dart';
 import 'reader_tap_region.dart';
@@ -1154,11 +1155,13 @@ final class _ReaderPagedContentState extends State<ReaderPagedContent>
           final EdgeInsets systemGestureInsets =
               MediaQuery.of(context).systemGestureInsets;
           /// 左侧由边缘退出保留的候选命中宽度。
-          final double leftEdgeWidth =
-              (systemGestureInsets.left + 6).clamp(24, 32).toDouble();
+          final double leftEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+            systemGestureInsets.left,
+          );
           /// 右侧由边缘退出保留的候选命中宽度。
-          final double rightEdgeWidth =
-              (systemGestureInsets.right + 6).clamp(24, 32).toDouble();
+          final double rightEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+            systemGestureInsets.right,
+          );
           /// Sheet 关闭且用户开启左侧设置时，正文翻页必须让出左边缘指针。
           final bool excludesLeftEdgePointers =
               widget.state.config.leftEdgeSwipeToCloseEnabled &&

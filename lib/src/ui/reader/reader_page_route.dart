@@ -9,7 +9,7 @@ import '../theme/app_tokens.dart';
 
 /// 使用单次封面几何创建阅读器进入与返回动画。
 final class ReaderPageRoute extends PageRouteBuilder<void> {
-  /// 创建 250ms 阅读器专用路由。
+  /// 创建最长 300ms 的阅读器专用路由。
   ReaderPageRoute({
     required RouteSettings settings,
     required WidgetBuilder builder,
@@ -17,8 +17,8 @@ final class ReaderPageRoute extends PageRouteBuilder<void> {
     required ReaderTransitionSpec transitionSpec,
   }) : super(
          settings: settings,
-         transitionDuration: const Duration(milliseconds: 250),
-         reverseTransitionDuration: const Duration(milliseconds: 230),
+         transitionDuration: const Duration(milliseconds: 300),
+         reverseTransitionDuration: const Duration(milliseconds: 200),
          pageBuilder: (
            BuildContext context,
            Animation<double> animation,
@@ -80,18 +80,155 @@ final class _ReaderRouteTransition extends StatelessWidget {
     /// 系统辅助功能是否要求减少动画。
     final bool reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    /// 返回时不复用进入时的旧 cell 矩形，只让阅读页短暂淡出。
+    if (animation.status == AnimationStatus.reverse) {
+      final Animation<double> reverseOpacity = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return FadeTransition(
+        opacity: reverseOpacity,
+        child: child,
+      );
+    }
     if (reduceMotion) {
-      /// 250ms 路由中的前 60% 完成淡入，实际动态时间约 150ms。
+      /// 300ms 路由中的前 50% 完成淡入，实际动态时间约 150ms。
       final Animation<double> reducedOpacity = CurvedAnimation(
         parent: animation,
-        curve: const Interval(0, 0.6, curve: Curves.easeOut),
-        reverseCurve: const Interval(0, 0.6, curve: Curves.easeIn),
+        curve: const Interval(0, 0.5, curve: Curves.easeOut),
+        reverseCurve: const Interval(0, 0.5, curve: Curves.easeIn),
       );
       return FadeTransition(
         opacity: reducedOpacity,
         child: child,
       );
     }
+    /// 书架、历史和无来源兼容入口使用封面接近全屏后才淡出的新动画。
+    final bool usesFullScreenCover =
+        spec.kind != ReaderTransitionKind.detail;
+    if (usesFullScreenCover) {
+      return _buildFullScreenCoverTransition(context);
+    }
+    return _buildCenteredCoverTransition(context);
+  }
+
+  /// 构建从真实 cell 封面放大到全屏，并在末段淡出露出文章的进入动画。
+  Widget _buildFullScreenCoverTransition(BuildContext context) {
+    return AnimatedBuilder(
+      animation: animation,
+      child: RepaintBoundary(child: child),
+      builder: (BuildContext context, Widget? stableChild) {
+        /// 当前原始路由进度。
+        final double progress = animation.value.clamp(0, 1).toDouble();
+        /// 前 87% 时间完成几何变化，约 200ms 时已经达到约 98% 的全屏进度。
+        final double moveProgress = _intervalProgress(
+          progress,
+          0,
+          0.87,
+          Curves.easeOutCubic,
+        );
+        /// 只有封面接近全屏后才开始淡出并逐步显现阅读页面。
+        final double revealProgress = _intervalProgress(
+          progress,
+          0.67,
+          1,
+          Curves.easeInOutCubic,
+        );
+        /// 前段背景遮罩快速隐藏来源页面，避免移动后留下第二张原 cell 封面。
+        final double scrimOpacity = _intervalProgress(
+          progress,
+          0,
+          0.25,
+          Curves.easeOutCubic,
+        );
+        /// 封面透明度与阅读页面显现进度相反。
+        final double coverOpacity = 1 - revealProgress;
+        return LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            /// 当前路由可用尺寸。
+            final Size viewport = constraints.biggest;
+            /// 全屏目标矩形，包含 edge-to-edge 系统栏区域。
+            final Rect targetRect = Offset.zero & viewport;
+            /// 路由参数中的可空来源矩形。
+            final Rect? requestedSourceRect = spec.sourceRect;
+            /// 来源无效时从屏幕中心的标准封面尺寸开始降级放大。
+            final Rect sourceRect =
+                requestedSourceRect != null &&
+                    _usableSourceRect(requestedSourceRect, viewport)
+                ? requestedSourceRect
+                : _targetRect(viewport);
+            /// 当前帧封面位置和尺寸。
+            final Rect coverRect = _interpolateRect(
+              sourceRect,
+              targetRect,
+              moveProgress,
+            );
+            /// cell 圆角随封面铺满屏幕逐步收敛到零。
+            final BorderRadius coverRadius = BorderRadius.circular(
+              10 * (1 - moveProgress),
+            );
+            return Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                Opacity(
+                  opacity: scrimOpacity,
+                  child: ColoredBox(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                  ),
+                ),
+                Opacity(
+                  opacity: revealProgress,
+                  child: stableChild ?? const SizedBox.shrink(),
+                ),
+                if (coverOpacity > 0.001)
+                  Positioned.fromRect(
+                    rect: coverRect,
+                    child: IgnorePointer(
+                      child: Opacity(
+                        opacity: coverOpacity,
+                        child: RepaintBoundary(
+                          key: ValueKey<String>(spec.id),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: coverRadius,
+                              boxShadow: <BoxShadow>[
+                                BoxShadow(
+                                  color: Colors.black.withValues(
+                                    alpha: 0.22 * (1 - moveProgress),
+                                  ),
+                                  blurRadius: 14 * (1 - moveProgress),
+                                  offset: Offset(
+                                    4 * (1 - moveProgress),
+                                    2 * (1 - moveProgress),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            child: BookCover(
+                              coverUrl: spec.coverUrl,
+                              semanticLabel:
+                                  '${book?.name ?? '目标书籍'}封面转场',
+                              bookName: book?.name,
+                              bookAuthor: book?.author,
+                              fit: BoxFit.cover,
+                              borderRadius: coverRadius,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 保留书籍详情入口的轻量中心开封动画，不改变本次任务以外的视觉行为。
+  Widget _buildCenteredCoverTransition(BuildContext context) {
     return AnimatedBuilder(
       animation: animation,
       child: RepaintBoundary(child: child),
@@ -121,7 +258,7 @@ final class _ReaderRouteTransition extends StatelessWidget {
                 Curves.easeInOutCubic,
               )
             : 0;
-        /// 封面末段淡出，返回时按相反顺序重新出现。
+        /// 封面末段淡出。
         final double coverOpacity =
             1 -
             _intervalProgress(
@@ -176,7 +313,9 @@ final class _ReaderRouteTransition extends StatelessWidget {
                                 boxShadow: <BoxShadow>[
                                   BoxShadow(
                                     color: Colors.black.withValues(
-                                      alpha: 0.22 * (1 - openProgress * 0.5),
+                                      alpha:
+                                          0.22 *
+                                          (1 - openProgress * 0.5),
                                     ),
                                     blurRadius: 14,
                                     offset: const Offset(4, 2),
@@ -185,7 +324,8 @@ final class _ReaderRouteTransition extends StatelessWidget {
                               ),
                               child: BookCover(
                                 coverUrl: spec.coverUrl,
-                                semanticLabel: '${book?.name ?? '目标书籍'}封面转场',
+                                semanticLabel:
+                                    '${book?.name ?? '目标书籍'}封面转场',
                                 bookName: book?.name,
                                 bookAuthor: book?.author,
                                 borderRadius: BorderRadius.circular(10),

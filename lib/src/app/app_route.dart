@@ -91,7 +91,7 @@ final class ReaderRouteArguments {
   /// 尚未加入书架时由详情页传入的完整目录快照。
   final List<BookChapter> initialChapters;
 
-  /// 本次进入与返回共用的短生命周期封面转场参数。
+  /// 本次进入使用的短生命周期封面转场参数；返回不复用旧 cell 几何。
   final ReaderTransitionSpec? transitionSpec;
 
   /// 匿名埋点允许的阅读入口：bookshelf、detail 或 history。

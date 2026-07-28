@@ -9,6 +9,34 @@ import 'book_grid_layout.dart';
 import 'bookshelf_contract.dart';
 import 'bookshelf_page_switcher.dart';
 
+/// 读取点击瞬间封面 RenderBox 的全局矩形，不把 Context 或 RenderObject 传入阅读路由。
+Rect? _bookshelfCoverGlobalRect(BuildContext? context) {
+  if (context == null) {
+    return null;
+  }
+  /// 当前封面对应的渲染对象。
+  final RenderObject? renderObject = context.findRenderObject();
+  if (renderObject is! RenderBox ||
+      !renderObject.attached ||
+      !renderObject.hasSize) {
+    return null;
+  }
+  /// 当前封面的实际布局尺寸。
+  final Size size = renderObject.size;
+  if (!size.width.isFinite ||
+      !size.height.isFinite ||
+      size.width <= 0 ||
+      size.height <= 0) {
+    return null;
+  }
+  /// 当前封面左上角在全局坐标系中的位置。
+  final Offset origin = renderObject.localToGlobal(Offset.zero);
+  if (!origin.dx.isFinite || !origin.dy.isFinite) {
+    return null;
+  }
+  return origin & size;
+}
+
 /// 只消费 BookshelfUiState 并发送 Intent 的无状态书架页面。
 final class BookshelfScreen extends StatelessWidget {
   /// 创建书架纯 UI。
@@ -355,22 +383,21 @@ final class _BookshelfList extends StatelessWidget {
                 : null;
         /// 本次按下时形成的一次性封面几何，不进入状态也不跨重建保存。
         ReaderTransitionSpec? transitionSpec;
+        /// 当前可见列表项中封面 Builder 的短生命周期上下文。
+        BuildContext? coverContext;
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTapDown: (TapDownDetails details) {
-            /// 列表项左上角的全局坐标。
-            final Offset tileOrigin =
-                details.globalPosition - details.localPosition;
-            transitionSpec = ReaderTransitionSpec.fromRect(
-              kind: ReaderTransitionKind.bookshelf,
-              coverUrl: item.displayCoverUrl,
-              sourceRect: Rect.fromLTWH(
-                tileOrigin.dx + 16,
-                tileOrigin.dy + 16,
-                28,
-                40,
-              ),
-            );
+          onTapDown: (TapDownDetails _) {
+            /// 点击时读取真实 leading 封面矩形，失效时让阅读路由执行中心降级。
+            final Rect? sourceRect =
+                _bookshelfCoverGlobalRect(coverContext);
+            transitionSpec = sourceRect == null
+                ? null
+                : ReaderTransitionSpec.fromRect(
+                    kind: ReaderTransitionKind.bookshelf,
+                    coverUrl: item.displayCoverUrl,
+                    sourceRect: sourceRect,
+                  );
           },
           child: Card(
             key: ValueKey<String>(item.book.bookUrl),
@@ -383,15 +410,20 @@ final class _BookshelfList extends StatelessWidget {
                 ),
               ),
               onLongPress: () => onIntent(LongPressBookshelfBookIntent(item.book.bookUrl)),
-              leading: SizedBox(
-                width: 28,
-                height: 40,
-                child: BookCover(
-                  coverUrl: item.displayCoverUrl,
-                  semanticLabel: '${item.book.name}封面',
-                  bookName: item.book.name,
-                  bookAuthor: item.book.author,
-                ),
+              leading: Builder(
+                builder: (BuildContext context) {
+                  coverContext = context;
+                  return SizedBox(
+                    width: 28,
+                    height: 40,
+                    child: BookCover(
+                      coverUrl: item.displayCoverUrl,
+                      semanticLabel: '${item.book.name}封面',
+                      bookName: item.book.name,
+                      bookAuthor: item.book.author,
+                    ),
+                  );
+                },
               ),
               title: Text(item.book.name),
               subtitle: Text('${item.book.author}\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
@@ -488,19 +520,23 @@ final class _BookshelfGrid extends StatelessWidget {
                       child: LayoutBuilder(
                         builder: (
                           BuildContext context,
-                          BoxConstraints coverConstraints,
+                          BoxConstraints _,
                         ) {
                           /// 本次封面按下时形成的一次性几何。
                           ReaderTransitionSpec? transitionSpec;
                           return InkWell(
-                            onTapDown: (TapDownDetails details) {
-                              transitionSpec = ReaderTransitionSpec.fromTap(
-                                kind: ReaderTransitionKind.bookshelf,
-                                coverUrl: item.displayCoverUrl,
-                                globalPosition: details.globalPosition,
-                                localPosition: details.localPosition,
-                                sourceSize: coverConstraints.biggest,
-                              );
+                            onTapDown: (TapDownDetails _) {
+                              /// 网格 LayoutBuilder 与封面区域同尺寸，直接读取真实全局矩形。
+                              final Rect? sourceRect =
+                                  _bookshelfCoverGlobalRect(context);
+                              transitionSpec = sourceRect == null
+                                  ? null
+                                  : ReaderTransitionSpec.fromRect(
+                                      kind:
+                                          ReaderTransitionKind.bookshelf,
+                                      coverUrl: item.displayCoverUrl,
+                                      sourceRect: sourceRect,
+                                    );
                             },
                             onTap: () => onIntent(
                               TapBookshelfBookIntent(

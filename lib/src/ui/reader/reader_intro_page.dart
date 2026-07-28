@@ -1,9 +1,11 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/model/book.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 import 'reader_contract.dart';
+import 'reader_edge_swipe_exit.dart';
 
 /// 首次打开一本书时展示的第 0 页，在正文准备完成前保留书籍信息和简介。
 final class ReaderIntroPage extends StatefulWidget {
@@ -13,6 +15,8 @@ final class ReaderIntroPage extends StatefulWidget {
     required this.onAttemptEnter,
     required this.onRetry,
     required this.onBack,
+    required this.leftEdgeSwipeToCloseEnabled,
+    required this.rightEdgeSwipeToCloseEnabled,
     super.key,
   });
 
@@ -27,6 +31,12 @@ final class ReaderIntroPage extends StatefulWidget {
 
   /// 只查看先导页后返回，不写已看标记。
   final VoidCallback onBack;
+
+  /// 左侧边缘退出开启时，先导页左滑进入正文必须让出左侧物理边缘。
+  final bool leftEdgeSwipeToCloseEnabled;
+
+  /// 右侧边缘退出开启时，先导页左滑进入正文必须让出右侧物理边缘。
+  final bool rightEdgeSwipeToCloseEnabled;
 
   /// 创建只持有一次手势位移的轻量状态。
   @override
@@ -96,12 +106,58 @@ final class _ReaderIntroPageState extends State<ReaderIntroPage> {
       ReaderLoadState.initializing => '正在恢复目录和阅读位置',
       ReaderLoadState.loading => '正在准备本章内容',
     };
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onHorizontalDragStart: _handleHorizontalDragStart,
-      onHorizontalDragUpdate: _handleHorizontalDragUpdate,
-      onHorizontalDragEnd: _handleHorizontalDragEnd,
-      child: Column(
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        /// 与祖先退出识别器一致的系统物理边缘范围。
+        final EdgeInsets systemGestureInsets =
+            MediaQuery.of(context).systemGestureInsets;
+        /// 左侧退出启用时由先导页主动让出的物理边缘宽度。
+        final double leftEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+          systemGestureInsets.left,
+        );
+        /// 右侧退出启用时由先导页主动让出的物理边缘宽度。
+        final double rightEdgeWidth = ReaderEdgeSwipeHitTest.edgeWidth(
+          systemGestureInsets.right,
+        );
+        /// 保持原 GestureDetector 使用的设备触摸阈值。
+        final DeviceGestureSettings? gestureSettings =
+            MediaQuery.maybeGestureSettingsOf(context);
+        /// 保持原 GestureDetector 使用的多指拖动合并策略。
+        final MultitouchDragStrategy multitouchDragStrategy =
+            ScrollConfiguration.of(
+              context,
+            ).getMultitouchDragStrategy(context);
+        return RawGestureDetector(
+          behavior: HitTestBehavior.opaque,
+          gestures: <Type, GestureRecognizerFactory>{
+            _ReaderIntroHorizontalDragGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<
+                  _ReaderIntroHorizontalDragGestureRecognizer
+                >(
+                  () => _ReaderIntroHorizontalDragGestureRecognizer(
+                    debugOwner: this,
+                  ),
+                  (
+                    _ReaderIntroHorizontalDragGestureRecognizer recognizer,
+                  ) {
+                    recognizer
+                      ..viewportWidth = constraints.maxWidth
+                      ..leftEdgeWidth = leftEdgeWidth
+                      ..rightEdgeWidth = rightEdgeWidth
+                      ..excludeLeftEdgePointers =
+                          widget.leftEdgeSwipeToCloseEnabled
+                      ..excludeRightEdgePointers =
+                          widget.rightEdgeSwipeToCloseEnabled
+                      ..dragStartBehavior = DragStartBehavior.start
+                      ..multitouchDragStrategy = multitouchDragStrategy
+                      ..gestureSettings = gestureSettings
+                      ..onStart = _handleHorizontalDragStart
+                      ..onUpdate = _handleHorizontalDragUpdate
+                      ..onEnd = _handleHorizontalDragEnd;
+                  },
+                ),
+          },
+          child: Column(
         children: <Widget>[
           Expanded(
             child: SingleChildScrollView(
@@ -252,8 +308,55 @@ final class _ReaderIntroPageState extends State<ReaderIntroPage> {
             ),
           ),
         ],
-      ),
+          ),
+        );
+      },
     );
+  }
+}
+
+/// 只让非退出边缘起手参与先导页左滑进入正文的水平拖动识别器。
+final class _ReaderIntroHorizontalDragGestureRecognizer
+    extends HorizontalDragGestureRecognizer {
+  /// 创建不持有业务状态的先导页水平识别器。
+  _ReaderIntroHorizontalDragGestureRecognizer({
+    super.debugOwner,
+  });
+
+  /// 当前先导页占据的完整物理视口宽度。
+  double viewportWidth = 0;
+
+  /// 左侧边缘退出保留的命中宽度。
+  double leftEdgeWidth = 24;
+
+  /// 右侧边缘退出保留的命中宽度。
+  double rightEdgeWidth = 24;
+
+  /// 是否让出左侧物理边缘。
+  bool excludeLeftEdgePointers = true;
+
+  /// 是否让出右侧物理边缘。
+  bool excludeRightEdgePointers = false;
+
+  /// 已开启退出的边缘指针不进入先导页竞技场，其余位置保持原左滑行为。
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    /// 当前按下位置相对先导页物理视口的横坐标。
+    final double x = event.localPosition.dx;
+    /// 当前指针是否必须交给祖先边缘退出识别器。
+    final bool isReservedEdge =
+        ReaderEdgeSwipeHitTest.isEnabledEdgePointer(
+          x: x,
+          viewportWidth: viewportWidth,
+          leftEdgeWidth: leftEdgeWidth,
+          rightEdgeWidth: rightEdgeWidth,
+          leftEnabled: excludeLeftEdgePointers,
+          rightEnabled: excludeRightEdgePointers,
+        );
+    if (isReservedEdge) {
+      return;
+    }
+    super.addAllowedPointer(event);
   }
 }
 

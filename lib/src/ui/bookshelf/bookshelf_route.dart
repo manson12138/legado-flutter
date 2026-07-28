@@ -277,7 +277,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     }
   }
 
-  /// 单飞打开阅读器，并让同一转场参数同时服务进入与返回动画。
+  /// 单飞打开阅读器；点击几何只服务进入动画，返回统一使用短淡出。
   Future<void> _openReader({
     required Book book,
     required String entry,
