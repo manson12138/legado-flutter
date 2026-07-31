@@ -77,6 +77,10 @@ final class _SettingsRouteState extends State<SettingsRoute> {
                     return SettingsScreen(
                       appSession: session,
                       themeMode: themeMode,
+                      appVersionName:
+                          widget.dependencies.remoteAppConfig.appVersionName,
+                      appVersionCode:
+                          widget.dependencies.remoteAppConfig.appVersionCode,
                       allowSearchSourceInteraction:
                           interactionSnapshot.data ?? false,
                       onChangeSearchSourceInteraction: (bool allowed) {

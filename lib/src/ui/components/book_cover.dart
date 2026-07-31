@@ -22,6 +22,7 @@ final class BookCover extends StatefulWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(8)),
     this.bookName,
     this.bookAuthor,
+    this.keepPreviousFrame = false,
     this.onExhausted,
     this.onTransitionCacheLookup,
     this.onTransitionImageFrame,
@@ -40,6 +41,8 @@ final class BookCover extends StatefulWidget {
   final String? bookName;
   /// 作者名；和 [bookName] 同时提供时才启用跨页面已知可用地址缓存。
   final String? bookAuthor;
+  /// 地址更新时是否保留上一帧，适合详情快照被异步完整数据替换的场景。
+  final bool keepPreviousFrame;
   /// 自身地址和缓存候选都无法显示时的回调，供调用方切换到自己另外掌握的候选地址。
   final VoidCallback? onExhausted;
   /// FLUTTER_REWRITE_DEBUG_LOG：仅供阅读转场统计同步缓存检查耗时与命中状态。
@@ -210,8 +213,9 @@ final class _BookCoverState extends State<BookCover> {
       if (cachedFile != null) {
         image = Image.file(
           cachedFile,
-          key: ValueKey<String>(value),
+          key: widget.keepPreviousFrame ? null : ValueKey<String>(value),
           fit: widget.fit,
+          gaplessPlayback: widget.keepPreviousFrame,
           semanticLabel: widget.semanticLabel,
           errorBuilder: fallback,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
@@ -222,8 +226,9 @@ final class _BookCoverState extends State<BookCover> {
       } else {
         image = Image.network(
           value,
-          key: ValueKey<String>(value),
+          key: widget.keepPreviousFrame ? null : ValueKey<String>(value),
           fit: widget.fit,
+          gaplessPlayback: widget.keepPreviousFrame,
           semanticLabel: widget.semanticLabel,
           errorBuilder: fallback,
           frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
@@ -239,8 +244,9 @@ final class _BookCoverState extends State<BookCover> {
       final String path = uri?.scheme == 'file' ? uri?.toFilePath() ?? value : value;
       image = Image.file(
         File(path),
-        key: ValueKey<String>(value),
+        key: widget.keepPreviousFrame ? null : ValueKey<String>(value),
         fit: widget.fit,
+        gaplessPlayback: widget.keepPreviousFrame,
         semanticLabel: widget.semanticLabel,
         errorBuilder: fallback,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {

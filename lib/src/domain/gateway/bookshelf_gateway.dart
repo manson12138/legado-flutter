@@ -9,8 +9,8 @@ abstract interface class BookshelfGateway {
   /// 按未经规范化的书籍 URL 查询书架书。
   Future<Book?> getBook(String bookUrl);
 
-  /// 按书名和作者精确查询最近阅读的一条书架记录。
-  Future<Book?> getShelfBookConflict(String name, String author);
+  /// 按书名精确查询当前用户最近阅读的一条书架记录。
+  Future<Book?> getShelfBookNameConflict(String name);
 
   /// 在一个事务中写入书籍及可选完整目录。
   Future<void> addBook(Book book, List<BookChapter> chapters);
@@ -33,4 +33,7 @@ abstract interface class BookshelfGateway {
 
   /// 在一个事务中把多本书替换到指定分组位值。
   Future<void> replaceBooksGroup(Set<String> bookUrls, int groupId);
+
+  /// 只替换一本书的用户自定义封面，并返回数据库中的最新书籍事实。
+  Future<Book> updateCustomCover(String bookUrl, String? customCoverUrl);
 }

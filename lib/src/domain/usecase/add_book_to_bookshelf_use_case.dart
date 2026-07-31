@@ -15,7 +15,7 @@ final class AddBookToBookshelfUseCase {
   /// 负责书籍和章节关联事务的数据边界。
   final BookshelfGateway _gateway;
 
-  /// 按 Android 顺序解析精确记录与同名同作者冲突。
+  /// 依次解析精确 URL 记录与同名冲突。
   final ResolveBookShelfStateUseCase _resolveShelfState;
 
   /// 执行面向用户的加入动作，冲突时返回结构化结果且不写数据库。
@@ -45,7 +45,7 @@ final class AddBookToBookshelfUseCase {
             return AppSuccess<AddBookToBookshelfResult>(
               BookAlreadyInBookshelf(existingBook),
             );
-          case BookShelfState.sameNameAuthor:
+          case BookShelfState.sameName:
             if (existingBook == null) {
               return validationFailure<AddBookToBookshelfResult>('书架冲突缺少现有书籍');
             }
@@ -70,9 +70,9 @@ final class AddBookToBookshelfUseCase {
     }
   }
 
-  /// 用户在冲突提示中明确选择“仍然新增一本”后写入候选书籍。
+  /// 用户在同书名冲突提示中明确选择“再次添加”后写入候选书籍。
   ///
-  /// 该入口只绕过同名同作者保护，仍会阻止相同 URL 覆盖现有记录。
+  /// 该入口只绕过同名保护，仍会阻止相同 URL 覆盖现有记录。
   Future<AppResult<void>> addAsNew(Book book, List<BookChapter> chapters) async {
     /// 输入结构校验结果。
     final AppFailure<void>? validationError = _validate(book, chapters);

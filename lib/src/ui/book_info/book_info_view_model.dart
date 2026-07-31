@@ -61,7 +61,15 @@ final class BookInfoViewModel {
        _analyticsRecorder = analyticsRecorder,
        _analyticsEntry = arguments.analyticsEntry,
        _logger = logger,
-       _state = BookInfoUiState(group: arguments.group, selectedBook: arguments.selectedBook) {
+       _state = BookInfoUiState(
+         group: arguments.group,
+         selectedBook: arguments.selectedBook,
+         book: arguments.selectedBook.toBook(
+           createdAt: arguments.selectedBook.time > 0
+               ? arguments.selectedBook.time
+               : DateTime.now().millisecondsSinceEpoch,
+         ),
+       ) {
     _groupSubscription = _bookGroupGateway.watchGroups().listen(_handleGroupsChanged, onError: _handleGroupsError);
     _loadDetails();
   }
@@ -172,6 +180,10 @@ final class BookInfoViewModel {
         _changeSource(book);
       case OpenBookInfoFullSourceChangeIntent():
         _openFullSourceChange();
+      case BookInfoCoverUpdatedIntent(book: final Book book):
+        if (_state.book?.bookUrl == book.bookUrl) {
+          _syncCurrentBook(book);
+        }
       case BackFromBookInfoIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户从详情页返回');
         _effectController.add(const CloseBookInfoEffect());
@@ -196,7 +208,7 @@ final class BookInfoViewModel {
       case BookInfoMenuAction.previewCover:
         _previewCover();
       case BookInfoMenuAction.changeCover:
-        _effectController.add(const ShowBookInfoMessageEffect('换封面需要封面搜索和保存能力，已登记到 P2'));
+        _requestChangeCover();
       case BookInfoMenuAction.groupSelect:
         _effectController.add(const ShowBookInfoMessageEffect('请从详情页分组入口选择分组'));
       case BookInfoMenuAction.toggleCanUpdate:
@@ -292,6 +304,7 @@ final class BookInfoViewModel {
         _emit(
           _state.copyWith(
             loadingInfo: false,
+            detailsResolved: true,
             loadingToc: false,
             switchingSource: false,
             book: storedBook,
@@ -317,7 +330,10 @@ final class BookInfoViewModel {
       }
     }
     /// 换源场景下是否已经有旧数据可以在网络加载期间继续展示；本地缓存命中分支已提前返回。
-    final bool hasExistingContent = !silent && _state.book != null;
+    final bool hasExistingContent =
+        !silent && _state.detailsResolved && _state.book != null;
+    /// 搜索快照或已解析旧详情都可以维持首屏，不需要退回整页加载。
+    final bool hasDisplayContent = !silent && _state.book != null;
     /// 本次详情取消令牌。
     final HttpCancellationToken token = _cancellationTokenFactory();
     _token = token;
@@ -327,7 +343,7 @@ final class BookInfoViewModel {
           loadingInfo: !hasExistingContent,
           switchingSource: hasExistingContent,
           loadingToc: false,
-          clearBook: !hasExistingContent,
+          clearBook: !hasDisplayContent,
           chapters: hasExistingContent ? _state.chapters : const <BookChapter>[],
           clearInfoError: true,
           clearTocError: true,
@@ -351,7 +367,14 @@ final class BookInfoViewModel {
       if (!silent) {
         /// 数据库中同 URL 书籍。
         final Book? storedBook = await _bookshelfGateway.getBook(snapshot.book.bookUrl);
-        _emit(_state.copyWith(loadingInfo: false, book: snapshot.book, inBookshelf: storedBook != null));
+        _emit(
+          _state.copyWith(
+            loadingInfo: false,
+            detailsResolved: true,
+            book: snapshot.book,
+            inBookshelf: storedBook != null,
+          ),
+        );
         _recordDetailOpened();
         _logger.info(
           tag: bookDetailLogTag,
@@ -671,6 +694,7 @@ final class BookInfoViewModel {
       newBook: conflict.incomingBook,
       chapters: conflict.incomingChapters,
       options: const ChangeSourceMigrationOptions(),
+      allowLocalOldBook: true,
     );
     switch (result) {
       case AppFailure<ChangeBookSourceResult>(error: final error):
@@ -684,8 +708,11 @@ final class BookInfoViewModel {
             book: changeResult.book,
           ),
         );
-        _effectController.add(const ShowBookInfoMessageEffect('已替换书源并保留阅读数据'));
-        _continueAfterShelfConflict(conflict);
+        _effectController.add(const ShowBookInfoMessageEffect('已覆盖同名书并合并阅读数据'));
+        _continueAfterShelfConflict(
+          conflict,
+          resolvedBook: changeResult.book,
+        );
     }
   }
 
@@ -697,7 +724,7 @@ final class BookInfoViewModel {
       return;
     }
     _emit(_state.copyWith(addingToShelf: true, clearShelfConflict: true));
-    /// 明确绕过同名同作者保护后的新增结果。
+    /// 明确绕过同书名保护后的新增结果。
     final AppResult<void> result = await _addBookToBookshelf.addAsNew(
       conflict.incomingBook,
       conflict.incomingChapters,
@@ -709,7 +736,7 @@ final class BookInfoViewModel {
       case AppSuccess<void>():
         _emit(_state.copyWith(addingToShelf: false, inBookshelf: true));
         _recordBookAddedToShelf();
-        _effectController.add(const ShowBookInfoMessageEffect('已作为另一来源加入书架'));
+        _effectController.add(const ShowBookInfoMessageEffect('已再次添加到书架'));
         _continueAfterShelfConflict(conflict);
     }
   }
@@ -747,7 +774,10 @@ final class BookInfoViewModel {
     );
   }
 
-  void _continueAfterShelfConflict(BookInfoShelfConflictDialog conflict) {
+  void _continueAfterShelfConflict(
+    BookInfoShelfConflictDialog conflict, {
+    Book? resolvedBook,
+  }) {
     /// 冲突出现前用户选择的章节位置。
     final int? chapterIndex = conflict.pendingChapterIndex;
     if (chapterIndex == null) {
@@ -755,7 +785,7 @@ final class BookInfoViewModel {
     }
     _effectController.add(
       OpenBookInfoReaderEffect(
-        book: conflict.incomingBook,
+        book: resolvedBook ?? conflict.incomingBook,
         chapters: conflict.incomingChapters,
         chapterIndex: chapterIndex,
       ),
@@ -836,6 +866,24 @@ final class BookInfoViewModel {
       return;
     }
     _effectController.add(OpenBookInfoFullSourceChangeEffect(book.bookUrl));
+  }
+
+  /// 校验书架成员资格后请求路由打开共用封面选择面板。
+  void _requestChangeCover() {
+    /// 当前已解析书籍。
+    final Book? book = _state.book;
+    if (!_state.inBookshelf || book == null) {
+      _effectController.add(
+        const ShowBookInfoMessageEffect('请先加入书架再更换封面'),
+      );
+      return;
+    }
+    _effectController.add(
+      OpenBookInfoChangeCoverEffect(
+        book: book,
+        initialCandidates: _state.group.books,
+      ),
+    );
   }
 
   /// 请求路由层分享当前书籍基础信息。

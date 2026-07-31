@@ -154,6 +154,8 @@ final class BookshelfViewModel {
         _effectController.add(const OpenBookshelfLocalBookImportEffect());
       case OpenSelectedBookSourceChangeIntent():
         _openSelectedBookSourceChange();
+      case OpenSelectedBookCoverChangeIntent():
+        _openSelectedBookCoverChange();
     }
   }
 
@@ -363,6 +365,25 @@ final class BookshelfViewModel {
       return;
     }
     _effectController.add(OpenBookshelfChangeSourceEffect(book));
+  }
+
+  /// 校验当前恰好选中一本书，再请求路由打开共用封面选择面板。
+  void _openSelectedBookCoverChange() {
+    if (_state.selectedBookUrls.length != 1) {
+      _effectController.add(
+        const ShowBookshelfMessageEffect('更换封面一次只能选择一本书'),
+      );
+      return;
+    }
+    /// 当前唯一选中的稳定书籍 URL。
+    final String selectedBookUrl = _state.selectedBookUrls.first;
+    /// 与选择 URL 对应的当前数据库快照。
+    final Book? book = _findBook(selectedBookUrl);
+    if (book == null) {
+      _effectController.add(const ShowBookshelfMessageEffect('选中的书籍已不存在'));
+      return;
+    }
+    _effectController.add(OpenBookshelfChangeCoverEffect(book));
   }
 
   /// 开始刷新可见或选中书籍目录。

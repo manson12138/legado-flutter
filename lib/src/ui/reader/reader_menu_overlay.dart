@@ -240,6 +240,8 @@ final class _ReaderTopBar extends StatelessWidget {
                     onIntent(
                       const RefreshReaderChaptersIntent(ReaderRefreshScope.allChapters),
                     );
+                  case _ReaderTopMenuAction.bookSource:
+                    onIntent(const OpenReaderBookSourceChangeIntent());
                   case _ReaderTopMenuAction.chapterSource:
                     if (state.currentChapter case final BookChapter chapter) {
                       onIntent(
@@ -294,6 +296,11 @@ final class _ReaderTopBar extends StatelessWidget {
                     child: const Text('刷新全部章节'),
                   ),
                   PopupMenuItem<_ReaderTopMenuAction>(
+                    value: _ReaderTopMenuAction.bookSource,
+                    enabled: !isLocalBook && state.book != null,
+                    child: const Text('整书换源'),
+                  ),
+                  PopupMenuItem<_ReaderTopMenuAction>(
                     value: _ReaderTopMenuAction.chapterSource,
                     enabled: !isLocalBook && state.currentChapter != null,
                     child: const Text('单章换源'),
@@ -346,6 +353,9 @@ enum _ReaderTopMenuAction {
 
   /// 后台刷新全部章节正文缓存。
   refreshAll,
+
+  /// 重新搜索启用书源并替换书架中的整本书。
+  bookSource,
 
   /// 打开单章换源面板。
   chapterSource,

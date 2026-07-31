@@ -11,11 +11,13 @@ import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/bookmark.dart';
 import '../../domain/model/book_content_process.dart';
+import '../../domain/model/add_book_to_bookshelf_result.dart';
 import '../../domain/model/reader_content.dart';
 import '../../domain/model/reading_progress.dart';
 import '../../domain/model/replace_rule.dart';
 import '../../domain/usecase/load_book_chapters_use_case.dart';
 import '../../domain/usecase/add_book_to_bookshelf_use_case.dart';
+import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../domain/usecase/record_reading_history_use_case.dart';
 import '../../domain/usecase/restore_reading_progress_use_case.dart';
 import '../../domain/usecase/save_reading_progress_use_case.dart';
@@ -53,6 +55,7 @@ final class ReaderViewModel {
     required SaveBookContentProcessUseCase saveBookContentProcess,
     required RecordReadingHistoryUseCase recordReadingHistory,
     required AddBookToBookshelfUseCase addBookToBookshelf,
+    required ChangeBookSourceUseCase changeBookSource,
     required Future<void> Function(
       String eventName, {
       Map<String, Object?> props,
@@ -71,6 +74,7 @@ final class ReaderViewModel {
        _saveBookContentProcess = saveBookContentProcess,
        _recordReadingHistory = recordReadingHistory,
        _addBookToBookshelf = addBookToBookshelf,
+       _changeBookSource = changeBookSource,
        _analyticsRecorder = analyticsRecorder,
        _markIntroSeen = markIntroSeen,
        _markInitialMenuShown = markInitialMenuShown,
@@ -164,6 +168,9 @@ final class ReaderViewModel {
 
   /// 阅读器悬浮按钮显式加入书架的业务动作。
   final AddBookToBookshelfUseCase _addBookToBookshelf;
+
+  /// 覆盖同名书时原子切换来源并合并用户阅读事实的业务动作。
+  final ChangeBookSourceUseCase _changeBookSource;
 
   /// 用户同意后记录严格白名单匿名事件的回调。
   final Future<void> Function(
@@ -315,6 +322,17 @@ final class ReaderViewModel {
         unawaited(_addBookmark());
       case AddReaderBookToBookshelfIntent():
         unawaited(_addCurrentBookToBookshelf());
+      case OverwriteReaderBookshelfConflictIntent():
+        unawaited(_overwriteBookshelfConflict());
+      case AddReaderBookshelfConflictAsNewIntent():
+        unawaited(_addBookshelfConflictAsNew());
+      case DismissReaderBookshelfConflictIntent():
+        _emit(
+          _state.copyWith(
+            addingToBookshelf: false,
+            clearBookshelfConflict: true,
+          ),
+        );
       case DeleteReaderBookmarkIntent(bookmark: final Bookmark bookmark):
         unawaited(_deleteBookmark(bookmark));
       case SaveReaderBookmarkNoteIntent(
@@ -882,32 +900,132 @@ final class ReaderViewModel {
             chapterTitle: chapter.title,
           );
     _emit(_state.copyWith(addingToBookshelf: true));
-    final AppResult<void> result =
-        await _addBookToBookshelf.addAsNew(shelfBook, _state.chapters);
+    final AppResult<AddBookToBookshelfResult> result =
+        await _addBookToBookshelf.execute(shelfBook, _state.chapters);
     switch (result) {
+      case AppFailure<AddBookToBookshelfResult>(error: final error):
+        _emit(_state.copyWith(addingToBookshelf: false));
+        _effectController.add(ShowReaderMessageEffect(error.message));
+      case AppSuccess<AddBookToBookshelfResult>(value: final addResult):
+        switch (addResult) {
+          case BookAddedToBookshelf(book: final Book addedBook):
+            _emit(
+              _state.copyWith(
+                book: addedBook,
+                isInBookshelf: true,
+                addingToBookshelf: false,
+              ),
+            );
+            _effectController.add(
+              const ShowReaderMessageEffect('已加入书架'),
+            );
+          case BookAlreadyInBookshelf():
+            _emit(
+              _state.copyWith(
+                isInBookshelf: true,
+                addingToBookshelf: false,
+              ),
+            );
+            _effectController.add(
+              const ShowReaderMessageEffect('该来源书籍已在书架中'),
+            );
+          case BookShelfConflict(
+            existingBook: final Book existingBook,
+            incomingBook: final Book incomingBook,
+            incomingChapters: final List<BookChapter> incomingChapters,
+          ):
+            _emit(
+              _state.copyWith(
+                addingToBookshelf: false,
+                bookshelfConflict: ReaderBookshelfConflictDialog(
+                  existingBook: existingBook,
+                  incomingBook: incomingBook,
+                  incomingChapters: incomingChapters,
+                ),
+              ),
+            );
+        }
+    }
+  }
+
+  /// 用阅读器当前来源覆盖同名书，并保留现有书的用户阅读事实和封面。
+  Future<void> _overwriteBookshelfConflict() async {
+    /// 当前等待用户确认的同名书冲突。
+    final ReaderBookshelfConflictDialog? conflict =
+        _state.bookshelfConflict;
+    if (conflict == null || _state.addingToBookshelf) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        addingToBookshelf: true,
+        clearBookshelfConflict: true,
+      ),
+    );
+    /// 原子覆盖及用户事实合并结果。
+    final AppResult<ChangeBookSourceResult> result =
+        await _changeBookSource.execute(
+      oldBook: conflict.existingBook,
+      newBook: conflict.incomingBook,
+      chapters: conflict.incomingChapters,
+      options: const ChangeSourceMigrationOptions(),
+      allowLocalOldBook: true,
+    );
+    switch (result) {
+      case AppFailure<ChangeBookSourceResult>(error: final error):
+        _emit(_state.copyWith(addingToBookshelf: false));
+        _effectController.add(ShowReaderMessageEffect(error.message));
+      case AppSuccess<ChangeBookSourceResult>(value: final changeResult):
+        _emit(
+          _state.copyWith(
+            book: changeResult.book,
+            chapters: conflict.incomingChapters,
+            isInBookshelf: true,
+            addingToBookshelf: false,
+          ),
+        );
+        /// 配置复制等非阻断警告会附加在覆盖成功提示后，不能把已提交事务伪装成失败。
+        final String message = changeResult.warnings.isEmpty
+            ? '已覆盖同名书并合并阅读数据'
+            : '已覆盖同名书；${changeResult.warnings.join('；')}';
+        _effectController.add(ShowReaderMessageEffect(message));
+    }
+  }
+
+  /// 在用户明确确认后把阅读器当前来源作为另一条同名书记录加入书架。
+  Future<void> _addBookshelfConflictAsNew() async {
+    /// 当前等待用户确认的同名书冲突。
+    final ReaderBookshelfConflictDialog? conflict =
+        _state.bookshelfConflict;
+    if (conflict == null || _state.addingToBookshelf) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        addingToBookshelf: true,
+        clearBookshelfConflict: true,
+      ),
+    );
+    /// 绕过同书名保护但仍阻止相同 URL 主键覆盖的新增结果。
+    final AppResult<void> result = await _addBookToBookshelf.addAsNew(
+      conflict.incomingBook,
+      conflict.incomingChapters,
+    );
+    switch (result) {
+      case AppFailure<void>(error: final error):
+        _emit(_state.copyWith(addingToBookshelf: false));
+        _effectController.add(ShowReaderMessageEffect(error.message));
       case AppSuccess<void>():
         _emit(
           _state.copyWith(
+            book: conflict.incomingBook,
             isInBookshelf: true,
             addingToBookshelf: false,
           ),
         );
         _effectController.add(
-          const ShowReaderMessageEffect('已加入书架'),
+          const ShowReaderMessageEffect('已再次添加到书架'),
         );
-      case AppFailure<void>(error: final error):
-        final Book? existing = await _bookshelfGateway.getBook(book.bookUrl);
-        if (existing != null) {
-          _emit(
-            _state.copyWith(
-              isInBookshelf: true,
-              addingToBookshelf: false,
-            ),
-          );
-          return;
-        }
-        _emit(_state.copyWith(addingToBookshelf: false));
-        _effectController.add(ShowReaderMessageEffect(error.message));
     }
   }
 
@@ -2006,7 +2124,16 @@ final class ReaderViewModel {
       _effectController.add(const ShowReaderMessageEffect('当前书籍不支持整书换源'));
       return;
     }
+    if (!_state.isInBookshelf) {
+      _effectController.add(
+        const ShowReaderMessageEffect('请先加入书架再替换书源'),
+      );
+      return;
+    }
     await _saveProgress();
+    if (_disposed) {
+      return;
+    }
     _emit(_state.copyWith(menuVisible: false));
     _effectController.add(OpenReaderBookSourceChangeEffect(book.bookUrl));
   }

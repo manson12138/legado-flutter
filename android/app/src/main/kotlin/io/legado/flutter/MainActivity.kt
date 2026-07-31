@@ -40,8 +40,11 @@ class MainActivity : FlutterActivity() {
     /** 登录与注册密码加密平台通道名称。 */
     private val passwordEncryptionChannel = "io.legado.flutter/password_encryption"
 
-    /** 当前 Android 安装包 versionName 查询通道名称。 */
+    /** 当前 Android 安装包版本名称和构建号查询通道名称。 */
     private val appPackageInfoChannel = "io.legado.flutter/app_package_info"
+
+    /** M08.1 外部 TXT 文件关联桥；Activity 销毁时同步释放通道和文件线程。 */
+    private var externalTxtOpenBridge: ExternalTxtOpenBridge? = null
 
     /** 当前 Activity 生命周期内是否已经申请过通知权限，避免状态刷新重复弹窗。 */
     private var notificationPermissionRequested = false
@@ -59,6 +62,10 @@ class MainActivity : FlutterActivity() {
         registerDownloadBackgroundChannel(flutterEngine)
         registerPasswordEncryptionChannel(flutterEngine)
         registerAppPackageInfoChannel(flutterEngine)
+        /** 桥创建后立即消费冷启动 Intent；文件复制仍由桥的后台线程延后执行。 */
+        externalTxtOpenBridge = ExternalTxtOpenBridge(this, flutterEngine).also { bridge ->
+            bridge.handleIntent(intent)
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             readerPlatformChannel,
@@ -106,25 +113,51 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** 注册实际安装包版本名通道；只读取 PackageManager，不持有监听器或业务状态。 */
+    /** 注册实际安装包版本通道；只读取 PackageManager，不持有监听器或业务状态。 */
     private fun registerAppPackageInfoChannel(flutterEngine: FlutterEngine) {
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             appPackageInfoChannel,
         ).setMethodCallHandler { call, result ->
-            if (call.method != "getVersionName") {
+            if (call.method != "getPackageInfo") {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
             try {
                 /** Android 系统记录的当前已安装包信息。 */
                 val packageInfo = packageManager.getPackageInfo(packageName, 0)
-                result.success(packageInfo.versionName)
+                /** API 28 起读取 longVersionCode；旧系统安全回退到已废弃的 int versionCode。 */
+                val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    packageInfo.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo.versionCode.toLong()
+                }
+                result.success(
+                    mapOf(
+                        "versionName" to packageInfo.versionName,
+                        "versionCode" to versionCode,
+                    ),
+                )
             } catch (_: PackageManager.NameNotFoundException) {
-                /** 当前包理论上始终存在；异常时返回空值，让 Dart 禁止恢复旧准入缓存。 */
+                /** 当前包理论上始终存在；异常时返回空值，让 Dart 使用受控后备配置。 */
                 result.success(null)
             }
         }
+    }
+
+    /** singleTop Activity 已存在时接收新的外部 TXT 打开请求。 */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        externalTxtOpenBridge?.handleIntent(intent)
+    }
+
+    /** Activity 销毁时解除外部 TXT 通道并停止其串行文件线程。 */
+    override fun onDestroy() {
+        externalTxtOpenBridge?.dispose()
+        externalTxtOpenBridge = null
+        super.onDestroy()
     }
 
     /** 注册下载后台通道，启动或停止只承载公开计数的 Android 前台服务。 */

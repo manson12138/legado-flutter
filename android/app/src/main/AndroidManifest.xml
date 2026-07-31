@@ -37,6 +37,32 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- M08.1：接收 MIME 正确的 TXT“打开方式”请求。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
+            <!-- M08.1：兼容 MIME 不准确但 Uri 路径仍携带 TXT 扩展名的文件提供方。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:host="*"/>
+                <data android:mimeType="*/*"/>
+                <data android:pathAdvancedPattern=".*\\.[tT][xX][tT]"/>
+                <data android:pathPattern=".*\\.txt"/>
+                <data android:pathPattern=".*\\.TXT"/>
+            </intent-filter>
         </activity>
         <!-- P1-05：只承载下载通知和进程优先级，章节状态机仍由 Dart 单例协调器管理。 -->
         <service

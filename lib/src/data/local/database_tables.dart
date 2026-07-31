@@ -14,6 +14,8 @@ abstract final class DatabaseTables {
   static const String bookGroups = 'book_groups';
   /// 搜索结果缓存表，对应 Android `searchBooks`。
   static const String searchBooks = 'searchBooks';
+  /// 搜索 Cell 点击时整组覆盖、供详情页只读恢复的精确书源候选表。
+  static const String bookSourceCandidates = 'book_source_candidates';
   /// 书签表，对应 Android `bookmarks`。
   static const String bookmarks = 'bookmarks';
   /// Cookie 表，对应 Android `cookies`。

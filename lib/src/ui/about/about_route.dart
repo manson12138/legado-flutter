@@ -84,6 +84,10 @@ final class _AboutRouteState extends State<AboutRoute> {
         return AboutScreen(
           state: _state,
           appAccessState: appAccessState,
+          appVersionName:
+              widget.dependencies.remoteAppConfig.appVersionName,
+          appVersionCode:
+              widget.dependencies.remoteAppConfig.appVersionCode,
           onIntent: _viewModel.onIntent,
           onCheckUpdate: () {
             widget.dependencies.appAccessCoordinator.refresh(

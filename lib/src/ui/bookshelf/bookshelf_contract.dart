@@ -345,6 +345,12 @@ final class OpenSelectedBookSourceChangeIntent extends BookshelfIntent {
   const OpenSelectedBookSourceChangeIntent();
 }
 
+/// 请求为当前唯一选中的书籍搜索并替换封面。
+final class OpenSelectedBookCoverChangeIntent extends BookshelfIntent {
+  /// 创建打开封面替换 Intent。
+  const OpenSelectedBookCoverChangeIntent();
+}
+
 /// 书架一次性副作用。
 sealed class BookshelfEffect {
   /// 限制 Effect 类型。
@@ -399,5 +405,14 @@ final class OpenBookshelfChangeSourceEffect extends BookshelfEffect {
   const OpenBookshelfChangeSourceEffect(this.book);
 
   /// 需要重新确认数据库事实的当前书籍。
+  final Book book;
+}
+
+/// 请求路由层为当前唯一选中的书架书打开封面选择面板。
+final class OpenBookshelfChangeCoverEffect extends BookshelfEffect {
+  /// 创建封面替换导航 Effect。
+  const OpenBookshelfChangeCoverEffect(this.book);
+
+  /// 需要字段级更新自定义封面的当前书籍。
   final Book book;
 }

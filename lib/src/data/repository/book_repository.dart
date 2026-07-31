@@ -48,12 +48,12 @@ final class BookRepository
     );
   }
 
-  /// 按 Android 精确语义查询同名同作者的最近阅读书籍。
+  /// 按精确书名查询当前用户最近阅读的一条冲突书籍。
   @override
-  Future<Book?> getShelfBookConflict(String name, String author) {
+  Future<Book?> getShelfBookNameConflict(String name) {
     final int userId = _requireUserId();
     return guardDataOperation<Book?>(
-      () => _bookDao.getShelfBookConflict(userId, name, author),
+      () => _bookDao.getShelfBookNameConflict(userId, name),
     );
   }
 
@@ -223,6 +223,38 @@ final class BookRepository
         );
       });
       _database.changeNotifier.notifyTables(<String>{DatabaseTables.books});
+    });
+  }
+
+  /// 字段级更新自定义封面，避免使用旧页面快照整行覆盖其他书架事实。
+  @override
+  Future<Book> updateCustomCover(
+    String bookUrl,
+    String? customCoverUrl,
+  ) {
+    final int userId = _requireUserId();
+    return guardDataOperation<Book>(() async {
+      /// 本次字段更新实际命中的书架行数。
+      final int changedRows = await _bookDao.updateCustomCover(
+        userId: userId,
+        bookUrl: bookUrl,
+        customCoverUrl: customCoverUrl,
+      );
+      if (changedRows == 0) {
+        throw const AppError(
+          kind: AppErrorKind.validation,
+          message: '书籍已不在书架中，无法更换封面',
+        );
+      }
+      /// 更新后重新读取的完整书籍事实，供详情页立即刷新且不复制旧字段。
+      final Book? updatedBook = await _bookDao.getByUrl(userId, bookUrl);
+      if (updatedBook == null) {
+        throw const AppError(
+          kind: AppErrorKind.infrastructure,
+          message: '封面已更新，但重新读取书籍失败',
+        );
+      }
+      return updatedBook;
     });
   }
 

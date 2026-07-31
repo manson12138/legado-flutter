@@ -75,3 +75,15 @@ ChangeBookSourceScreen
 2. Android 可选择删除已下载章节；Flutter 的缓存下载尚未迁移，因此本轮没有提供虚假的删除下载选项。
 3. 普通规则与 JavaScript 真实样本仍受 M3/M4/M10 未关闭门禁约束。
 4. 两个平台都未由用户运行本轮代码，状态不能超过 `IN_PROGRESS`。
+
+## 详情与阅读器入口补充映射
+
+| Flutter 文件 | 职责 |
+|---|---|
+| `ui/book_info/book_info_screen.dart` | 已入架网络书直接打开独立整书换源页；未入架多候选只做已有来源临时切换 |
+| `ui/reader/reader_menu_overlay.dart` | 顶部快捷图标和更多菜单共同提供整书换源，更多菜单与单章换源并列 |
+| `ui/reader/reader_view_model.dart` | 校验本地书、书架成员资格，保存稳定进度后发送导航 Effect |
+| `ui/reader/reader_route.dart` | 停止系统信息轮询、退出阅读模式、单飞导航；取消或异常时恢复显示配置、轮询和输入焦点 |
+
+以上入口均复用现有 `ChangeBookSourceViewModel` 与
+`ChangeBookSourceUseCase`，没有增加第二套搜索、事务或持久化状态。

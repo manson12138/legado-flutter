@@ -64,6 +64,10 @@ final class BookSourceManagementScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     /// 当前是否处于批量选择模式。
     final bool selecting = state.selectedUrls.isNotEmpty;
+    /// 当前书源管理页可见范围内的书源总数。
+    final int totalSourceCount = state.sources.length;
+    /// 当前书源管理页可见范围内处于启用状态的书源数量。
+    final int enabledSourceCount = state.sources.where((BookSource source) => source.enabled).length;
     return PopScope(
       canPop: !selecting,
       onPopInvokedWithResult: (bool didPop, Object? result) {
@@ -183,36 +187,35 @@ final class BookSourceManagementScreen extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 SpacingToken.medium,
-                SpacingToken.medium,
+                SpacingToken.small,
                 SpacingToken.medium,
                 SpacingToken.small,
               ),
               child: TextFormField(
                 key: ValueKey<String>('book-source-${state.query.isEmpty}'),
                 initialValue: state.query,
+                style: Theme.of(context).textTheme.bodyMedium,
                 onChanged: (String value) {
                   onIntent(ChangeBookSourceQueryIntent(value));
                 },
                 decoration: InputDecoration(
+                  isDense: true,
                   hintText: '搜索书源',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    size: 17,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: SpacingToken.mediumSmall,
-                    vertical: SpacingToken.small,
+                    vertical: SpacingToken.xSmall,
                   ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(RadiusToken.pill),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(RadiusToken.pill),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(RadiusToken.pill),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: UnderlineInputBorder(
                     borderSide: BorderSide(
-                      color: Theme.of(context).colorScheme.primary,
+                      color: Theme.of(context).colorScheme.outlineVariant,
                       width: 1,
                     ),
                   ),
@@ -247,9 +250,9 @@ final class BookSourceManagementScreen extends StatelessWidget {
                 SpacingToken.medium,
                 SpacingToken.small,
               ),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: PopupMenuButton<String>(
+              child: Row(
+                children: <Widget>[
+                  PopupMenuButton<String>(
                   tooltip: '筛选书源分类',
                   onSelected: (String value) {
                     onIntent(
@@ -283,6 +286,14 @@ final class BookSourceManagementScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+                const Spacer(),
+                Text(
+                  '启用 $enabledSourceCount/$totalSourceCount',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
               ),
             ),
             Expanded(child: _buildContent(context)),

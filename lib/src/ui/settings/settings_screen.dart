@@ -10,6 +10,8 @@ final class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
     required this.appSession,
     required this.themeMode,
+    required this.appVersionName,
+    required this.appVersionCode,
     required this.onBack,
     required this.onOpenThemeManagement,
     required this.onOpenLanguageManagement,
@@ -33,6 +35,12 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 当前应用主题模式。
   final ThemeMode themeMode;
+
+  /// 当前安装包的真实版本名称。
+  final String appVersionName;
+
+  /// 当前安装包的真实构建号。
+  final int appVersionCode;
 
   /// 返回上一页的导航回调。
   final VoidCallback onBack;
@@ -190,7 +198,8 @@ final class SettingsScreen extends StatelessWidget {
                   _SettingsItem(
                     icon: Icons.info_outline,
                     title: '关于',
-                    subtitle: 'Legado Flutter 1.0.0+6',
+                    subtitle:
+                        'Legado Flutter $appVersionName+$appVersionCode',
                     onTap: onOpenAbout,
                   ),
                 ],

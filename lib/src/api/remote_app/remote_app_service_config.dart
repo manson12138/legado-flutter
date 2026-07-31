@@ -22,8 +22,8 @@ final class RemoteAppServiceConfig {
   factory RemoteAppServiceConfig.fromEnvironment() => RemoteAppServiceConfig(
     baseUri: Uri.parse(const String.fromEnvironment('REMOTE_APP_BASE_URL', defaultValue: 'http://47.109.99.126')),
     productId: const int.fromEnvironment('REMOTE_APP_PRODUCT_ID', defaultValue: 1),
-    appVersionName: const String.fromEnvironment('LEGADO_APP_VERSION_NAME', defaultValue: '1.0.0'),
-    appVersionCode: const int.fromEnvironment('LEGADO_APP_VERSION_CODE', defaultValue: 6),
+    appVersionName: const String.fromEnvironment('LEGADO_APP_VERSION_NAME', defaultValue: '1.0.1'),
+    appVersionCode: const int.fromEnvironment('LEGADO_APP_VERSION_CODE', defaultValue: 10),
     channel: const String.fromEnvironment('REMOTE_APP_CHANNEL', defaultValue: 'official'),
     hmacSecret: const String.fromEnvironment('REMOTE_APP_HMAC_SECRET', defaultValue: 'dev-app-signature-change-me'),
     passwordKeyInvalidBusinessCodes: _parseBusinessCodes(
@@ -42,17 +42,17 @@ final class RemoteAppServiceConfig {
   }) async {
     /// 服务地址、产品、渠道和签名仍来自统一编译配置。
     final RemoteAppServiceConfig environment = RemoteAppServiceConfig.fromEnvironment();
-    /// Android/iOS 宿主返回的实际语义版本名。
-    final String? installedVersionName =
-        await packageInfoService.readVersionName();
-    if (installedVersionName == null) {
+    /// Android/iOS 宿主一次性返回的实际版本名称和构建号。
+    final InstalledAppPackageInfo? installedPackageInfo =
+        await packageInfoService.readPackageInfo();
+    if (installedPackageInfo == null) {
       return environment;
     }
     return RemoteAppServiceConfig(
       baseUri: environment.baseUri,
       productId: environment.productId,
-      appVersionName: installedVersionName,
-      appVersionCode: environment.appVersionCode,
+      appVersionName: installedPackageInfo.versionName,
+      appVersionCode: installedPackageInfo.versionCode,
       channel: environment.channel,
       hmacSecret: environment.hmacSecret,
       passwordKeyInvalidBusinessCodes:

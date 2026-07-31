@@ -25,7 +25,7 @@ final class BookAlreadyInBookshelf extends AddBookToBookshelfResult {
   final Book existingBook;
 }
 
-/// 表示书架存在同名同作者的另一来源，需要用户明确选择处理方式。
+/// 表示当前用户书架存在同名的另一来源，需要用户明确选择处理方式。
 final class BookShelfConflict extends AddBookToBookshelfResult {
   /// 创建包含现有书和候选书事实的冲突结果。
   BookShelfConflict({
@@ -34,7 +34,7 @@ final class BookShelfConflict extends AddBookToBookshelfResult {
     required List<BookChapter> incomingChapters,
   }) : incomingChapters = List<BookChapter>.unmodifiable(incomingChapters);
 
-  /// 当前书架中的同名同作者书籍。
+  /// 当前书架中的同名书籍。
   final Book existingBook;
 
   /// 用户正在尝试加入的新书源书籍。

@@ -26,8 +26,8 @@ final class SearchViewModel {
        _searchPreferences = searchPreferences,
        _analyticsRecorder = analyticsRecorder,
        _logger = logger {
-    _bookSourceSubscription = _coordinator.watchEnabledSources().listen(
-      _applySourceSnapshot,
+    _bookSourceSubscription = _coordinator.watchSourceAvailability().listen(
+      _applySourceAvailability,
       onError: _handleSourceStreamError,
     );
     _adultContentRuleSubscription = _coordinator.adultContentRuleChanges.listen(
@@ -57,8 +57,8 @@ final class SearchViewModel {
   final StreamController<SearchEffect> _effectController = StreamController<SearchEffect>.broadcast();
   /// 当前搜索运行句柄。
   BookSearchRun? _run;
-  /// 启用书源变化订阅，使主页保活的搜索页无需重建即可更新候选。
-  StreamSubscription<List<BookSource>>? _bookSourceSubscription;
+  /// 书源可用性变化订阅，使保活搜索页能区分无书源、全停用和局部零选择。
+  StreamSubscription<BookSearchSourceAvailability>? _bookSourceSubscription;
   /// 成人内容屏蔽规则变化监听，用于刷新保活页面中的书源和旧结果。
   StreamSubscription<int>? _adultContentRuleSubscription;
   /// 每次搜索递增的运行编号，用于拒绝旧回调污染新状态。
@@ -85,14 +85,11 @@ final class SearchViewModel {
           _emit(_state.copyWith(keyword: keyword, clearError: true));
         }
       case SubmitSearchIntent(keyword: final String? keyword):
-        final Set<String> sourceUrls = _resolvedSelectedSourceUrls();
-        if (sourceUrls.isEmpty) {
-          _effectController.add(const ShowSearchMessageEffect('请至少选择一个可用书源'));
-          return;
-        }
-        _startSearch(keyword ?? _state.keyword, sourceUrls: sourceUrls);
+        _submitSearch(keyword ?? _state.keyword);
       case CancelSearchIntent():
         _cancel(manual: true);
+      case ResumeSearchAfterBookInfoIntent():
+        _resumeAfterBookInfo();
       case RetryFailedSourcesIntent():
         /// 【搜书诊断日志】记录用户从失败书源区域触发重试。
         _logger.info(
@@ -104,6 +101,12 @@ final class SearchViewModel {
         _toggleSourceSelection(sourceUrl);
       case SelectAllSearchSourcesIntent():
         _emit(_state.copyWith(selectedSourceUrls: <String>{}, useAllSources: true));
+      case ConfirmEnableAllSearchSourcesIntent():
+        _confirmEnableAllSearchSources();
+      case DismissEnableAllSearchSourcesIntent():
+        _emit(
+          _state.copyWith(clearPendingEnableAllSearchKeyword: true),
+        );
       case InvertSearchSourcesIntent():
         _invertSources();
       case ApplySearchSourceSelectionIntent(
@@ -135,6 +138,7 @@ final class SearchViewModel {
       case ClearSearchHistoryIntent():
         _clearHistory();
       case OpenSearchResultIntent(group: final BookSearchResultGroup group, book: final SearchBook book):
+        _pauseForBookInfo();
         /// 【搜书诊断日志】记录点击的是哪个不可逆候选标识以及可换源数量。
         _logger.info(
           tag: bookSearchUiLogTag,
@@ -180,20 +184,19 @@ final class SearchViewModel {
     }
   }
 
-  /// 应用启用书源观察流的新快照，并清理已经失效的临时选择条件。
+  /// 应用书源可用性观察流的新快照，并清理已经失效的临时选择条件。
   ///
   /// 当前搜索运行继续使用启动时的固定书源集合；这里只影响选择面板和下一次搜索。
-  void _applySourceSnapshot(List<BookSource> sources) {
+  void _applySourceAvailability(
+    BookSearchSourceAvailability availability,
+  ) {
     if (_stateController.isClosed) {
       return;
     }
-    /// 最新快照中可用于搜索的书源主键。
-    final Set<String> visibleUrls = sources
-        .map((BookSource source) => source.bookSourceUrl)
-        .toSet();
-    /// 移除已经删除、停用或被屏蔽的显式选择。
-    final Set<String> selectedUrls =
-        _state.selectedSourceUrls.intersection(visibleUrls);
+    /// 当前全局已启用且可见、可供搜索页选择的书源。
+    final List<BookSource> sources = availability.enabledSources;
+    /// 保留仍有效的旧选择，并让本次新增且可用的书源自动进入显式选择。
+    final Set<String> selectedUrls = _selectedUrlsForSourceSnapshot(sources);
     /// 当前选中分组是否仍至少包含一个可用书源。
     final String? selectedGroup = _state.selectedSourceGroup;
     final bool clearSelectedGroup = selectedGroup != null &&
@@ -203,12 +206,37 @@ final class SearchViewModel {
     _emit(
       _state.copyWith(
         loadingSources: false,
+        visibleSourceCount: availability.visibleSourceCount,
         sources: sources,
         selectedSourceUrls: selectedUrls,
         clearSelectedSourceGroup: clearSelectedGroup,
-        clearError: _state.errorMessage == '读取启用书源失败',
+        clearError: _state.errorMessage == '读取启用书源失败' ||
+            _state.errorMessage == '刷新可用书源失败，请重试',
       ),
     );
+  }
+
+  /// 合并书源刷新前后的显式选择；新增且启用、可见的书源默认选中。
+  ///
+  /// “全部书源”状态由 [SearchUiState.useAllSources] 直接覆盖所有候选，无需展开 URL；
+  /// 部分选择或零选择状态则保留仍有效的旧 URL，并只补入本次新增的可用 URL。
+  Set<String> _selectedUrlsForSourceSnapshot(List<BookSource> sources) {
+    /// 最新快照中可用于搜索的书源主键。
+    final Set<String> visibleUrls = sources
+        .map((BookSource source) => source.bookSourceUrl)
+        .toSet();
+    /// 移除已经删除、停用或被屏蔽的显式选择。
+    final Set<String> selectedUrls =
+        _state.selectedSourceUrls.intersection(visibleUrls);
+    if (_state.useAllSources) {
+      return selectedUrls;
+    }
+    /// 刷新前已经出现在搜索页中的可用书源主键。
+    final Set<String> previousVisibleUrls = _state.sources
+        .map((BookSource source) => source.bookSourceUrl)
+        .toSet();
+    selectedUrls.addAll(visibleUrls.difference(previousVisibleUrls));
+    return selectedUrls;
   }
 
   /// 将书源观察流失败转换为页面可恢复错误，保留最后一次成功快照。
@@ -224,7 +252,6 @@ final class SearchViewModel {
     );
     _emit(
       _state.copyWith(
-        loadingSources: false,
         errorMessage: '读取启用书源失败',
       ),
     );
@@ -242,6 +269,7 @@ final class SearchViewModel {
         loadingSources: true,
         searching: false,
         cancelled: false,
+        pausedForBookInfo: false,
         results: const <BookSearchResultGroup>[],
         failures: const <BookSearchSourceFailure>[],
         progress: const BookSearchProgress(
@@ -250,40 +278,19 @@ final class SearchViewModel {
           succeeded: 0,
           failed: 0,
         ),
+        clearPendingEnableAllSearchKeyword: true,
         clearError: true,
       ),
     );
     try {
-      /// 按最新屏蔽开关、关键词和书源状态重新计算的启用书源。
-      final List<BookSource> sources = await _coordinator.loadEnabledSources();
+      /// 按最新屏蔽开关、关键词和书源状态重新计算的书源可用性。
+      final BookSearchSourceAvailability availability =
+          await _coordinator.loadSourceAvailability();
       if (sourceLoadGeneration != _sourceLoadGeneration ||
           _stateController.isClosed) {
         return;
       }
-      /// 规则刷新后仍然可见的书源主键。
-      final Set<String> visibleUrls = sources
-          .map((BookSource source) => source.bookSourceUrl)
-          .toSet();
-      /// 从显式选择中移除已经被隐藏的书源。
-      final Set<String> selectedUrls =
-          _state.selectedSourceUrls.intersection(visibleUrls);
-      /// 当前分组是否已经因全部书源隐藏而消失。
-      final String? selectedGroup = _state.selectedSourceGroup;
-      bool clearSelectedGroup = false;
-      if (selectedGroup != null) {
-        clearSelectedGroup = !sources.any(
-          (BookSource source) => _sourceHasGroup(source, selectedGroup),
-        );
-      }
-      _emit(
-        _state.copyWith(
-          loadingSources: false,
-          sources: sources,
-          selectedSourceUrls: selectedUrls,
-          clearSelectedSourceGroup: clearSelectedGroup,
-          clearError: true,
-        ),
-      );
+      _applySourceAvailability(availability);
     } catch (error, stackTrace) {
       if (sourceLoadGeneration != _sourceLoadGeneration ||
           _stateController.isClosed) {
@@ -302,6 +309,71 @@ final class SearchViewModel {
         ),
       );
     }
+  }
+
+  /// 按书源事实优先级提交搜索，避免把无书源、全停用和局部零选择混为一谈。
+  void _submitSearch(String rawKeyword) {
+    /// 对话框与后续继续搜索共同使用的规范化关键字。
+    final String keyword = rawKeyword.trim();
+    if (keyword.isEmpty) {
+      _logger.warning(
+        tag: bookSearchUiLogTag,
+        message: '搜索提交被拒绝 reason=emptyKeyword',
+      );
+      _effectController.add(const ShowSearchMessageEffect('请输入搜索关键字'));
+      return;
+    }
+    if (_state.loadingSources) {
+      _effectController.add(
+        ShowSearchMessageEffect(
+          _state.errorMessage == '读取启用书源失败'
+              ? '读取启用书源失败'
+              : '正在读取书源，请稍候',
+        ),
+      );
+      return;
+    }
+    if (_state.visibleSourceCount == 0) {
+      _effectController.add(
+        const OpenBookSourceManagementEffect('当前没有书源，请添加书源'),
+      );
+      return;
+    }
+    if (_state.sources.isEmpty) {
+      _effectController.add(
+        const OpenBookSourceManagementEffect('当前没有开启的书源'),
+      );
+      return;
+    }
+    /// 搜索页分组、关键字、成功率与显式勾选共同解析出的执行集合。
+    final Set<String> sourceUrls = _resolvedSelectedSourceUrls();
+    if (sourceUrls.isEmpty) {
+      _emit(
+        _state.copyWith(pendingEnableAllSearchKeyword: keyword),
+      );
+      return;
+    }
+    _startSearch(keyword, sourceUrls: sourceUrls);
+  }
+
+  /// 恢复搜索页全部来源范围，并对书源快照复判后继续原提交关键字。
+  void _confirmEnableAllSearchSources() {
+    /// 对话框打开时固定的原提交关键字。
+    final String? pendingKeyword = _state.pendingEnableAllSearchKeyword;
+    if (pendingKeyword == null) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        selectedSourceUrls: <String>{},
+        useAllSources: true,
+        clearSelectedSourceGroup: true,
+        sourceQuery: '',
+        onlySuccessfulSources: false,
+        clearPendingEnableAllSearchKeyword: true,
+      ),
+    );
+    _submitSearch(pendingKeyword);
   }
 
   /// 开始新搜索并取消、隔离旧搜索。
@@ -343,6 +415,7 @@ final class SearchViewModel {
         committedKeyword: keyword,
         searching: true,
         cancelled: false,
+        pausedForBookInfo: false,
         results: const <BookSearchResultGroup>[],
         failures: const <BookSearchSourceFailure>[],
         progress: BookSearchProgress(total: sourceUrls.isEmpty ? _state.sources.length : sourceUrls.length, completed: 0, succeeded: 0, failed: 0),
@@ -377,8 +450,16 @@ final class SearchViewModel {
       }
       _run = run;
       await run.completion;
+      if (identical(_run, run)) {
+        _run = null;
+      }
       if (generation == _generation && !run.isCancelled) {
-        _emit(_state.copyWith(searching: false));
+        _emit(
+          _state.copyWith(
+            searching: false,
+            pausedForBookInfo: false,
+          ),
+        );
         final BookSearchProgress progress = _state.progress;
         _recordAnalyticsEvent(
           'search_completed',
@@ -404,6 +485,7 @@ final class SearchViewModel {
       }
     } catch (error, stackTrace) {
       if (generation == _generation) {
+        _run = null;
         _logger.error(
           tag: bookSearchUiLogTag,
           message: '搜索任务启动或等待失败 generation=$generation '
@@ -411,9 +493,37 @@ final class SearchViewModel {
           error: error,
           stackTrace: stackTrace,
         );
-        _emit(_state.copyWith(searching: false, errorMessage: '搜索任务启动失败'));
+        _emit(
+          _state.copyWith(
+            searching: false,
+            pausedForBookInfo: false,
+            errorMessage: '搜索任务启动失败',
+          ),
+        );
       }
     }
+  }
+
+  /// 进入书籍详情前暂停仍在运行的多书源任务，并保留结果和进度。
+  void _pauseForBookInfo() {
+    /// 当前可以被暂停的搜索运行句柄。
+    final BookSearchRun? run = _run;
+    if (!_state.searching || run == null || run.isCancelled || run.isPaused) {
+      return;
+    }
+    run.pause();
+    _emit(_state.copyWith(pausedForBookInfo: true));
+  }
+
+  /// 书籍详情和阅读链路全部离开后，从原进度恢复多书源任务。
+  void _resumeAfterBookInfo() {
+    /// 当前等待恢复的搜索运行句柄。
+    final BookSearchRun? run = _run;
+    if (!_state.pausedForBookInfo || run == null || run.isCancelled) {
+      return;
+    }
+    run.resume();
+    _emit(_state.copyWith(pausedForBookInfo: false));
   }
 
   /// 处理协调器事件，并用运行编号拒绝旧任务结果。
@@ -640,7 +750,13 @@ final class SearchViewModel {
         tag: bookSearchUiLogTag,
         message: '用户取消搜索 hadActiveRun=$hadActiveRun newGeneration=$_generation',
       );
-      _emit(_state.copyWith(searching: false, cancelled: true));
+      _emit(
+        _state.copyWith(
+          searching: false,
+          cancelled: true,
+          pausedForBookInfo: false,
+        ),
+      );
     }
   }
 
@@ -662,9 +778,11 @@ final class SearchViewModel {
         committedKeyword: '',
         searching: false,
         cancelled: false,
+        pausedForBookInfo: false,
         results: const <BookSearchResultGroup>[],
         failures: const <BookSearchSourceFailure>[],
         progress: const BookSearchProgress(total: 0, completed: 0, succeeded: 0, failed: 0),
+        clearPendingEnableAllSearchKeyword: true,
         clearError: true,
       ),
     );

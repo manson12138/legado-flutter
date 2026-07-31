@@ -4,7 +4,7 @@ import '../../domain/model/book_group.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
 
-/// 保存同名同作者书架冲突及冲突解决后需要继续的阅读入口。
+/// 保存同书名书架冲突及冲突解决后需要继续的阅读入口。
 final class BookInfoShelfConflictDialog {
   /// 创建不可变书架冲突对话框状态。
   BookInfoShelfConflictDialog({
@@ -14,7 +14,7 @@ final class BookInfoShelfConflictDialog {
     this.pendingChapterIndex,
   }) : incomingChapters = List<BookChapter>.unmodifiable(incomingChapters);
 
-  /// 当前书架中已经存在的同名同作者书籍。
+  /// 当前书架中已经存在的同名书籍。
   final Book existingBook;
 
   /// 用户正在尝试加入的新书源书籍。
@@ -59,6 +59,7 @@ final class BookInfoUiState {
     required this.group,
     required this.selectedBook,
     this.loadingInfo = true,
+    this.detailsResolved = false,
     this.loadingToc = false,
     this.switchingSource = false,
     this.addingToShelf = false,
@@ -79,6 +80,8 @@ final class BookInfoUiState {
   final SearchBook selectedBook;
   /// 是否加载详情。
   final bool loadingInfo;
+  /// 当前书籍字段是否已经由本地书架或详情请求完整解析；false 时 [book] 只是搜索快照。
+  final bool detailsResolved;
   /// 是否加载目录。
   final bool loadingToc;
   /// 是否正在切换到另一个候选来源；切换时保留旧数据可见，只在换源入口局部展示加载态。
@@ -93,7 +96,7 @@ final class BookInfoUiState {
   final List<BookChapter> chapters;
   /// 当前可用于详情页分组选择的用户分组。
   final List<BookGroup> groups;
-  /// 当前待用户确认的同名同作者书架冲突。
+  /// 当前待用户确认的同书名书架冲突。
   final BookInfoShelfConflictDialog? shelfConflict;
   /// 当前详情页内展示的确认或编辑对话框。
   final BookInfoDialog? dialog;
@@ -106,6 +109,7 @@ final class BookInfoUiState {
   BookInfoUiState copyWith({
     SearchBook? selectedBook,
     bool? loadingInfo,
+    bool? detailsResolved,
     bool? loadingToc,
     bool? switchingSource,
     bool? addingToShelf,
@@ -127,6 +131,7 @@ final class BookInfoUiState {
       group: group,
       selectedBook: selectedBook ?? this.selectedBook,
       loadingInfo: loadingInfo ?? this.loadingInfo,
+      detailsResolved: detailsResolved ?? this.detailsResolved,
       loadingToc: loadingToc ?? this.loadingToc,
       switchingSource: switchingSource ?? this.switchingSource,
       addingToShelf: addingToShelf ?? this.addingToShelf,
@@ -198,7 +203,7 @@ enum BookInfoMenuAction {
   /// 预览当前封面。
   previewCover,
 
-  /// 打开换封面入口；真实换封面依赖后续封面协调器。
+  /// 打开共用书源封面搜索与替换面板。
   changeCover,
 
   /// 打开书架分组选择。
@@ -319,7 +324,7 @@ final class AddBookInfoShelfConflictAsNewIntent extends BookInfoIntent {
   const AddBookInfoShelfConflictAsNewIntent();
 }
 
-/// 关闭同名同作者冲突提示且不执行任何写入。
+/// 关闭同书名冲突提示且不执行任何写入。
 final class DismissBookInfoShelfConflictIntent extends BookInfoIntent {
   /// 创建关闭冲突提示 Intent。
   const DismissBookInfoShelfConflictIntent();
@@ -346,6 +351,15 @@ final class ChangeBookInfoSourceIntent extends BookInfoIntent {
 final class OpenBookInfoFullSourceChangeIntent extends BookInfoIntent {
   /// 创建打开整书换源 Intent。
   const OpenBookInfoFullSourceChangeIntent();
+}
+
+/// 封面面板保存成功后把数据库最新书籍同步回详情状态。
+final class BookInfoCoverUpdatedIntent extends BookInfoIntent {
+  /// 创建封面更新完成 Intent。
+  const BookInfoCoverUpdatedIntent(this.book);
+
+  /// 字段级保存后重新读取的书籍事实。
+  final Book book;
 }
 
 /// 返回上一页。
@@ -400,6 +414,22 @@ final class OpenBookInfoFullSourceChangeEffect extends BookInfoEffect {
 
   /// 当前书架书籍的稳定 URL。
   final String bookUrl;
+}
+
+/// 请求路由层打开共用封面选择面板。
+final class OpenBookInfoChangeCoverEffect extends BookInfoEffect {
+  /// 创建封面选择 Effect。
+  OpenBookInfoChangeCoverEffect({
+    required this.book,
+    required List<SearchBook> initialCandidates,
+  }) : initialCandidates =
+           List<SearchBook>.unmodifiable(initialCandidates);
+
+  /// 当前已入架书籍。
+  final Book book;
+
+  /// 详情搜索结果组中可直接复用的候选。
+  final List<SearchBook> initialCandidates;
 }
 
 /// 请求路由层复制文本到系统剪贴板。

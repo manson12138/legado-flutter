@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../help/logging/app_logger.dart';
 
 /// 在 Navigator 统一入口记录所有页面进入、返回、替换和移除事件。
-final class AppNavigationObserver extends NavigatorObserver {
+final class AppNavigationObserver extends RouteObserver<ModalRoute<dynamic>> {
   /// 创建绑定应用日志器的路由观察器。
   AppNavigationObserver({required AppLogger logger}) : _logger = logger;
 

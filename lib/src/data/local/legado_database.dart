@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 9;
+  static const int schemaVersion = 10;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -105,6 +105,7 @@ final class LegadoDatabase {
         await _createSchemaV5(createdDatabase);
         await _createSchemaV7(createdDatabase);
         await _createSchemaV8(createdDatabase);
+        await _createSchemaV10(createdDatabase);
       },
       onUpgrade: (Database upgradedDatabase, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -159,6 +160,9 @@ final class LegadoDatabase {
         }
         if (oldVersion < 9) {
           await _rebuildUserScopedSchemaV9(upgradedDatabase);
+        }
+        if (oldVersion < 10) {
+          await _createSchemaV10(upgradedDatabase);
         }
       },
     );
@@ -547,6 +551,51 @@ final class LegadoDatabase {
       'ON reading_history_chapters (userId, bookUrl, `index`)',
     );
     await historyBatch.commit(noResult: true);
+  }
+
+  /// 新增搜索 Cell 点击快照专用的详情书源候选表，保证候选数量和组内顺序可长期恢复。
+  Future<void> _createSchemaV10(Database database) async {
+    logOperation(
+      operation: 'CREATE_SCHEMA',
+      table: 'book_source_candidates',
+    );
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS book_source_candidates (
+        name TEXT NOT NULL,
+        author TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        bookUrl TEXT NOT NULL,
+        originName TEXT NOT NULL,
+        type INTEGER NOT NULL,
+        kind TEXT,
+        coverUrl TEXT,
+        intro TEXT,
+        wordCount TEXT,
+        latestChapterTitle TEXT,
+        tocUrl TEXT NOT NULL,
+        time INTEGER NOT NULL,
+        variable TEXT,
+        originOrder INTEGER NOT NULL,
+        chapterWordCountText TEXT,
+        chapterWordCount INTEGER NOT NULL DEFAULT -1,
+        respondTime INTEGER NOT NULL DEFAULT -1,
+        sourceScore INTEGER NOT NULL DEFAULT 0,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        candidateOrder INTEGER NOT NULL DEFAULT 0,
+        capturedAt INTEGER NOT NULL,
+        PRIMARY KEY (name, author, origin, bookUrl),
+        FOREIGN KEY (origin)
+          REFERENCES book_sources (bookSourceUrl) ON DELETE CASCADE
+      )
+    ''');
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_book_source_candidates_identity_order '
+      'ON book_source_candidates (name, author, candidateOrder)',
+    );
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_book_source_candidates_origin '
+      'ON book_source_candidates (origin)',
+    );
   }
 
   /// 将 v8 及更早的设备级书架数据破坏式升级为按用户复合主键的 v9 结构。

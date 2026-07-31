@@ -12,6 +12,7 @@ import '../../domain/model/search_book.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
 import '../../help/logging/app_logger.dart';
 import '../book_info/book_info_contract.dart';
+import '../change_book_cover/change_book_cover_sheet.dart';
 import '../components/app_scaffold.dart';
 import 'bookshelf_contract.dart';
 import 'bookshelf_page_switcher.dart';
@@ -20,6 +21,18 @@ import 'bookshelf_view_model.dart';
 import 'reading_history_contract.dart';
 import 'reading_history_screen.dart';
 import 'reading_history_view_model.dart';
+
+/// 书架选择模式溢出菜单动作，避免手机窄屏操作栏拥挤。
+enum _BookshelfSelectionAction {
+  /// 移动到用户分组。
+  move,
+
+  /// 对唯一选中的网络书执行整书换源。
+  changeSource,
+
+  /// 删除选中书籍。
+  delete,
+}
 
 /// 连接书架 ViewModel、对话框、导航 Effect 和纯 UI 的路由层。
 final class BookshelfRoute extends StatefulWidget {
@@ -177,9 +190,62 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         actions: <Widget>[
           IconButton(onPressed: () => _viewModel.onIntent(const SelectAllBookshelfBooksIntent()), icon: const Icon(Icons.select_all), tooltip: '全选当前列表'),
           IconButton(onPressed: () => _viewModel.onIntent(const RefreshBookshelfIntent()), icon: const Icon(Icons.refresh), tooltip: '刷新选中书籍'),
-          IconButton(onPressed: () => _viewModel.onIntent(const RequestMoveBookshelfBooksIntent()), icon: const Icon(Icons.drive_file_move_outline), tooltip: '移动分组'),
-          IconButton(onPressed: state.selectedBookUrls.length == 1 ? () => _viewModel.onIntent(const OpenSelectedBookSourceChangeIntent()) : null, icon: const Icon(Icons.swap_horiz), tooltip: '整书换源'),
-          IconButton(onPressed: () => _viewModel.onIntent(const RequestDeleteBookshelfBooksIntent()), icon: const Icon(Icons.delete_outline), tooltip: '删除'),
+          IconButton(
+            onPressed: state.selectedBookUrls.length == 1
+                ? () => _viewModel.onIntent(
+                    const OpenSelectedBookCoverChangeIntent(),
+                  )
+                : null,
+            icon: const Icon(Icons.wallpaper_outlined),
+            tooltip: '更换封面',
+          ),
+          PopupMenuButton<_BookshelfSelectionAction>(
+            tooltip: '更多选择操作',
+            onSelected: (_BookshelfSelectionAction action) {
+              switch (action) {
+                case _BookshelfSelectionAction.move:
+                  _viewModel.onIntent(
+                    const RequestMoveBookshelfBooksIntent(),
+                  );
+                case _BookshelfSelectionAction.changeSource:
+                  _viewModel.onIntent(
+                    const OpenSelectedBookSourceChangeIntent(),
+                  );
+                case _BookshelfSelectionAction.delete:
+                  _viewModel.onIntent(
+                    const RequestDeleteBookshelfBooksIntent(),
+                  );
+              }
+            },
+            itemBuilder: (BuildContext context) =>
+                <PopupMenuEntry<_BookshelfSelectionAction>>[
+                  const PopupMenuItem<_BookshelfSelectionAction>(
+                    value: _BookshelfSelectionAction.move,
+                    child: ListTile(
+                      leading: Icon(Icons.drive_file_move_outline),
+                      title: Text('移动分组'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  PopupMenuItem<_BookshelfSelectionAction>(
+                    value: _BookshelfSelectionAction.changeSource,
+                    enabled: state.selectedBookUrls.length == 1,
+                    child: const ListTile(
+                      leading: Icon(Icons.swap_horiz),
+                      title: Text('整书换源'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem<_BookshelfSelectionAction>(
+                    value: _BookshelfSelectionAction.delete,
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('删除'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+          ),
         ],
       );
     }
@@ -274,6 +340,8 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         Navigator.of(context).pushNamed(AppRoute.localBookImport);
       case OpenBookshelfChangeSourceEffect(book: final Book book):
         unawaited(_openChangeSource(book));
+      case OpenBookshelfChangeCoverEffect(book: final Book book):
+        unawaited(_openChangeCover(book));
     }
   }
 
@@ -340,6 +408,26 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// 打开共用封面选择面板，保存后退出长按选择模式。
+  Future<void> _openChangeCover(Book book) async {
+    /// 字段级保存成功后返回的数据库最新书籍。
+    final Book? updatedBook = await showChangeBookCoverSheet(
+      context: context,
+      book: book,
+      initialCandidates: const <SearchBook>[],
+      searchCoordinator:
+          widget.dependencies.createBookCoverSearchCoordinator(),
+      updateCustomCover: widget.dependencies.updateBookCustomCover,
+    );
+    if (!mounted || updatedBook == null) {
+      return;
+    }
+    _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('封面已更新')));
   }
 
   /// 将持久化书籍转换为详情页搜索候选，不改变核心实体。

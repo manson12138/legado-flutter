@@ -12,6 +12,7 @@ import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
+import '../change_book_cover/change_book_cover_sheet.dart';
 import 'book_info_contract.dart';
 import 'book_info_screen.dart';
 import 'book_info_view_model.dart';
@@ -79,7 +80,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
     }
   }
 
-  /// 根据 UiState 同步展示一次同名同作者书架冲突对话框。
+  /// 根据 UiState 同步展示一次同书名书架冲突对话框。
   void _syncShelfConflict(BookInfoShelfConflictDialog? conflict) {
     if (conflict == null || identical(conflict, _shownShelfConflict)) {
       return;
@@ -148,6 +149,11 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         unawaited(_openReader(readerArguments));
       case OpenBookInfoFullSourceChangeEffect(bookUrl: final String bookUrl):
         unawaited(_openFullSourceChange(bookUrl));
+      case OpenBookInfoChangeCoverEffect(
+        book: final Book book,
+        initialCandidates: final List<SearchBook> initialCandidates,
+      ):
+        unawaited(_openChangeCover(book, initialCandidates));
       case CopyBookInfoTextEffect(
         text: final String text,
         message: final String message,
@@ -273,6 +279,29 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
     );
   }
 
+  /// 打开共用封面选择面板，并把数据库最新书籍同步回详情 ViewModel。
+  Future<void> _openChangeCover(
+    Book book,
+    List<SearchBook> initialCandidates,
+  ) async {
+    /// 字段级保存成功后返回的数据库最新书籍。
+    final Book? updatedBook = await showChangeBookCoverSheet(
+      context: context,
+      book: book,
+      initialCandidates: initialCandidates,
+      searchCoordinator:
+          widget.dependencies.createBookCoverSearchCoordinator(),
+      updateCustomCover: widget.dependencies.updateBookCustomCover,
+    );
+    if (!mounted || updatedBook == null) {
+      return;
+    }
+    _viewModel.onIntent(BookInfoCoverUpdatedIntent(updatedBook));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('封面已更新')));
+  }
+
   /// 释放订阅和 ViewModel。
   @override
   void dispose() {
@@ -299,7 +328,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
 
 /// 展示现有来源与候选来源，并要求用户明确选择冲突处理方式。
 final class _BookInfoShelfConflictDialog extends StatelessWidget {
-  /// 创建同名同作者冲突对话框。
+  /// 创建同书名冲突对话框。
   const _BookInfoShelfConflictDialog({
     required this.conflict,
     required this.onReplace,
@@ -315,7 +344,7 @@ final class _BookInfoShelfConflictDialog extends StatelessWidget {
   /// 明确保留两本书的回调。
   final VoidCallback onAddAsNew;
 
-  /// 构建来源、目录和默认迁移含义说明。
+    /// 构建作者、来源、目录和默认迁移含义说明。
   @override
   Widget build(BuildContext context) {
     /// 现有书源的安全显示名称。
@@ -326,6 +355,14 @@ final class _BookInfoShelfConflictDialog extends StatelessWidget {
     final String incomingSource = conflict.incomingBook.originName.isEmpty
         ? '未知来源'
         : conflict.incomingBook.originName;
+    /// 现有书籍作者的安全显示文本。
+    final String existingAuthor = conflict.existingBook.author.isEmpty
+        ? '未知作者'
+        : conflict.existingBook.author;
+    /// 待加入书籍作者的安全显示文本。
+    final String incomingAuthor = conflict.incomingBook.author.isEmpty
+        ? '未知作者'
+        : conflict.incomingBook.author;
     return AlertDialog(
       icon: const Icon(Icons.library_add_check_outlined),
       title: const Text('书架中已有同名书籍'),
@@ -336,26 +373,30 @@ final class _BookInfoShelfConflictDialog extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              '《${conflict.incomingBook.name}》 · '
-              '${conflict.incomingBook.author.isEmpty ? '未知作者' : conflict.incomingBook.author}',
+              '《${conflict.incomingBook.name}》',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 16),
-            Text('现有来源：$existingSource（${conflict.existingBook.totalChapterNum} 章）'),
+            Text(
+              '书架现有：$existingAuthor · $existingSource'
+              '（${conflict.existingBook.totalChapterNum} 章）',
+            ),
             const SizedBox(height: 8),
-            Text('新来源：$incomingSource（${conflict.incomingChapters.length} 章）'),
+            Text(
+              '本次添加：$incomingAuthor · $incomingSource'
+              '（${conflict.incomingChapters.length} 章）',
+            ),
             const SizedBox(height: 16),
-            const Text('推荐替换现有书源；阅读进度、分组、排序、备注、封面和单书阅读设置会尽量保留。'),
+            const Text(
+              '选择覆盖后会把两者视为同一本书，新书源和目录成为当前来源；'
+              '阅读进度、分组、排序、备注、封面和单书阅读设置会合并保留。',
+            ),
           ],
         ),
       ),
       actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        TextButton(onPressed: onAddAsNew, child: const Text('仍然新增一本')),
-        FilledButton(onPressed: onReplace, child: const Text('替换并保留数据')),
+        TextButton(onPressed: onAddAsNew, child: const Text('再次添加')),
+        FilledButton(onPressed: onReplace, child: const Text('覆盖')),
       ],
     );
   }

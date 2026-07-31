@@ -4,15 +4,15 @@ import '../model/book.dart';
 import '../model/book_shelf_state.dart';
 import 'use_case_guard.dart';
 
-/// 按 Android 顺序判断精确入架、同名同作者冲突和未入架状态。
+/// 判断精确入架、同名冲突和未入架状态。
 final class ResolveBookShelfStateUseCase {
   /// 创建书架状态解析 UseCase。
   const ResolveBookShelfStateUseCase(this._gateway);
 
-  /// 提供精确主键和同名同作者查询的数据边界。
+  /// 提供精确主键和同名查询的数据边界。
   final BookshelfGateway _gateway;
 
-  /// 保持书名和作者精确匹配，不执行 trim、大小写或模糊归一化。
+  /// 保持书名精确匹配，不执行 trim、大小写或模糊归一化。
   Future<AppResult<ResolvedBookShelfState>> execute(Book book) async {
     /// 精确 URL 查询结果。
     final AppResult<Book?> exactResult = await guardUseCase<Book?>(
@@ -32,9 +32,9 @@ final class ResolveBookShelfStateUseCase {
         }
     }
 
-    /// 同名同作者查询结果，仅在精确 URL 未命中后执行。
+    /// 同名查询结果，仅在精确 URL 未命中后执行。
     final AppResult<Book?> conflictResult = await guardUseCase<Book?>(
-      () => _gateway.getShelfBookConflict(book.name, book.author),
+      () => _gateway.getShelfBookNameConflict(book.name),
     );
     return switch (conflictResult) {
       AppFailure<Book?>(error: final error) =>
@@ -44,7 +44,7 @@ final class ResolveBookShelfStateUseCase {
           ResolvedBookShelfState(
             state: conflict == null
                 ? BookShelfState.notInShelf
-                : BookShelfState.sameNameAuthor,
+                : BookShelfState.sameName,
             existingBook: conflict,
           ),
         ),

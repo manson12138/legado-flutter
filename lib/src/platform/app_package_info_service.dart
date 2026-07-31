@@ -4,15 +4,30 @@ import 'package:flutter/services.dart';
 const String appPackageInfoPlatformChannel =
     'io.legado.flutter/app_package_info';
 
-/// 只暴露准入缓存需要的实际安装包语义版本名。
-abstract interface class AppPackageInfoService {
-  /// 读取 Android versionName 或 iOS CFBundleShortVersionString。
-  ///
-  /// 宿主缺失、平台拒绝或返回空值时返回 null，由调用方禁止恢复旧版本准入缓存。
-  Future<String?> readVersionName();
+/// 当前 Android/iOS 安装包的实际版本身份。
+final class InstalledAppPackageInfo {
+  /// 创建经过平台服务校验的版本名称和构建号。
+  const InstalledAppPackageInfo({
+    required this.versionName,
+    required this.versionCode,
+  });
+
+  /// Android versionName 或 iOS CFBundleShortVersionString。
+  final String versionName;
+
+  /// Android longVersionCode 或 iOS CFBundleVersion。
+  final int versionCode;
 }
 
-/// 通过项目自有原生宿主读取版本名，不引入额外 Flutter 插件和 Gradle 依赖。
+/// 暴露当前安装包的实际版本名称和构建号。
+abstract interface class AppPackageInfoService {
+  /// 一次性读取 Android PackageInfo 或 iOS Bundle 中的版本身份。
+  ///
+  /// 宿主缺失、平台拒绝或返回非法值时返回 null，由调用方使用受控后备配置。
+  Future<InstalledAppPackageInfo?> readPackageInfo();
+}
+
+/// 通过项目自有原生宿主读取安装包版本，不引入额外 Flutter 插件和 Gradle 依赖。
 final class MethodChannelAppPackageInfoService
     implements AppPackageInfoService {
   /// 创建使用固定原生通道的安装包信息服务。
@@ -24,14 +39,30 @@ final class MethodChannelAppPackageInfoService
   final MethodChannel _channel;
 
   @override
-  Future<String?> readVersionName() async {
+  Future<InstalledAppPackageInfo?> readPackageInfo() async {
     try {
-      /// 宿主返回的未经信任版本名。
-      final String? rawVersionName =
-          await _channel.invokeMethod<String>('getVersionName');
+      /// 宿主返回的未经信任安装包信息。
+      final Map<Object?, Object?>? rawPackageInfo =
+          await _channel.invokeMapMethod<Object?, Object?>('getPackageInfo');
+      /// Android/iOS 返回的原始版本名称。
+      final Object? rawVersionName = rawPackageInfo?['versionName'];
       /// 去除平台配置中可能存在的首尾空白。
-      final String versionName = rawVersionName?.trim() ?? '';
-      return versionName.isEmpty ? null : versionName;
+      final String versionName =
+          rawVersionName is String ? rawVersionName.trim() : '';
+      /// Android 通常返回 int，iOS CFBundleVersion 通常返回数字字符串。
+      final Object? rawVersionCode = rawPackageInfo?['versionCode'];
+      final int? versionCode = switch (rawVersionCode) {
+        int value => value,
+        String value => int.tryParse(value.trim()),
+        _ => null,
+      };
+      if (versionName.isEmpty || versionCode == null || versionCode < 0) {
+        return null;
+      }
+      return InstalledAppPackageInfo(
+        versionName: versionName,
+        versionCode: versionCode,
+      );
     } on MissingPluginException {
       return null;
     } on PlatformException {

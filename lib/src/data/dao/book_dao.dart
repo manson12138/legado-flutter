@@ -62,13 +62,12 @@ final class BookDao {
     return rows.isEmpty ? null : bookFromMap(rows.first);
   }
 
-  /// 按书名和作者精确查询最近阅读的一条书架记录。
+  /// 按书名精确查询当前用户最近阅读的一条书架记录。
   ///
   /// Flutter 数据库只保存真实书架书，因此不需要 Android DAO 中的 `isNotShelf` 过滤条件。
-  Future<Book?> getShelfBookConflict(
+  Future<Book?> getShelfBookNameConflict(
     int userId,
-    String name,
-    String author, {
+    String name, {
     DatabaseExecutor? executor,
   }) async {
     /// 当前查询使用的数据库或事务执行器。
@@ -78,16 +77,16 @@ final class BookDao {
       operation: 'SELECT',
       table: DatabaseTables.books,
       where:
-          'userId = ? AND name = ? AND author = ? '
-          'orderBy=durChapterTime DESC limit=1',
-      argumentCount: 3,
+          'userId = ? AND name = ? '
+          'orderBy=durChapterTime DESC, bookUrl ASC limit=1',
+      argumentCount: 2,
     );
-    /// 最多包含一行的同名同作者查询结果。
+    /// 最多包含一行的同名查询结果。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.books,
-      where: 'userId = ? AND name = ? AND author = ?',
-      whereArgs: <Object?>[userId, name, author],
-      orderBy: 'durChapterTime DESC',
+      where: 'userId = ? AND name = ?',
+      whereArgs: <Object?>[userId, name],
+      orderBy: 'durChapterTime DESC, bookUrl ASC',
       limit: 1,
     );
     return rows.isEmpty ? null : bookFromMap(rows.first);
@@ -241,6 +240,35 @@ final class BookDao {
         'durChapterTitle': chapterTitle,
         'syncTime': syncTime,
       },
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
+    );
+    if (executor == null && changedRows > 0) {
+      _database.changeNotifier.notifyTables(<String>{DatabaseTables.books});
+    }
+    return changedRows;
+  }
+
+  /// 只更新用户自定义封面，不覆盖阅读进度、分组或书源返回的普通封面。
+  Future<int> updateCustomCover({
+    required int userId,
+    required String bookUrl,
+    required String? customCoverUrl,
+    DatabaseExecutor? executor,
+  }) async {
+    /// 当前更新使用的数据库或事务执行器。
+    final DatabaseExecutor writeExecutor =
+        executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.books,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
+    );
+    /// 被更新的书籍行数，用于识别书籍已经被其他操作移除的情况。
+    final int changedRows = await writeExecutor.update(
+      DatabaseTables.books,
+      <String, Object?>{'customCoverUrl': customCoverUrl},
       where: 'userId = ? AND bookUrl = ?',
       whereArgs: <Object?>[userId, bookUrl],
     );

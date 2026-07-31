@@ -111,13 +111,17 @@ final class ChangeBookSourceUseCase {
   }) _analyticsRecorder;
 
   /// 校验候选、映射阅读位置、提交事务并复制 URL 关联的阅读配置。
+  ///
+  /// 普通整书换源继续拒绝本地旧书；只有用户在同书名加入冲突中明确选择覆盖时，
+  /// 调用方才可设置 [allowLocalOldBook]，把本地书架记录切换为当前网络来源。
   Future<AppResult<ChangeBookSourceResult>> execute({
     required Book oldBook,
     required Book newBook,
     required List<BookChapter> chapters,
     required ChangeSourceMigrationOptions options,
+    bool allowLocalOldBook = false,
   }) async {
-    if (oldBook.origin == 'loc_book') {
+    if (oldBook.origin == 'loc_book' && !allowLocalOldBook) {
       return validationFailure<ChangeBookSourceResult>('本地书不支持整书换源');
     }
     if (newBook.bookUrl.isEmpty || newBook.origin.isEmpty) {
@@ -306,6 +310,15 @@ final class ChangeBookSourceUseCase {
   }) {
     /// 迁移后用于 books 表兼容字段的章节标题。
     final String migratedTitle = chapters[migratedIndex].title;
+    /// 新来源没有普通封面时保留旧书普通封面，避免覆盖后封面无故消失。
+    final String? mergedCoverUrl = _preferNonEmpty(
+      newBook.coverUrl,
+      oldBook.coverUrl,
+    );
+    /// 迁移封面时优先保留用户明确设置的旧自定义封面，否则接收新书自定义封面。
+    final String? mergedCustomCoverUrl = options.migrateCover
+        ? _preferNonEmpty(oldBook.customCoverUrl, newBook.customCoverUrl)
+        : newBook.customCoverUrl;
     return Book(
       bookUrl: newBook.bookUrl,
       tocUrl: newBook.tocUrl,
@@ -315,8 +328,8 @@ final class ChangeBookSourceUseCase {
       author: newBook.author,
       kind: newBook.kind,
       customTag: options.migrateCategory ? oldBook.customTag : newBook.customTag,
-      coverUrl: newBook.coverUrl,
-      customCoverUrl: options.migrateCover ? oldBook.customCoverUrl : newBook.customCoverUrl,
+      coverUrl: mergedCoverUrl,
+      customCoverUrl: mergedCustomCoverUrl,
       intro: newBook.intro,
       customIntro: options.migrateRemark ? oldBook.customIntro : newBook.customIntro,
       remark: options.migrateRemark ? oldBook.remark : newBook.remark,
@@ -342,5 +355,10 @@ final class ChangeBookSourceUseCase {
       readConfig: options.migrateReadConfig ? oldBook.readConfig : newBook.readConfig,
       syncTime: options.migrateReadingProgress ? oldBook.syncTime : newBook.syncTime,
     );
+  }
+
+  /// 优先返回非空首选值；首选值为空白时回退备用值并保留原始文本。
+  String? _preferNonEmpty(String? preferred, String? fallback) {
+    return preferred?.trim().isNotEmpty == true ? preferred : fallback;
   }
 }

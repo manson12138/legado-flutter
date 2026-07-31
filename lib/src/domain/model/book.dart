@@ -147,4 +147,42 @@ final class Book {
       syncTime: syncTime,
     );
   }
+
+  /// 用新的用户自定义封面构造副本；`null` 表示恢复书源返回的默认封面。
+  Book copyWithCustomCover(String? value) {
+    return Book(
+      bookUrl: bookUrl,
+      tocUrl: tocUrl,
+      origin: origin,
+      originName: originName,
+      name: name,
+      author: author,
+      kind: kind,
+      customTag: customTag,
+      coverUrl: coverUrl,
+      customCoverUrl: value,
+      intro: intro,
+      customIntro: customIntro,
+      remark: remark,
+      charset: charset,
+      type: type,
+      group: group,
+      latestChapterTitle: latestChapterTitle,
+      latestChapterTime: latestChapterTime,
+      lastCheckTime: lastCheckTime,
+      lastCheckCount: lastCheckCount,
+      totalChapterNum: totalChapterNum,
+      durChapterTitle: durChapterTitle,
+      durChapterIndex: durChapterIndex,
+      durChapterPos: durChapterPos,
+      durChapterTime: durChapterTime,
+      wordCount: wordCount,
+      canUpdate: canUpdate,
+      order: order,
+      originOrder: originOrder,
+      variable: variable,
+      readConfig: readConfig,
+      syncTime: syncTime,
+    );
+  }
 }

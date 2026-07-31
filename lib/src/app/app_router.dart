@@ -19,7 +19,9 @@ import '../ui/settings/settings_route.dart';
 import '../ui/authentication/authentication_route.dart';
 import '../ui/download_management/download_management_route.dart';
 import '../help/logging/app_logger.dart';
+import '../platform/external_local_book_open_service.dart';
 import 'app_dependencies.dart';
+import 'app_navigation_observer.dart';
 import 'app_route.dart';
 import 'reader_transition_spec.dart';
 
@@ -28,12 +30,20 @@ final class AppRouter {
   /// 创建绑定应用依赖容器的路由器。
   const AppRouter({
     required this.dependencies,
+    this.externalLocalBookOpenService,
+    required this.navigationObserver,
     required this.themeModeListenable,
     required this.onChangeThemeMode,
   });
 
   /// 组合根提供的依赖容器，路由只负责向页面构造函数传递。
   final AppDependencies dependencies;
+
+  /// Android 外部 TXT 临时副本的释放边界；导入路由不直接删除任意路径。
+  final ExternalLocalBookOpenService? externalLocalBookOpenService;
+
+  /// 稳定的应用路由观察器，供搜索页识别真正重新可见的时机。
+  final AppNavigationObserver navigationObserver;
 
   /// 当前应用主题模式监听器，供已保留的“我的”页面同步选中状态。
   final ValueListenable<ThemeMode> themeModeListenable;
@@ -50,6 +60,7 @@ final class AppRouter {
           builder: (BuildContext context) {
             return WelcomeRoute(
               dependencies: dependencies,
+              navigationObserver: navigationObserver,
               themeModeListenable: themeModeListenable,
               onChangeThemeMode: onChangeThemeMode,
             );
@@ -112,17 +123,29 @@ final class AppRouter {
           },
         );
       case AppRoute.bookSourceManagement:
+        /// 独立书源管理页可选的一次性目标页提示参数。
+        final Object? bookSourceArguments = settings.arguments;
+        final String? initialBookSourceMessage =
+            bookSourceArguments is BookSourceManagementRouteArguments
+            ? bookSourceArguments.initialMessage
+            : null;
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return BookSourceManagementRoute(dependencies: dependencies);
+            return BookSourceManagementRoute(
+              dependencies: dependencies,
+              initialMessage: initialBookSourceMessage,
+            );
           },
         );
       case AppRoute.search:
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return SearchRoute(dependencies: dependencies);
+            return SearchRoute(
+              dependencies: dependencies,
+              navigationObserver: navigationObserver,
+            );
           },
         );
       case AppRoute.bookshelf:
@@ -133,10 +156,21 @@ final class AppRouter {
           },
         );
       case AppRoute.localBookImport:
+        /// 外部“打开方式”入口可选的一次性 TXT 路由参数。
+        final Object? localBookArguments = settings.arguments;
+        final LocalBookImportRouteArguments? externalArguments =
+            localBookArguments is LocalBookImportRouteArguments
+            ? localBookArguments
+            : null;
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return LocalBookImportRoute(dependencies: dependencies);
+            return LocalBookImportRoute(
+              dependencies: dependencies,
+              initialExternalFile: externalArguments?.file,
+              externalCleanupToken: externalArguments?.cleanupToken,
+              externalOpenService: externalLocalBookOpenService,
+            );
           },
         );
       case AppRoute.changeBookSource:

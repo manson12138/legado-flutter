@@ -14,6 +14,8 @@ final class SearchUiState {
     this.loadingSources = true,
     this.searching = false,
     this.cancelled = false,
+    this.pausedForBookInfo = false,
+    this.visibleSourceCount = 0,
     List<BookSource> sources = const <BookSource>[],
     Set<String> selectedSourceUrls = const <String>{},
     this.useAllSources = true,
@@ -25,6 +27,7 @@ final class SearchUiState {
     List<BookSearchSourceFailure> failures = const <BookSearchSourceFailure>[],
     List<String> history = const <String>[],
     this.progress = const BookSearchProgress(total: 0, completed: 0, succeeded: 0, failed: 0),
+    this.pendingEnableAllSearchKeyword,
     this.errorMessage,
   }) : sources = List<BookSource>.unmodifiable(sources),
        selectedSourceUrls = Set<String>.unmodifiable(selectedSourceUrls),
@@ -47,10 +50,16 @@ final class SearchUiState {
   /// 当前结果是否由用户主动停止。
   final bool cancelled;
 
+  /// 搜索是否因书籍详情仍位于前台而临时暂停。
+  final bool pausedForBookInfo;
+
+  /// 当前书源管理页可展示和操作的书源总数，用于区分无书源与全局全停用。
+  final int visibleSourceCount;
+
   /// 本次可选的启用书源快照。
   final List<BookSource> sources;
 
-  /// 选中书源 URL；空集合表示全部启用书源。
+  /// 显式选中的书源 URL；是否表达全部由 [useAllSources] 单独决定。
   final Set<String> selectedSourceUrls;
 
   /// 是否选择当前全部可用书源；false 时仅使用 [selectedSourceUrls]。
@@ -80,6 +89,9 @@ final class SearchUiState {
   /// 当前书源处理进度。
   final BookSearchProgress progress;
 
+  /// 等待用户确认“全部开启”的原提交关键字；空值表示不展示确认框。
+  final String? pendingEnableAllSearchKeyword;
+
   /// 页面级可恢复错误。
   final String? errorMessage;
 
@@ -90,6 +102,8 @@ final class SearchUiState {
     bool? loadingSources,
     bool? searching,
     bool? cancelled,
+    bool? pausedForBookInfo,
+    int? visibleSourceCount,
     List<BookSource>? sources,
     Set<String>? selectedSourceUrls,
     bool? useAllSources,
@@ -102,6 +116,8 @@ final class SearchUiState {
     List<BookSearchSourceFailure>? failures,
     List<String>? history,
     BookSearchProgress? progress,
+    String? pendingEnableAllSearchKeyword,
+    bool clearPendingEnableAllSearchKeyword = false,
     String? errorMessage,
     bool clearError = false,
   }) {
@@ -111,6 +127,8 @@ final class SearchUiState {
       loadingSources: loadingSources ?? this.loadingSources,
       searching: searching ?? this.searching,
       cancelled: cancelled ?? this.cancelled,
+      pausedForBookInfo: pausedForBookInfo ?? this.pausedForBookInfo,
+      visibleSourceCount: visibleSourceCount ?? this.visibleSourceCount,
       sources: sources ?? this.sources,
        selectedSourceUrls: selectedSourceUrls ?? this.selectedSourceUrls,
        useAllSources: useAllSources ?? this.useAllSources,
@@ -124,6 +142,10 @@ final class SearchUiState {
       failures: failures ?? this.failures,
       history: history ?? this.history,
       progress: progress ?? this.progress,
+      pendingEnableAllSearchKeyword: clearPendingEnableAllSearchKeyword
+          ? null
+          : pendingEnableAllSearchKeyword ??
+                this.pendingEnableAllSearchKeyword,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
     );
   }
@@ -157,6 +179,12 @@ final class CancelSearchIntent extends SearchIntent {
   const CancelSearchIntent();
 }
 
+/// 详情页最终离开后恢复此前暂停的搜索。
+final class ResumeSearchAfterBookInfoIntent extends SearchIntent {
+  /// 创建详情返回恢复 Intent。
+  const ResumeSearchAfterBookInfoIntent();
+}
+
 /// 只重试上次失败书源。
 final class RetryFailedSourcesIntent extends SearchIntent {
   /// 创建重试 Intent。
@@ -175,6 +203,18 @@ final class ToggleSearchSourceIntent extends SearchIntent {
 final class SelectAllSearchSourcesIntent extends SearchIntent {
   /// 创建全选 Intent。
   const SelectAllSearchSourcesIntent();
+}
+
+/// 确认把搜索页局部范围恢复为全部全局已启用书源并继续搜索。
+final class ConfirmEnableAllSearchSourcesIntent extends SearchIntent {
+  /// 创建全部开启确认意图。
+  const ConfirmEnableAllSearchSourcesIntent();
+}
+
+/// 取消搜索页全部开启确认并保留当前局部范围。
+final class DismissEnableAllSearchSourcesIntent extends SearchIntent {
+  /// 创建全部开启取消意图。
+  const DismissEnableAllSearchSourcesIntent();
 }
 
 /// 反选当前可用书源。
@@ -279,6 +319,15 @@ final class ShowSearchMessageEffect extends SearchEffect {
   /// 创建提示 Effect。
   const ShowSearchMessageEffect(this.message);
   /// 提示文本。
+  final String message;
+}
+
+/// 请求打开书源管理界面并在目标界面展示一次提示。
+final class OpenBookSourceManagementEffect extends SearchEffect {
+  /// 创建携带非空目标页提示的导航 Effect。
+  const OpenBookSourceManagementEffect(this.message);
+
+  /// 书源管理界面显示的一次性提示。
   final String message;
 }
 

@@ -193,6 +193,25 @@ final class ReaderSearchState {
   }
 }
 
+/// 阅读器显式加入书架时命中的同书名冲突快照。
+final class ReaderBookshelfConflictDialog {
+  /// 创建只包含冲突确认所需书籍与目录事实的不可变快照。
+  ReaderBookshelfConflictDialog({
+    required this.existingBook,
+    required this.incomingBook,
+    required List<BookChapter> incomingChapters,
+  }) : incomingChapters = List<BookChapter>.unmodifiable(incomingChapters);
+
+  /// 当前用户书架中已经存在的同名书籍。
+  final Book existingBook;
+
+  /// 阅读器当前准备加入书架的新来源书籍。
+  final Book incomingBook;
+
+  /// 已加载且属于新来源书籍的完整目录。
+  final List<BookChapter> incomingChapters;
+}
+
 /// 阅读器完整不可变 UiState，业务状态不依赖 ScrollController 或平台窗口对象。
 final class ReaderUiState {
   /// 创建阅读器状态。
@@ -220,6 +239,7 @@ final class ReaderUiState {
     this.refreshingChapters = false,
     this.isInBookshelf = false,
     this.addingToBookshelf = false,
+    this.bookshelfConflict,
     this.showIntroPage = false,
   }) : chapters = List<BookChapter>.unmodifiable(chapters),
        bookmarks = List<Bookmark>.unmodifiable(bookmarks),
@@ -297,6 +317,9 @@ final class ReaderUiState {
   /// 阅读器加入书架事务是否正在执行。
   final bool addingToBookshelf;
 
+  /// 等待用户选择覆盖或再次添加的同书名冲突。
+  final ReaderBookshelfConflictDialog? bookshelfConflict;
+
   /// 当前书籍是否仍停留在首次阅读先导页，正文就绪也不会自动跳过。
   final bool showIntroPage;
 
@@ -357,6 +380,7 @@ final class ReaderUiState {
     bool? refreshingChapters,
     bool? isInBookshelf,
     bool? addingToBookshelf,
+    ReaderBookshelfConflictDialog? bookshelfConflict,
     bool? showIntroPage,
     bool clearContent = false,
     bool clearError = false,
@@ -364,6 +388,7 @@ final class ReaderUiState {
     bool clearBattery = false,
     bool clearPreviousChapterPreview = false,
     bool clearNextChapterPreview = false,
+    bool clearBookshelfConflict = false,
   }) {
     return ReaderUiState(
       book: book ?? this.book,
@@ -395,6 +420,9 @@ final class ReaderUiState {
       refreshingChapters: refreshingChapters ?? this.refreshingChapters,
       isInBookshelf: isInBookshelf ?? this.isInBookshelf,
       addingToBookshelf: addingToBookshelf ?? this.addingToBookshelf,
+      bookshelfConflict: clearBookshelfConflict
+          ? null
+          : bookshelfConflict ?? this.bookshelfConflict,
       showIntroPage: showIntroPage ?? this.showIntroPage,
     );
   }
@@ -562,6 +590,24 @@ final class AddReaderBookmarkIntent extends ReaderIntent {
 final class AddReaderBookToBookshelfIntent extends ReaderIntent {
   /// 创建加入书架 Intent。
   const AddReaderBookToBookshelfIntent();
+}
+
+/// 覆盖书架中命中的同名书籍并合并用户阅读事实。
+final class OverwriteReaderBookshelfConflictIntent extends ReaderIntent {
+  /// 创建同名书覆盖 Intent。
+  const OverwriteReaderBookshelfConflictIntent();
+}
+
+/// 明确把当前来源作为另一条同名书记录加入书架。
+final class AddReaderBookshelfConflictAsNewIntent extends ReaderIntent {
+  /// 创建同名书再次添加 Intent。
+  const AddReaderBookshelfConflictAsNewIntent();
+}
+
+/// 关闭阅读器同名书冲突提示且不写入书架。
+final class DismissReaderBookshelfConflictIntent extends ReaderIntent {
+  /// 创建冲突取消 Intent。
+  const DismissReaderBookshelfConflictIntent();
 }
 
 /// 删除指定书签。

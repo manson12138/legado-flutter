@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_navigation_observer.dart';
 import '../book_source/book_source_route.dart';
 import '../bookshelf/bookshelf_route.dart';
 import '../search/search_route.dart';
@@ -15,6 +16,7 @@ final class WelcomeRoute extends StatefulWidget {
   /// 创建接收组合根依赖的应用主框架路由。
   const WelcomeRoute({
     required this.dependencies,
+    required this.navigationObserver,
     required this.themeModeListenable,
     required this.onChangeThemeMode,
     super.key,
@@ -22,6 +24,9 @@ final class WelcomeRoute extends StatefulWidget {
 
   /// 应用组合根传入的共享依赖。
   final AppDependencies dependencies;
+
+  /// 应用级路由观察器，传递给保活的内嵌搜索页。
+  final AppNavigationObserver navigationObserver;
 
   /// 当前应用主题模式监听器，传递给一级“我的”页面。
   final ValueListenable<ThemeMode> themeModeListenable;
@@ -84,6 +89,19 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
     if (id != null) { await widget.dependencies.remoteAppConfigurationRepository.markAnnouncementRead(id); }
   }
 
+  /// 切换到保活书源管理页，并在目标页完成显示后的下一帧提示原因。
+  void _openBookSourceManagement(String message) {
+    _viewModel.onIntent(const SelectPrimaryDestinationIntent(2));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
   /// 根据组合根当前配置创建四个一级页面，并保留统一的依赖注入方式。
   List<Widget> _buildPrimaryPages() {
     return <Widget>[
@@ -92,8 +110,19 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
         embedded: true,
         visibilityListenable: _bookshelfVisibility,
       ),
-      SearchRoute(dependencies: widget.dependencies, embedded: true),
-      BookSourceManagementRoute(dependencies: widget.dependencies, embedded: true),
+      SearchRoute(
+        dependencies: widget.dependencies,
+        navigationObserver: widget.navigationObserver,
+        embedded: true,
+        onOpenBookSourceManagement: _openBookSourceManagement,
+      ),
+      BookSourceManagementRoute(
+        dependencies: widget.dependencies,
+        embedded: true,
+        onOpenSearch: () => _viewModel.onIntent(
+          const SelectPrimaryDestinationIntent(1),
+        ),
+      ),
       SettingsRoute(
         dependencies: widget.dependencies,
         themeModeListenable: widget.themeModeListenable,

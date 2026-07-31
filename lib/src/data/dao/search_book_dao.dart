@@ -34,6 +34,48 @@ final class SearchBookDao {
     return rows.isEmpty ? null : searchBookFromMap(rows.first);
   }
 
+  /// 按书名精确或包含关系读取最近的非空封面缓存，并限制返回规模。
+  Future<List<SearchBook>> loadCoverCandidates(
+    String name, {
+    int limit = 200,
+  }) async {
+    /// 已打开的数据库连接。
+    final Database database = await _database.database;
+    /// 对 SQLite LIKE 通配符转义后的目标书名。
+    final String escapedName = name
+        .replaceAll(r'\', r'\\')
+        .replaceAll('%', r'\%')
+        .replaceAll('_', r'\_');
+    _database.logOperation(
+      operation: 'SELECT_JOIN',
+      table: DatabaseTables.searchBooks,
+      where:
+          'enabled source AND non-empty cover AND '
+          '(name exact OR bidirectional contains) limit=$limit',
+      argumentCount: 4,
+    );
+    /// 先在 SQLite 中压缩候选规模，最终三级匹配仍由领域协调器统一完成。
+    final List<Map<String, Object?>> rows = await database.rawQuery(
+      '''
+      SELECT searchBooks.*
+      FROM searchBooks
+      INNER JOIN book_sources
+        ON book_sources.bookSourceUrl = searchBooks.origin
+      WHERE book_sources.enabled = 1
+        AND TRIM(COALESCE(searchBooks.coverUrl, '')) <> ''
+        AND (
+          searchBooks.name = ? COLLATE NOCASE
+          OR searchBooks.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+          OR ? LIKE '%' || searchBooks.name || '%' COLLATE NOCASE
+        )
+      ORDER BY book_sources.customOrder ASC, searchBooks.time DESC
+      LIMIT ?
+      ''',
+      <Object?>[name, '%$escapedName%', name, limit],
+    );
+    return rows.map(searchBookFromMap).toList(growable: false);
+  }
+
   /// 批量替换写入搜索结果。
   Future<void> upsertAll(List<SearchBook> books) async {
     if (books.isEmpty) {

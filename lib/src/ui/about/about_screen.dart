@@ -12,6 +12,8 @@ final class AboutScreen extends StatelessWidget {
   const AboutScreen({
     required this.state,
     required this.appAccessState,
+    required this.appVersionName,
+    required this.appVersionCode,
     required this.onIntent,
     required this.onCheckUpdate,
     required this.onBack,
@@ -23,6 +25,12 @@ final class AboutScreen extends StatelessWidget {
 
   /// 应用级准入协调器提供的最新版本状态。
   final AppAccessState appAccessState;
+
+  /// 当前安装包的真实版本名称。
+  final String appVersionName;
+
+  /// 当前安装包的真实构建号。
+  final int appVersionCode;
 
   /// 把页面操作发送给 ViewModel 的统一入口。
   final ValueChanged<AboutIntent> onIntent;
@@ -70,7 +78,7 @@ final class AboutScreen extends StatelessWidget {
           const SizedBox(height: SpacingToken.xSmall),
           Center(
             child: Text(
-              '1.0.0+7',
+              '$appVersionName+$appVersionCode',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),

@@ -13,6 +13,21 @@ import 'standard_source_service.dart';
 /// 创建独立 HTTP 取消令牌的函数类型。
 typedef HttpCancellationTokenFactory = HttpCancellationToken Function();
 
+/// 搜索页判断无书源、全局全停用和局部零选择所需的稳定书源快照。
+final class BookSearchSourceAvailability {
+  /// 创建只包含可见总数与已启用可见书源的轻量快照。
+  BookSearchSourceAvailability({
+    required this.visibleSourceCount,
+    required List<BookSource> enabledSources,
+  }) : enabledSources = List<BookSource>.unmodifiable(enabledSources);
+
+  /// 当前书源管理页能够展示和操作的书源总数。
+  final int visibleSourceCount;
+
+  /// 当前全局已启用且可见的书源。
+  final List<BookSource> enabledSources;
+}
+
 /// 使用同一业务接口调度普通与 JavaScript 书源搜索。
 final class BookSearchCoordinator {
   /// 创建受控多书源搜索协调器。
@@ -54,9 +69,30 @@ final class BookSearchCoordinator {
   /// 屏蔽开关或规则变化修订，供保活搜索页面刷新可用书源和清理旧结果。
   Stream<int> get adultContentRuleChanges => _adultContentGateway.ruleChanges;
 
+  /// 一次性读取搜索页所需的可见总数与全局启用书源。
+  Future<BookSearchSourceAvailability> loadSourceAvailability() async {
+    /// 按当前内容策略过滤后的全部可管理书源。
+    final List<BookSource> visibleSources = await _filterVisibleSources(
+      await _sourceGateway.getAll(),
+    );
+    /// 可见书源中处于全局启用状态的搜索候选。
+    final List<BookSource> enabledSources = visibleSources
+        .where((BookSource source) => source.enabled)
+        .toList(growable: false);
+    _logger.debug(
+      tag: bookSearchSourceLogTag,
+      message: '读取搜索书源可用性完成 visibleCount=${visibleSources.length} '
+          'enabledCount=${enabledSources.length}',
+    );
+    return BookSearchSourceAvailability(
+      visibleSourceCount: visibleSources.length,
+      enabledSources: enabledSources,
+    );
+  }
+
   /// 读取当前启用书源快照。
   Future<List<BookSource>> loadEnabledSources() async {
-    /// 当前启用书源快照。
+    /// 当前启用书源快照；非搜索页调用方无需额外读取全量停用记录。
     final List<BookSource> sources = await _filterVisibleSources(
       await _sourceGateway.getEnabled(),
     );
@@ -67,27 +103,39 @@ final class BookSearchCoordinator {
     return sources;
   }
 
+  /// 持续观察搜索页所需的可见总数与全局启用书源。
+  Stream<BookSearchSourceAvailability> watchSourceAvailability() {
+    return _sourceGateway.watchAll().asyncMap((List<BookSource> sources) async {
+      /// 按当前内容策略过滤后的全部可管理书源。
+      final List<BookSource> visibleSources = await _filterVisibleSources(
+        sources,
+      );
+      /// 可见书源中处于全局启用状态的搜索候选。
+      final List<BookSource> enabledSources = visibleSources
+          .where((BookSource source) => source.enabled)
+          .toList(growable: false);
+      _logger.debug(
+        tag: bookSearchSourceLogTag,
+        message: '搜索书源可用性观察流更新 visibleCount=${visibleSources.length} '
+            'enabledCount=${enabledSources.length}',
+      );
+      return BookSearchSourceAvailability(
+        visibleSourceCount: visibleSources.length,
+        enabledSources: enabledSources,
+      );
+    });
+  }
+
   /// 持续观察启用且可见的书源，供保活搜索页感知导入、同步和启停变化。
   ///
   /// 对应 Android `SearchViewModel.observeEnabledSources()` 与
   /// `BookSourceDao.flowEnabled()`；已经开始的搜索仍由 [start] 固定自己的
   /// 书源快照，本流只更新页面候选和下一次搜索使用的集合。
   Stream<List<BookSource>> watchEnabledSources() {
-    return _sourceGateway.watchAll().asyncMap((List<BookSource> sources) async {
-      /// 当前数据库快照中仍处于启用状态的书源。
-      final List<BookSource> enabledSources = sources
-          .where((BookSource source) => source.enabled)
-          .toList(growable: false);
-      /// 按当前成人内容策略过滤后的搜索候选。
-      final List<BookSource> visibleSources = await _filterVisibleSources(
-        enabledSources,
-      );
-      _logger.debug(
-        tag: bookSearchSourceLogTag,
-        message: '启用书源观察流更新 sourceCount=${visibleSources.length}',
-      );
-      return visibleSources;
-    });
+    return watchSourceAvailability().map(
+      (BookSearchSourceAvailability availability) =>
+          availability.enabledSources,
+    );
   }
 
   /// 开始一次可取消的多书源搜索并返回运行句柄。
@@ -127,7 +175,10 @@ final class BookSearchCoordinator {
       keyword: keyword.trim(),
       sources: sources,
       onEvent: onEvent,
-    ).whenComplete(run._detachAdultContentSubscription);
+    ).whenComplete(() {
+      run._isCompleted = true;
+      return run._detachAdultContentSubscription();
+    });
     return run;
   }
 
@@ -142,6 +193,8 @@ final class BookSearchCoordinator {
     final Stopwatch runStopwatch = Stopwatch()..start();
     /// 下一个待领取的书源索引；Dart 单 isolate 事件循环保证同步领取不会竞争。
     int nextIndex = 0;
+    /// 因进入详情页而中断、恢复后需要重新执行的书源；仅保留正在执行的少量任务。
+    final List<BookSource> retrySources = <BookSource>[];
     /// 已结束书源数。
     int completed = 0;
     /// 正常结束书源数。
@@ -151,12 +204,26 @@ final class BookSearchCoordinator {
 
     /// 单个 worker 循环领取任务的方法。
     Future<void> worker() async {
-      while (!run.isCancelled && nextIndex < sources.length) {
+      while (!run.isCancelled) {
+        await run._waitUntilResumed();
+        if (run.isCancelled) {
+          return;
+        }
+        if (nextIndex >= sources.length && retrySources.isEmpty) {
+          return;
+        }
         /// 当前 worker 领取的稳定索引。
-        final int index = nextIndex;
-        nextIndex += 1;
+        final int index;
         /// 当前执行书源。
-        final BookSource source = sources[index];
+        final BookSource source;
+        if (retrySources.isNotEmpty) {
+          source = retrySources.removeLast();
+          index = sources.indexOf(source);
+        } else {
+          index = nextIndex;
+          nextIndex += 1;
+          source = sources[index];
+        }
         /// 【搜书诊断日志】当前书源不可逆标识。
         final String sourceId = appLogDiagnosticId(source.bookSourceUrl);
         /// 【搜书诊断日志】当前单书源执行耗时计时器。
@@ -164,6 +231,8 @@ final class BookSearchCoordinator {
         /// 当前书源独立取消令牌。
         final HttpCancellationToken token = _cancellationTokenFactory();
         run._tokens.add(token);
+        /// 当前请求是否由进入详情页的暂停动作中断；这类中断不计成功、失败或完成数。
+        bool retryAfterResume = false;
         try {
           _logger.info(
             tag: bookSearchSourceLogTag,
@@ -193,7 +262,10 @@ final class BookSearchCoordinator {
                   },
                 ),
           );
-          if (!run.isCancelled) {
+          retryAfterResume = run._consumePauseInterruptedToken(token);
+          if (retryAfterResume) {
+            retrySources.add(source);
+          } else if (!run.isCancelled) {
             succeeded += 1;
             _logger.info(
               tag: bookSearchSourceLogTag,
@@ -212,7 +284,11 @@ final class BookSearchCoordinator {
             }
           }
         } catch (error, stackTrace) {
-          if (!run.isCancelled) {
+          retryAfterResume =
+              run._consumePauseInterruptedToken(token) || retryAfterResume;
+          if (retryAfterResume) {
+            retrySources.add(source);
+          } else if (!run.isCancelled) {
             failed += 1;
             if (error is JsEngineException) {
               /// 【FLUTTER_JS_COMPAT_LOG】脚本逻辑名仅由书源名和固定阶段名组成，不包含脚本正文。
@@ -279,7 +355,14 @@ final class BookSearchCoordinator {
           }
         } finally {
           run._tokens.remove(token);
-          if (!run.isCancelled) {
+          /// 请求在成功或异常分支结束前恰好被暂停时的兜底中断标记。
+          final bool interruptedBeforeCleanup =
+              run._consumePauseInterruptedToken(token);
+          if (interruptedBeforeCleanup && !retryAfterResume) {
+            retryAfterResume = true;
+            retrySources.add(source);
+          }
+          if (!retryAfterResume && !run.isCancelled) {
             completed += 1;
             onEvent(
               BookSearchProgressEvent(
@@ -394,17 +477,77 @@ final class BookSearchRun {
   /// 当前仍在运行的书源取消令牌。
   final Set<HttpCancellationToken> _tokens = <HttpCancellationToken>{};
 
+  /// 被暂停动作取消、需要在恢复后重试的请求令牌。
+  final Set<HttpCancellationToken> _pauseInterruptedTokens =
+      <HttpCancellationToken>{};
+
   /// 成人内容规则变化监听；规则变化时当前固定书源快照立即失效。
   StreamSubscription<int>? _adultContentSubscription;
 
   /// 整体运行完成 Future。
   Future<void> _completion = Future<void>.value();
 
+  /// 暂停期间供 worker 共同等待的恢复信号。
+  Completer<void>? _resumeSignal;
+
+  /// 协调器是否已经自然结束，用于阻止结束后再次暂停。
+  bool _isCompleted = false;
+
   /// 是否已经主动取消。
   bool isCancelled = false;
 
+  /// 是否因进入书籍详情而临时暂停。
+  bool isPaused = false;
+
   /// 等待全部 worker 退出。
   Future<void> get completion => _completion;
+
+  /// 暂停领取新书源，并取消少量正在执行的请求以停止后台 CPU 与网络消耗。
+  void pause() {
+    if (isCancelled || _isCompleted || isPaused) {
+      return;
+    }
+    isPaused = true;
+    _resumeSignal = Completer<void>();
+    /// 暂停瞬间仍在网络或脚本链路中的请求令牌快照。
+    final List<HttpCancellationToken> activeTokens =
+        List<HttpCancellationToken>.from(_tokens);
+    _pauseInterruptedTokens.addAll(activeTokens);
+    for (final HttpCancellationToken token in activeTokens) {
+      token.cancel('进入书籍详情，暂停搜索');
+    }
+  }
+
+  /// 从原进度恢复搜索；被暂停中断的书源由 worker 自动重新入队。
+  void resume() {
+    if (isCancelled || _isCompleted || !isPaused) {
+      return;
+    }
+    isPaused = false;
+    /// 本次需要唤醒的共享恢复信号。
+    final Completer<void>? signal = _resumeSignal;
+    _resumeSignal = null;
+    if (signal != null && !signal.isCompleted) {
+      signal.complete();
+    }
+  }
+
+  /// 在暂停期间等待恢复，取消时也会被唤醒并由 worker 自行退出。
+  Future<void> _waitUntilResumed() async {
+    while (isPaused && !isCancelled) {
+      /// 当前暂停周期对应的共享恢复信号。
+      final Completer<void>? signal = _resumeSignal;
+      if (signal == null) {
+        return;
+      }
+      await signal.future;
+    }
+  }
+
+  /// 消费令牌的暂停中断标记，避免将主动暂停误计为搜索失败。
+  bool _consumePauseInterruptedToken(HttpCancellationToken token) {
+    return _pauseInterruptedTokens.remove(token);
+  }
 
   /// 取消当前和后续任务，旧结果由 ViewModel 运行编号二次隔离。
   void cancel() {
@@ -412,11 +555,19 @@ final class BookSearchRun {
       return;
     }
     isCancelled = true;
+    isPaused = false;
+    /// 永久取消时需要一并唤醒的暂停等待信号。
+    final Completer<void>? signal = _resumeSignal;
+    _resumeSignal = null;
+    if (signal != null && !signal.isCompleted) {
+      signal.complete();
+    }
     unawaited(_detachAdultContentSubscription());
     for (final HttpCancellationToken token in List<HttpCancellationToken>.from(_tokens)) {
       token.cancel('用户取消搜索');
     }
     _tokens.clear();
+    _pauseInterruptedTokens.clear();
   }
 
   /// 释放成人内容规则监听，避免已结束搜索继续持有应用级广播订阅。

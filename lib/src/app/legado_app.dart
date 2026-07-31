@@ -21,6 +21,7 @@ import 'current_user_scope.dart';
 import '../help/logging/app_log_manager.dart';
 import '../help/crash_reporting/crash_report_manager.dart';
 import '../api/remote_app/remote_app_service_config.dart';
+import '../platform/external_local_book_open_service.dart';
 
 /// 在 Flutter 首帧后创建完整业务组合根，避免原生启动页等待数据库、网络和阅读器对象装配。
 final class LegadoBootstrapApp extends StatefulWidget {
@@ -187,6 +188,25 @@ final class _LegadoAppState extends State<LegadoApp>
   final ValueNotifier<_AppStartupPhase> _startupPhase =
       ValueNotifier<_AppStartupPhase>(_AppStartupPhase.booting);
 
+  /// 应用生命周期内稳定的路由观察器，避免重建时丢失 RouteAware 订阅。
+  late final AppNavigationObserver _navigationObserver;
+
+  /// 应用生命周期内稳定的业务 Navigator key，供外部 TXT 入口在无页面 Context 时导航。
+  final GlobalKey<NavigatorState> _navigatorKey =
+      GlobalKey<NavigatorState>();
+
+  /// Android 外部 TXT“打开方式”平台服务；iOS 本轮安全退化为无请求。
+  late final ExternalLocalBookOpenService _externalLocalBookOpenService;
+
+  /// 热启动外部 TXT 可用事件订阅。
+  late final StreamSubscription<void> _externalLocalBookOpenSubscription;
+
+  /// 是否正在顺序消费外部 TXT 请求并等待当前导入页面返回。
+  bool _handlingExternalLocalBookOpen = false;
+
+  /// 消费期间又收到热启动通知时保留的轻量信号。
+  bool _externalLocalBookOpenSignaled = false;
+
   /// 是否已经为当前游客或账号作用域启动后台初始化。
   bool _hasStartedMainBackgroundServices = false;
 
@@ -197,6 +217,16 @@ final class _LegadoAppState extends State<LegadoApp>
   @override
   void initState() {
     super.initState();
+    _navigationObserver = AppNavigationObserver(
+      logger: widget.dependencies.logger,
+    );
+    _externalLocalBookOpenService =
+        DefaultExternalLocalBookOpenService();
+    _externalLocalBookOpenSubscription =
+        _externalLocalBookOpenService.requests.listen((_) {
+          _externalLocalBookOpenSignaled = true;
+          unawaited(_consumeExternalLocalBookOpenRequests());
+        });
     WidgetsBinding.instance.addObserver(this);
     _startupSplashStopwatch.start();
     widget.dependencies.authenticationGateway.session.addListener(
@@ -232,6 +262,8 @@ final class _LegadoAppState extends State<LegadoApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _externalLocalBookOpenSubscription.cancel();
+    unawaited(_externalLocalBookOpenService.dispose());
     widget.dependencies.authenticationGateway.session.removeListener(
       _onAuthenticationSessionChanged,
     );
@@ -257,18 +289,17 @@ final class _LegadoAppState extends State<LegadoApp>
     /// 路由器通过构造参数获得依赖，并在页面入口继续向下传递。
     final AppRouter router = AppRouter(
       dependencies: widget.dependencies,
+      externalLocalBookOpenService: _externalLocalBookOpenService,
+      navigationObserver: _navigationObserver,
       themeModeListenable: _themeModeNotifier,
       onChangeThemeMode: _changeThemeMode,
-    );
-    /// 全局路由观察器，统一记录所有 Navigator 页面跳转。
-    final AppNavigationObserver navigationObserver = AppNavigationObserver(
-      logger: widget.dependencies.logger,
     );
     return ValueListenableBuilder<int?>(
       valueListenable: widget.dependencies.currentUserScope.userId,
       builder: (BuildContext context, int? userId, Widget? child) {
         return MaterialApp(
           key: ValueKey<String>('local-user-scope-$userId'),
+          navigatorKey: _navigatorKey,
           title: 'Legado Flutter',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
@@ -276,7 +307,7 @@ final class _LegadoAppState extends State<LegadoApp>
           themeMode: _themeModeNotifier.value,
           initialRoute: AppRoute.welcome,
           onGenerateRoute: router.onGenerateRoute,
-          navigatorObservers: <NavigatorObserver>[navigationObserver],
+          navigatorObservers: <NavigatorObserver>[_navigationObserver],
           builder: (BuildContext context, Widget? routedChild) {
             /// 透明系统导航栏可以让 edge-to-edge 内容在其后完整显示，因此每个页面
             /// 底部会自动露出该页面自身的背景色，不需要逐页手动同步导航栏颜色。
@@ -564,6 +595,96 @@ final class _LegadoAppState extends State<LegadoApp>
       message: 'stage=authentication_restore_finished app_ready=true',
     );
     _scheduleReaderProcessedContentPreload();
+    /// 原生冷启动通知可能早于 Dart 通道注册，因此就绪后必须主动消费一次。
+    _externalLocalBookOpenSignaled = true;
+    unawaited(_consumeExternalLocalBookOpenRequests());
+  }
+
+  /// 顺序消费冷启动或热启动外部 TXT，并等待每个导入确认页关闭后再处理下一项。
+  Future<void> _consumeExternalLocalBookOpenRequests() async {
+    if (_handlingExternalLocalBookOpen ||
+        !mounted ||
+        _startupPhase.value != _AppStartupPhase.ready) {
+      return;
+    }
+    _handlingExternalLocalBookOpen = true;
+    try {
+      do {
+        _externalLocalBookOpenSignaled = false;
+        /// 与 Android 原生队列上限一致，单轮最多处理四个请求。
+        for (int attempt = 0; attempt < 4; attempt += 1) {
+          ExternalLocalBookOpenRequest? request;
+          try {
+            request = await _externalLocalBookOpenService.consumeNext();
+          } on ExternalLocalBookOpenException catch (error) {
+            _showExternalLocalBookOpenMessage(error.message);
+            continue;
+          }
+          if (request == null) {
+            break;
+          }
+          if (!mounted ||
+              _startupPhase.value != _AppStartupPhase.ready) {
+            await _externalLocalBookOpenService.releaseTemporary(
+              request.cleanupToken,
+            );
+            break;
+          }
+          /// 当前用户作用域下可用的业务 Navigator。
+          NavigatorState? navigator = _navigatorKey.currentState;
+          if (navigator == null) {
+            await _waitForNextFrame();
+            navigator = _navigatorKey.currentState;
+          }
+          if (navigator == null) {
+            await _externalLocalBookOpenService.releaseTemporary(
+              request.cleanupToken,
+            );
+            _showExternalLocalBookOpenMessage(
+              '应用页面尚未准备好，请重新打开该 TXT 文件',
+            );
+            continue;
+          }
+          try {
+            await navigator.pushNamed<void>(
+              AppRoute.localBookImport,
+              arguments: LocalBookImportRouteArguments(
+                file: request.file,
+                cleanupToken: request.cleanupToken,
+              ),
+            );
+          } on Object {
+            await _externalLocalBookOpenService.releaseTemporary(
+              request.cleanupToken,
+            );
+            _showExternalLocalBookOpenMessage(
+              '无法打开本地书导入页面，请稍后重试',
+            );
+          }
+        }
+      } while (_externalLocalBookOpenSignaled &&
+          mounted &&
+          _startupPhase.value == _AppStartupPhase.ready);
+    } finally {
+      _handlingExternalLocalBookOpen = false;
+      if (_externalLocalBookOpenSignaled &&
+          mounted &&
+          _startupPhase.value == _AppStartupPhase.ready) {
+        unawaited(_consumeExternalLocalBookOpenRequests());
+      }
+    }
+  }
+
+  /// 通过当前业务 Overlay 展示外部 TXT 受控错误，不包含路径、文件名或正文。
+  void _showExternalLocalBookOpenMessage(String message) {
+    /// Navigator 当前页面 Context；启动或销毁期间可能暂不可用。
+    final BuildContext? navigatorContext = _navigatorKey.currentContext;
+    if (navigatorContext == null) {
+      return;
+    }
+    ScaffoldMessenger.of(navigatorContext)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 等待下一绘制帧结束，确保业务 Navigator 和 Overlay 已完成挂载。

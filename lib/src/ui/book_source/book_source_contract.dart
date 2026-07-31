@@ -624,6 +624,22 @@ final class ShowBookSourceMessageEffect extends BookSourceManagementEffect {
   final String message;
 }
 
+/// 请求 Route 提示书源已可用于搜索，并在用户确认后进入搜索界面。
+final class ShowBookSourceSearchReadyEffect extends BookSourceManagementEffect {
+  /// 创建不包含书源原始内容的完成提示副作用。
+  const ShowBookSourceSearchReadyEffect({
+    required this.title,
+    required this.summary,
+  });
+
+  /// 完成提示标题。
+  final String title;
+
+  /// 本次添加操作的安全摘要。
+  final String summary;
+}
+
+
 /// 请求 Route 返回上一页。
 final class CloseBookSourceManagementEffect extends BookSourceManagementEffect {
   /// 创建返回副作用。

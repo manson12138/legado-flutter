@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_route.dart';
 import '../../app/guest_book_source_import_service.dart';
 import '../../app/remote_book_source_sync_service.dart';
 import '../../api/http/http_contract.dart';
@@ -18,6 +19,15 @@ import 'book_source_qr_scanner_route.dart';
 import 'book_source_screen.dart';
 import 'book_source_view_model.dart';
 
+/// 独立书源管理路由可接收的一次性初始提示参数。
+final class BookSourceManagementRouteArguments {
+  /// 创建书源管理路由参数。
+  const BookSourceManagementRouteArguments({required this.initialMessage});
+
+  /// 目标页面首帧后展示的一次性提示。
+  final String initialMessage;
+}
+
 /// 连接书源管理 ViewModel、平台 Effect、对话框和纯 UI 的路由层。
 final class BookSourceManagementRoute extends StatefulWidget {
   /// 创建书源管理路由。
@@ -25,6 +35,8 @@ final class BookSourceManagementRoute extends StatefulWidget {
     required this.dependencies,
     this.platformBridge = const DefaultBookSourcePlatformBridge(),
     this.embedded = false,
+    this.onOpenSearch,
+    this.initialMessage,
     super.key,
   });
 
@@ -36,6 +48,12 @@ final class BookSourceManagementRoute extends StatefulWidget {
 
   /// 是否嵌入应用一级导航；嵌入时不显示普通返回按钮。
   final bool embedded;
+
+  /// 内嵌书源页请求切换到主页搜索目的地的回调；独立路由为空。
+  final VoidCallback? onOpenSearch;
+
+  /// 独立路由进入后需要展示的一次性提示；内嵌切页由主框架负责提示。
+  final String? initialMessage;
 
   /// 创建路由状态。
   @override
@@ -62,6 +80,8 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
   GuestBookSourceImportProgress? _guestRemoteImportProgress;
   /// 当前游客导入独占的网络取消令牌。
   HttpCancellationToken? _guestRemoteImportCancellationToken;
+  /// 是否已有书源完成引导正在展示，防止并发成功结果叠加弹窗。
+  bool _searchReadyDialogVisible = false;
 
   /// 创建 ViewModel 并监听 Effect。
   @override
@@ -77,6 +97,13 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
       logger: widget.dependencies.logger,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
+    /// 独立路由需要等待目标 Scaffold 首帧完成后再展示提示。
+    final String initialMessage = widget.initialMessage?.trim() ?? '';
+    if (initialMessage.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showMessage(initialMessage);
+      });
+    }
   }
 
   /// 执行需要 BuildContext 或平台插件的一次性副作用。
@@ -103,6 +130,11 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
         if (mounted) {
           await Navigator.of(context).maybePop();
         }
+      case ShowBookSourceSearchReadyEffect(
+        title: final String title,
+        summary: final String summary,
+      ):
+        await _showSearchReadyDialog(title: title, summary: summary);
     }
   }
 
@@ -214,6 +246,64 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// 展示统一的书源完成引导，并在用户明确确认后进入搜索界面。
+  Future<void> _showSearchReadyDialog({
+    required String title,
+    required String summary,
+  }) async {
+    if (!mounted || _searchReadyDialogVisible) {
+      return;
+    }
+    _searchReadyDialogVisible = true;
+    bool? openSearch;
+    try {
+      openSearch = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) => AlertDialog(
+          title: Text(title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(summary),
+              const SizedBox(height: SpacingToken.medium),
+              const Text('现在可以前往搜索界面搜索书籍了。'),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _searchReadyDialogVisible = false;
+    }
+    if (openSearch == true) {
+      await _openSearch();
+    }
+  }
+
+  /// 按书源页承载方式切换主页标签或打开独立搜索路由。
+  Future<void> _openSearch() async {
+    if (!mounted) {
+      return;
+    }
+    final VoidCallback? onOpenSearch = widget.onOpenSearch;
+    if (onOpenSearch != null) {
+      onOpenSearch();
+      return;
+    }
+    await Navigator.of(context).pushNamed<void>(AppRoute.search);
+  }
+
   /// 根据 UiState 中的业务对话框显示一次 Material 对话框。
   void _syncDialog(BookSourceDialog? dialog) {
     if (dialog == null || identical(dialog, _shownDialog)) {
@@ -224,14 +314,20 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
       if (!mounted || !identical(dialog, _shownDialog)) {
         return;
       }
-      await showDialog<void>(
+      final bool requiresSearchChoice =
+          dialog is ImportSummaryDialog && dialog.result.imported > 0;
+      final bool? openSearch = await showDialog<bool>(
         context: context,
-        barrierDismissible: !(_viewModel.state.busy),
+        barrierDismissible:
+            !(_viewModel.state.busy) && !requiresSearchChoice,
         builder: (BuildContext context) => _buildDialog(dialog),
       );
       if (identical(dialog, _shownDialog)) {
         _shownDialog = null;
         _viewModel.onIntent(const DismissBookSourceDialogIntent());
+      }
+      if (openSearch == true) {
+        await _openSearch();
       }
     });
   }
@@ -359,7 +455,10 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
         _remoteSyncing = false;
         _remoteSyncProgress = null;
       });
-      _showMessage('服务器书源同步完成，已导入 ${result.importedCount} 条');
+      await _showSearchReadyDialog(
+        title: '书源同步完成',
+        summary: '本次已导入 ${result.importedCount} 条书源。',
+      );
     } on FormatException catch (error) {
       if (mounted) {
         setState(() {
@@ -455,9 +554,10 @@ final class _BookSourceManagementRouteState extends State<BookSourceManagementRo
           processedCount: final int processedCount,
           invalidCount: final int invalidCount,
         ):
-          _showMessage(
-            '游客书源同步完成：处理 $processedCount 条，导入 $importedCount 条'
-            '${invalidCount > 0 ? '，无效 $invalidCount 条' : ''}',
+          await _showSearchReadyDialog(
+            title: '书源同步完成',
+            summary: '本次处理 $processedCount 条，导入 $importedCount 条'
+                '${invalidCount > 0 ? '，无效 $invalidCount 条' : ''}。',
           );
       }
     } on GuestBookSourceImportException catch (error) {
@@ -971,11 +1071,28 @@ final class _ImportSummaryView extends StatelessWidget {
                 (BookSourceImportIssue issue) => Text('第 ${issue.index + 1} 条：${issue.message}'),
               ),
             ],
+            if (result.imported > 0) ...<Widget>[
+              const SizedBox(height: SpacingToken.medium),
+              const Text('书源已添加完成，现在可以前往搜索界面搜索书籍了。'),
+            ],
           ],
         ),
       ),
       actions: <Widget>[
-        FilledButton(onPressed: () => Navigator.of(context).pop(), child: const Text('完成')),
+        if (result.imported > 0) ...<Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确定'),
+          ),
+        ] else
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('完成'),
+          ),
       ],
     );
   }

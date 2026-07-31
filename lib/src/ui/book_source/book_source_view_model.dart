@@ -515,6 +515,12 @@ final class BookSourceManagementViewModel {
         }
       },
       successMessage: original == null ? '书源已新增' : '书源已保存',
+      successEffect: original == null
+          ? const ShowBookSourceSearchReadyEffect(
+              title: '书源已添加',
+              summary: '书源已新增。',
+            )
+          : null,
     );
   }
 
@@ -638,6 +644,7 @@ final class BookSourceManagementViewModel {
   Future<void> _runWrite({
     required Future<void> Function() operation,
     required String successMessage,
+    BookSourceManagementEffect? successEffect,
     bool clearSelection = false,
   }) async {
     _emit(_state.copyWith(busy: true, clearDialog: true, clearError: true));
@@ -649,7 +656,9 @@ final class BookSourceManagementViewModel {
           selectedUrls: clearSelection ? <String>{} : _state.selectedUrls,
         ),
       );
-      _effectController.add(ShowBookSourceMessageEffect(successMessage));
+      _effectController.add(
+        successEffect ?? ShowBookSourceMessageEffect(successMessage),
+      );
     } catch (error, stackTrace) {
       _logger.error(message: '书源管理写入失败', error: error, stackTrace: stackTrace);
       _emit(_state.copyWith(busy: false, errorMessage: '操作失败，已有书源未被修改。'));

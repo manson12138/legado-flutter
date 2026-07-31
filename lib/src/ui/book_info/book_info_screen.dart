@@ -503,7 +503,7 @@ final class _BookInfoBody extends StatelessWidget {
   /// 构建加载、错误或详情内容。
   @override
   Widget build(BuildContext context) {
-    if (state.loadingInfo) {
+    if (state.loadingInfo && state.book == null) {
       return const Center(child: CircularProgressIndicator());
     }
     /// 已解析书籍。
@@ -528,6 +528,14 @@ final class _BookInfoBody extends StatelessWidget {
             : SpacingToken.medium;
         /// 当前屏幕是否需要压缩头部封面尺寸。
         final bool compact = constraints.maxWidth < LayoutToken.compactBreakpoint;
+        /// 搜索快照中至少有一个可选详情字段时才展示概览卡，缺失字段不使用占位撑开首屏。
+        final bool showSummary = state.detailsResolved ||
+            _hasSearchPreviewSummary(book);
+        /// 完整详情开始解析后才展示目录区域，避免首帧短暂出现“暂无目录”。
+        final bool showChapterPreview = state.detailsResolved ||
+            state.loadingToc ||
+            state.tocError != null ||
+            state.chapters.isNotEmpty;
         return ListView(
           padding: EdgeInsets.fromLTRB(
             horizontalPadding,
@@ -537,16 +545,68 @@ final class _BookInfoBody extends StatelessWidget {
           ),
           children: <Widget>[
             _BookInfoHero(book: book, compact: compact, onIntent: onIntent),
+            if (state.loadingInfo || state.infoError != null) ...<Widget>[
+              const SizedBox(height: SpacingToken.medium),
+              _BookInfoLoadStatus(state: state, onIntent: onIntent),
+            ],
             const SizedBox(height: SpacingToken.medium),
             _BookInfoPrimaryActions(state: state, onIntent: onIntent),
-            const SizedBox(height: SpacingToken.medium),
-            _BookInfoSummaryCard(book: book, state: state),
-            const SizedBox(height: SpacingToken.medium),
-            _BookInfoChapterPreview(state: state, onIntent: onIntent),
+            if (showSummary) ...<Widget>[
+              const SizedBox(height: SpacingToken.medium),
+              _BookInfoSummaryCard(book: book, state: state),
+            ],
+            if (showChapterPreview) ...<Widget>[
+              const SizedBox(height: SpacingToken.medium),
+              _BookInfoChapterPreview(state: state, onIntent: onIntent),
+            ],
           ],
         );
       },
     );
+  }
+}
+
+/// 判断搜索快照是否包含值得立即展示的概览字段。
+bool _hasSearchPreviewSummary(Book book) {
+  return book.latestChapterTitle?.trim().isNotEmpty == true ||
+      book.wordCount?.trim().isNotEmpty == true ||
+      book.intro?.trim().isNotEmpty == true ||
+      book.customIntro?.trim().isNotEmpty == true;
+}
+
+/// 在已展示搜索快照的同时提供轻量加载或错误反馈，不遮挡整页内容。
+final class _BookInfoLoadStatus extends StatelessWidget {
+  /// 创建详情增量加载状态。
+  const _BookInfoLoadStatus({required this.state, required this.onIntent});
+
+  /// 当前详情状态。
+  final BookInfoUiState state;
+
+  /// 详情页 Intent 入口。
+  final ValueChanged<BookInfoIntent> onIntent;
+
+  /// 构建局部进度条或可重试错误条。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前详情请求错误；为空时表示仍在异步加载。
+    final String? error = state.infoError;
+    if (error != null) {
+      return Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              error,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+          TextButton(
+            onPressed: () => onIntent(const RetryBookInfoIntent()),
+            child: const Text('重试详情'),
+          ),
+        ],
+      );
+    }
+    return const LinearProgressIndicator(minHeight: 2);
   }
 }
 
@@ -598,6 +658,7 @@ final class _BookInfoHero extends StatelessWidget {
                     borderRadius: BorderRadius.circular(RadiusToken.medium),
                     bookName: book.name,
                     bookAuthor: book.author,
+                    keepPreviousFrame: true,
                   ),
                 ),
               ),
@@ -735,6 +796,16 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
     final bool canUpdateToc =
         !updatingToc &&
         (state.book?.origin ?? state.selectedBook.origin) != 'loc_book';
+    /// 已入架网络书使用独立整书换源页，并在该页面重新搜索当前启用书源。
+    final bool canReplaceBookSource = state.inBookshelf &&
+        state.book != null &&
+        state.book?.origin != 'loc_book';
+    /// 未入架详情仍可在进入详情时携带的已有候选之间临时切换。
+    final bool canChooseExistingSource =
+        !state.inBookshelf && state.group.books.length > 1;
+    /// 已入架本地书不支持联网整书换源。
+    final bool isBookshelfLocalBook =
+        state.inBookshelf && state.book?.origin == 'loc_book';
     return Column(
       children: <Widget>[
         Row(
@@ -780,24 +851,38 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
                 icon: Icons.manage_search,
                 label: state.switchingSource
                     ? '切换中'
-                    : state.group.books.length > 1 || state.inBookshelf
-                        ? '书源 / 换源'
+                    : state.inBookshelf
+                        ? '替换书源'
+                        : canChooseExistingSource
+                            ? '已有书源'
                         : '书源',
                 state: state.switchingSource
                     ? _BookInfoActionCardState.working
-                    : state.group.books.length > 1 || (state.inBookshelf && state.book != null && state.book?.origin != 'loc_book')
+                    : canReplaceBookSource || canChooseExistingSource
                         ? _BookInfoActionCardState.available
                         : _BookInfoActionCardState.pending,
                 detail: state.switchingSource
                     ? '正在加载新书源'
-                    : state.group.books.length > 1
-                        ? '${state.group.books.length} 个来源可选'
-                        : state.inBookshelf
-                            ? '当前没有可替换书源'
-                            : '加入书架后可全书换源',
-                onTap: state.group.books.length > 1
-                    ? () => _showSourceChoices(context, state, onIntent)
-                    : () => onIntent(const OpenBookInfoFullSourceChangeIntent()),
+                    : canReplaceBookSource
+                        ? '重新搜索全部启用书源'
+                        : canChooseExistingSource
+                            ? '${state.group.books.length} 个已有来源可选'
+                            : isBookshelfLocalBook
+                                ? '本地书不支持整书换源'
+                                : state.inBookshelf
+                                    ? '书籍信息加载完成后可替换书源'
+                                    : '加入书架后可替换书源',
+                onTap: canReplaceBookSource
+                    ? () => onIntent(
+                          const OpenBookInfoFullSourceChangeIntent(),
+                        )
+                    : canChooseExistingSource
+                        ? () => _showSourceChoices(
+                              context,
+                              state,
+                              onIntent,
+                            )
+                        : null,
               ),
             ),
             const SizedBox(width: SpacingToken.small),
@@ -831,26 +916,40 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
             const SizedBox(width: SpacingToken.small),
             Expanded(
               child: _BookInfoActionCard(
-                icon: updatingToc ? Icons.sync : Icons.update,
-                label: updatingToc ? '正在更新' : '更新目录',
-                state: updatingToc
-                    ? _BookInfoActionCardState.working
-                    : canUpdateToc
-                        ? _BookInfoActionCardState.available
-                        : _BookInfoActionCardState.pending,
-                detail: updatingToc
-                    ? '正在获取最新目录'
-                    : canUpdateToc
-                        ? '检查网页最新章节'
-                        : '本地书无需联网更新',
+                icon: Icons.wallpaper_outlined,
+                label: '更换封面',
+                state: state.inBookshelf && state.book != null
+                    ? _BookInfoActionCardState.available
+                    : _BookInfoActionCardState.pending,
+                detail: state.inBookshelf && state.book != null
+                    ? '从已启用书源搜索封面'
+                    : '加入书架后可更换封面',
                 onTap: () => onIntent(
                   const BookInfoMenuActionIntent(
-                    BookInfoMenuAction.refresh,
+                    BookInfoMenuAction.changeCover,
                   ),
                 ),
               ),
             ),
           ],
+        ),
+        const SizedBox(height: SpacingToken.small),
+        _BookInfoActionCard(
+          icon: updatingToc ? Icons.sync : Icons.update,
+          label: updatingToc ? '正在更新' : '更新目录',
+          state: updatingToc
+              ? _BookInfoActionCardState.working
+              : canUpdateToc
+              ? _BookInfoActionCardState.available
+              : _BookInfoActionCardState.pending,
+          detail: updatingToc
+              ? '正在获取最新目录'
+              : canUpdateToc
+              ? '检查网页最新章节'
+              : '本地书无需联网更新',
+          onTap: () => onIntent(
+            const BookInfoMenuActionIntent(BookInfoMenuAction.refresh),
+          ),
         ),
       ],
     );
@@ -1470,6 +1569,15 @@ final class _BookInfoSummaryCard extends StatelessWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
     /// 简介展示文本，优先使用用户自定义简介。
     final String intro = _displayText(book.customIntro, book.intro, fallback: '暂无简介');
+    /// 搜索快照阶段只展示确实存在的最新章节字段。
+    final bool showLatest = state.detailsResolved ||
+        book.latestChapterTitle?.trim().isNotEmpty == true;
+    /// 搜索快照阶段尚未获取到的目录和阅读统计不展示占位。
+    final bool showResolvedStatistics = state.detailsResolved;
+    /// 搜索快照阶段只展示确实存在的简介字段。
+    final bool showIntro = state.detailsResolved ||
+        book.customIntro?.trim().isNotEmpty == true ||
+        book.intro?.trim().isNotEmpty == true;
     /// 备注展示文本。
     final String remark = book.remark?.trim() ?? '';
     return Card(
@@ -1482,9 +1590,12 @@ final class _BookInfoSummaryCard extends StatelessWidget {
           children: <Widget>[
             Text('书籍概览', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: SpacingToken.medium),
-            _BookInfoMetaRow(label: '最新', value: book.latestChapterTitle?.trim().isNotEmpty == true ? book.latestChapterTitle ?? '' : '暂无最新章节'),
-            _BookInfoMetaRow(label: '目录', value: _tocStatusText(state)),
-            _BookInfoMetaRow(label: '进度', value: _progressText(book, state.chapters.length)),
+            if (showLatest)
+              _BookInfoMetaRow(label: '最新', value: book.latestChapterTitle?.trim().isNotEmpty == true ? book.latestChapterTitle ?? '' : '暂无最新章节'),
+            if (showResolvedStatistics)
+              _BookInfoMetaRow(label: '目录', value: _tocStatusText(state)),
+            if (showResolvedStatistics)
+              _BookInfoMetaRow(label: '进度', value: _progressText(book, state.chapters.length)),
             if (book.wordCount?.trim().isNotEmpty == true) _BookInfoMetaRow(label: '字数', value: book.wordCount ?? ''),
             if (remark.isNotEmpty) ...<Widget>[
               const SizedBox(height: SpacingToken.small),
@@ -1492,10 +1603,12 @@ final class _BookInfoSummaryCard extends StatelessWidget {
               const SizedBox(height: SpacingToken.xSmall),
               Text(remark),
             ],
-            const SizedBox(height: SpacingToken.medium),
-            Text('简介', style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: SpacingToken.xSmall),
-            Text(intro),
+            if (showIntro) ...<Widget>[
+              const SizedBox(height: SpacingToken.medium),
+              Text('简介', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: SpacingToken.xSmall),
+              Text(intro),
+            ],
           ],
         ),
       ),

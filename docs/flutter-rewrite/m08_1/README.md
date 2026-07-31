@@ -16,6 +16,7 @@
 - EPUB 按 spine 建立稳定 `epub:<entryPath>` 章节地址，读取 OPF 书名/作者，并在后台 isolate 展开单个 XHTML、移除标签和脚本影响后送入 M8 文本管线。
 - 新增 `UmdLocalBookParser`，等价移植 Android 内置 `UmdReader` 的小端分段、UTF-16LE 元数据/标题、章节偏移和 zlib 正文块逻辑；导入和目标章节读取均在后台 isolate。
 - 新增 `LocalBookImport` Contract、ViewModel、无状态 Screen 和 Route，支持系统多选、单选/全选、逐文件进度、成功/更新/失败状态和批量失败隔离。
+- Android `MainActivity` 已增加 TXT `ACTION_VIEW` 文件关联；`ExternalTxtOpenBridge` 在后台线程把冷启动或热启动收到的 `content://`/`file://` URI 流式复制到有界 cache 临时文件，Dart 组合根再顺序打开现有导入确认页。临时副本在导入成功、失败、取消或过期后清理，代码等待用户真机验证。
 - 欢迎页和 M7 书架顶部均新增“导入本地书”入口。
 - `ReadBookCoordinator` 已通过 `LocalBookContentService` 读取 TXT/EPUB，不再对全部 `loc_book` 返回 M08 占位错误；本地文本继续复用替换规则、字符锚点、书签、缓存和相邻章预加载。
 - 新增 `pdfx ^2.9.2` 依赖、`PdfLocalBookParser`、统一 `BookReaderRoute` 和 `PdfReaderRoute`。导入时读取真实页数并每页建立稳定目录；阅读时使用原生页面渲染、纵向翻页、双指缩放和页码目录跳转。
@@ -30,7 +31,7 @@
 - EPUB nav/NCX 标题层级、图片块、封面和受控资源 URI；当前目录顺序来自 spine，标题来自 XHTML。
 - Big5 自动判别和用户手动切换 TXT 编码；当前无 BOM 且非 UTF-8 时按 GBK 回退。
 - 超大 TXT 流式分块扫描；当前整本读取发生在后台 isolate，但仍受内存上限约束。
-- 文件夹浏览、递归扫描、自动同步、导入取消、外部打开/文件关联入口。
+- 文件夹浏览、递归扫描、自动同步和导入取消；Android 外部 TXT 打开代码已写入但待用户真机验证，其他格式外部关联与 iOS“打开方式”仍未实现。
 - 原文件变化后的同身份更新与章节锚点迁移；当前内容变化会产生新 SHA-256 身份。
 - 删除书架记录时“保留/删除应用内副本”双选和孤儿副本清理任务。
 - iOS 真机安全作用域生命周期验证，以及 Android SAF 各文件提供方兼容验证。

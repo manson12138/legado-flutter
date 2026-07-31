@@ -91,6 +91,9 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
   /// 当前已经展示的业务面板。
   ReaderSheet? _shownSheet;
 
+  /// 当前已经交给 Navigator 展示的同书名书架冲突。
+  ReaderBookshelfConflictDialog? _shownBookshelfConflict;
+
   /// 最近已经执行的字符锚点恢复请求编号。
   int _lastRestoreRequestId = -1;
 
@@ -153,6 +156,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       saveBookContentProcess: widget.dependencies.saveBookContentProcess,
       recordReadingHistory: widget.dependencies.recordReadingHistory,
       addBookToBookshelf: widget.dependencies.addBookToBookshelf,
+      changeBookSource: widget.dependencies.changeBookSource,
       analyticsRecorder:
           widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,
@@ -406,22 +410,62 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       return;
     }
     _openingChangeSource = true;
-    await _platformService.exitReader();
-    if (!mounted) {
+    _stopSystemInfoTimer();
+    try {
+      await _platformService.exitReader();
+      if (!mounted) {
+        return;
+      }
+      /// 整书换源页面返回的事务结果。
+      final ChangeBookSourceResult? result =
+          await Navigator.of(context).pushNamed<ChangeBookSourceResult>(
+        AppRoute.changeBookSource,
+        arguments: ChangeBookSourceRouteArguments(bookUrl: oldBookUrl),
+      );
+      if (!mounted) {
+        return;
+      }
+      if (result == null) {
+        await _restoreReaderAfterExternalRoute();
+        return;
+      }
+      /// 换源成功后用于新阅读路由的稳定主键。
+      final String newBookUrl = result.book.bookUrl;
+      /// 新阅读路由首帧展示的成功或非阻断警告。
+      final String resultMessage = result.warnings.isEmpty
+          ? '已切换到“${result.book.originName}”'
+          : '换源已完成；${result.warnings.join('；')}';
+      /// 数据事务已经完成，当前旧路由必须被替换，不能继续持有已删除旧主键。
+      unawaited(
+        Navigator.of(context).pushReplacementNamed<void, void>(
+          AppRoute.reader,
+          arguments: ReaderRouteArguments(
+            bookUrl: newBookUrl,
+            initialMessage: resultMessage,
+            initialBook: result.book,
+          ),
+        ),
+      );
+    } on Object {
+      await _restoreReaderAfterExternalRoute();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('打开整书换源失败，请稍后重试')),
+          );
+      }
+    } finally {
       _openingChangeSource = false;
-      return;
     }
-    /// 整书换源页面返回的事务结果。
-    final ChangeBookSourceResult? result =
-        await Navigator.of(context).pushNamed<ChangeBookSourceResult>(
-      AppRoute.changeBookSource,
-      arguments: ChangeBookSourceRouteArguments(bookUrl: oldBookUrl),
-    );
+  }
+
+  /// 从外部页面返回后恢复阅读窗口配置、低频系统信息刷新和键盘/音量键焦点。
+  Future<void> _restoreReaderAfterExternalRoute() async {
     if (!mounted) {
       return;
     }
-    _openingChangeSource = false;
-    if (result == null) {
+    try {
       await _platformService.enterReader(
         keepScreenOn: _viewModel.state.config.keepScreenOn,
         useSystemBrightness: _viewModel.state.config.useSystemBrightness,
@@ -429,25 +473,20 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
         orientationMode: _viewModel.state.config.orientationMode,
         fullScreen: _viewModel.state.config.fullScreen,
       );
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('阅读显示状态恢复失败')),
+          );
+      }
+    }
+    if (!mounted) {
       return;
     }
-    /// 换源成功后用于新阅读路由的稳定主键。
-    final String newBookUrl = result.book.bookUrl;
-    /// 新阅读路由首帧展示的成功或非阻断警告。
-    final String resultMessage = result.warnings.isEmpty
-        ? '已切换到“${result.book.originName}”'
-        : '换源已完成；${result.warnings.join('；')}';
-    /// 数据事务已经完成，当前旧路由必须被替换，不能继续持有已删除旧主键。
-    unawaited(
-      Navigator.of(context).pushReplacementNamed<void, void>(
-        AppRoute.reader,
-        arguments: ReaderRouteArguments(
-          bookUrl: newBookUrl,
-          initialMessage: resultMessage,
-          initialBook: result.book,
-        ),
-      ),
-    );
+    _startSystemInfoTimer();
+    _keyboardFocusNode.requestFocus();
   }
 
   /// 启动低频系统信息刷新，避免每帧读取电量。
@@ -568,6 +607,49 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
       _scrollController.jumpTo(
         target.clamp(0, _scrollController.position.maxScrollExtent).toDouble(),
       );
+    });
+  }
+
+  /// 根据 UiState 同步展示一次阅读器同书名书架冲突对话框。
+  void _syncBookshelfConflict(ReaderBookshelfConflictDialog? conflict) {
+    if (conflict == null ||
+        identical(conflict, _shownBookshelfConflict)) {
+      return;
+    }
+    _shownBookshelfConflict = conflict;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) async {
+      if (!mounted ||
+          !identical(conflict, _shownBookshelfConflict)) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext context) {
+          return _ReaderBookshelfConflictAlert(
+            conflict: conflict,
+            onOverwrite: () {
+              Navigator.of(context).pop();
+              _viewModel.onIntent(
+                const OverwriteReaderBookshelfConflictIntent(),
+              );
+            },
+            onAddAsNew: () {
+              Navigator.of(context).pop();
+              _viewModel.onIntent(
+                const AddReaderBookshelfConflictAsNewIntent(),
+              );
+            },
+          );
+        },
+      );
+      if (identical(conflict, _shownBookshelfConflict)) {
+        _shownBookshelfConflict = null;
+        if (_viewModel.state.bookshelfConflict != null) {
+          _viewModel.onIntent(
+            const DismissReaderBookshelfConflictIntent(),
+          );
+        }
+      }
     });
   }
 
@@ -736,6 +818,7 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           final ReaderUiState state = snapshot.data ?? _viewModel.state;
           _restoreScrollPosition(state);
           _syncSheet(state.activeSheet);
+          _syncBookshelfConflict(state.bookshelfConflict);
           return KeyboardListener(
             focusNode: _keyboardFocusNode,
             autofocus: true,
@@ -751,6 +834,82 @@ final class _ReaderRouteState extends State<ReaderRoute> with WidgetsBindingObse
           );
         },
       ),
+    );
+  }
+}
+
+/// 阅读器显式加入书架时展示作者、来源和目录差异的同书名确认框。
+final class _ReaderBookshelfConflictAlert extends StatelessWidget {
+  /// 创建只有覆盖和再次添加两个业务选项的确认框。
+  const _ReaderBookshelfConflictAlert({
+    required this.conflict,
+    required this.onOverwrite,
+    required this.onAddAsNew,
+  });
+
+  /// 当前待确认的同书名冲突快照。
+  final ReaderBookshelfConflictDialog conflict;
+
+  /// 把新来源覆盖合并到现有书架记录的回调。
+  final VoidCallback onOverwrite;
+
+  /// 明确保留为第二条同名书架记录的回调。
+  final VoidCallback onAddAsNew;
+
+  /// 构建作者、来源、章节数和覆盖含义说明。
+  @override
+  Widget build(BuildContext context) {
+    /// 现有书籍作者的安全显示文本。
+    final String existingAuthor = conflict.existingBook.author.isEmpty
+        ? '未知作者'
+        : conflict.existingBook.author;
+    /// 待加入书籍作者的安全显示文本。
+    final String incomingAuthor = conflict.incomingBook.author.isEmpty
+        ? '未知作者'
+        : conflict.incomingBook.author;
+    /// 现有书源的安全显示文本。
+    final String existingSource = conflict.existingBook.originName.isEmpty
+        ? '未知来源'
+        : conflict.existingBook.originName;
+    /// 待加入书源的安全显示文本。
+    final String incomingSource = conflict.incomingBook.originName.isEmpty
+        ? '未知来源'
+        : conflict.incomingBook.originName;
+    return AlertDialog(
+      icon: const Icon(Icons.library_add_check_outlined),
+      title: const Text('书架中已有同名书籍'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '《${conflict.incomingBook.name}》',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '书架现有：$existingAuthor · $existingSource'
+              '（${conflict.existingBook.totalChapterNum} 章）',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '本次添加：$incomingAuthor · $incomingSource'
+              '（${conflict.incomingChapters.length} 章）',
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '选择覆盖后会把两者视为同一本书，新书源和目录成为当前来源；'
+              '阅读进度、分组、排序、备注、封面和单书阅读设置会合并保留。',
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(onPressed: onAddAsNew, child: const Text('再次添加')),
+        FilledButton(onPressed: onOverwrite, child: const Text('覆盖')),
+      ],
     );
   }
 }

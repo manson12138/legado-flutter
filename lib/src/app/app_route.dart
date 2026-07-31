@@ -1,5 +1,6 @@
 import '../domain/model/book.dart';
 import '../domain/model/book_chapter.dart';
+import '../domain/model/local_book.dart';
 import 'reader_transition_spec.dart';
 
 /// 集中声明应用内稳定路由名称，避免页面散落硬编码字符串。
@@ -57,6 +58,21 @@ final class ChangeBookSourceRouteArguments {
 
   /// 当前书架中的旧书籍稳定 URL。
   final String bookUrl;
+}
+
+/// Android 外部 TXT“打开方式”进入本地书导入页时使用的一次性参数。
+final class LocalBookImportRouteArguments {
+  /// 创建包含可立即读取临时副本和清理 token 的路由参数。
+  const LocalBookImportRouteArguments({
+    required this.file,
+    required this.cleanupToken,
+  });
+
+  /// 原生层已经复制到应用 cache 的 TXT 候选。
+  final LocalBookPickedFile file;
+
+  /// 导入完成、失败或取消后交回原生层的一次性清理 token。
+  final String cleanupToken;
 }
 
 /// 阅读器路由参数，支持从书架恢复进度或从目录指定章节进入。

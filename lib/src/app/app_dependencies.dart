@@ -31,6 +31,7 @@ import '../data/dao/book_content_process_dao.dart';
 import '../data/dao/replace_rule_dao.dart';
 import '../data/dao/download_task_dao.dart';
 import '../data/dao/reading_history_dao.dart';
+import '../data/dao/search_book_dao.dart';
 import '../data/local/database_tables.dart';
 import '../data/local/legado_database.dart';
 import '../data/local/preferences/app_preferences_store.dart';
@@ -39,6 +40,7 @@ import '../data/model/book_source_import_decoder.dart';
 import '../data/repository/adult_content_repository.dart';
 import '../data/repository/book_repository.dart';
 import '../data/repository/book_group_repository.dart';
+import '../data/repository/book_cover_candidate_repository.dart';
 import '../data/repository/book_source_repository.dart';
 import '../data/repository/download_repository.dart';
 import '../data/repository/search_history_repository.dart';
@@ -49,6 +51,7 @@ import '../data/repository/authentication_repository.dart';
 import '../platform/password_encryption_platform_service.dart';
 import '../domain/gateway/adult_content_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
+import '../domain/gateway/book_cover_candidate_gateway.dart';
 import '../domain/gateway/book_content_process_gateway.dart';
 import '../domain/gateway/bookshelf_gateway.dart';
 import '../domain/gateway/book_group_gateway.dart';
@@ -73,6 +76,7 @@ import '../domain/usecase/replace_books_group_use_case.dart';
 import '../domain/usecase/resolve_book_shelf_state_use_case.dart';
 import '../domain/usecase/save_book_chapters_use_case.dart';
 import '../domain/usecase/save_reading_progress_use_case.dart';
+import '../domain/usecase/update_book_custom_cover_use_case.dart';
 import '../domain/usecase/record_reading_history_use_case.dart';
 import '../help/logging/app_logger.dart';
 import '../help/logging/app_log_manager.dart';
@@ -81,6 +85,7 @@ import '../model/web_book/standard_source_parser.dart';
 import '../model/web_book/standard_source_service.dart';
 import '../model/web_book/book_detail_service.dart';
 import '../model/web_book/book_search_coordinator.dart';
+import '../model/web_book/book_cover_search_coordinator.dart';
 import '../model/web_book/change_chapter_source_coordinator.dart';
 import '../model/reader/download_coordinator.dart';
 import '../model/web_book/change_source_coordinator.dart';
@@ -123,8 +128,10 @@ final class AppDependencies {
     required this.logger,
     required this.logManager,
     required this.crashReportManager,
+    required this.remoteAppConfig,
     required this.adultContentGateway,
     required this.bookSourceGateway,
+    required this.bookCoverCandidateGateway,
     required this.bookshelfGateway,
     required this.bookGroupGateway,
     required this.chapterGateway,
@@ -160,6 +167,7 @@ final class AppDependencies {
     required this.deleteBooksFromBookshelf,
     required this.createBookshelfGroup,
     required this.changeBookSource,
+    required this.updateBookCustomCover,
     required this.replaceBooksGroup,
     required this.loadBookChapters,
     required this.saveBookChapters,
@@ -188,6 +196,8 @@ final class AppDependencies {
     final LegadoDatabase database = LegadoDatabase(logger: logger);
     /// 书籍表 DAO，只在数据组合根内创建，不向 UI 暴露。
     final BookDao bookDao = BookDao(database);
+    /// 封面搜索派生缓存 DAO，只在数据组合根内创建。
+    final SearchBookDao searchBookDao = SearchBookDao(database);
     /// 章节表 DAO，只在数据组合根内创建，不向 UI 暴露。
     final BookChapterDao chapterDao = BookChapterDao(database);
     /// 阅读历史书籍与目录快照 DAO，不复用书架成员表。
@@ -218,6 +228,9 @@ final class AppDependencies {
       chapterDao,
       currentUserScope.requireUserId,
     );
+    /// 封面搜索复用 `searchBooks` 的独立缓存边界。
+    final BookCoverCandidateRepository bookCoverCandidateRepository =
+        BookCoverCandidateRepository(searchBookDao);
     /// 与书架成员资格独立的阅读历史 Repository。
     final ReadingHistoryRepository readingHistoryRepository =
         ReadingHistoryRepository(
@@ -456,7 +469,7 @@ final class AppDependencies {
       storage: localBookStorage,
       parserRegistry: localBookParserRegistry,
     );
-    /// 按 Android 语义解析书籍是否已经入架或存在同名同作者冲突。
+    /// 解析书籍是否已经精确入架或存在同书名冲突。
     final ResolveBookShelfStateUseCase resolveBookShelfState =
         ResolveBookShelfStateUseCase(bookRepository);
     /// 供详情新增、本地书更新和书架刷新复用的书籍保存业务动作。
@@ -549,8 +562,10 @@ final class AppDependencies {
       logger: logger,
       logManager: logManager,
       crashReportManager: crashReportManager,
+      remoteAppConfig: remoteAppConfig,
       adultContentGateway: adultContentRepository,
       bookSourceGateway: bookSourceRepository,
+      bookCoverCandidateGateway: bookCoverCandidateRepository,
       bookshelfGateway: bookRepository,
       bookGroupGateway: bookGroupRepository,
       chapterGateway: bookRepository,
@@ -605,6 +620,7 @@ final class AppDependencies {
         },
         analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
       ),
+      updateBookCustomCover: UpdateBookCustomCoverUseCase(bookRepository),
       replaceBooksGroup: ReplaceBooksGroupUseCase(bookRepository),
       loadBookChapters: LoadBookChaptersUseCase(bookRepository),
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
@@ -631,11 +647,17 @@ final class AppDependencies {
   /// “我的”页崩溃报告管理与全局错误入口共用的文件边界。
   final CrashReportManager crashReportManager;
 
+  /// 启动时从当前安装包读取的真实版本名称和构建号，以及远端服务静态配置。
+  final RemoteAppServiceConfig remoteAppConfig;
+
   /// 成人内容屏蔽领域边界，供搜索、换源和书源导入共用同一套判定。
   final AdultContentGateway adultContentGateway;
 
   /// 书源领域边界，供后续网络和规则 UseCase 通过构造参数使用。
   final BookSourceGateway bookSourceGateway;
+
+  /// 封面搜索使用的 SQLite 派生候选缓存边界。
+  final BookCoverCandidateGateway bookCoverCandidateGateway;
 
   /// 书架领域边界，供后续组合根创建书架相关 UseCase。
   final BookshelfGateway bookshelfGateway;
@@ -742,6 +764,9 @@ final class AppDependencies {
   /// M11 原子替换书籍主键、目录并迁移用户阅读事实的 UseCase。
   final ChangeBookSourceUseCase changeBookSource;
 
+  /// 只更新 `customCoverUrl` 的书架封面保存动作。
+  final UpdateBookCustomCoverUseCase updateBookCustomCover;
+
   /// 批量替换书籍分组 UseCase。
   final ReplaceBooksGroupUseCase replaceBooksGroup;
 
@@ -790,6 +815,14 @@ final class AppDependencies {
       adultContentGateway: adultContentGateway,
       cancellationTokenFactory: createHttpCancellationToken,
       logger: logger,
+    );
+  }
+
+  /// 创建底部面板生命周期独占的三级封面候选协调器。
+  BookCoverSearchCoordinator createBookCoverSearchCoordinator() {
+    return BookCoverSearchCoordinator(
+      searchCoordinator: createBookSearchCoordinator(),
+      candidateGateway: bookCoverCandidateGateway,
     );
   }
 

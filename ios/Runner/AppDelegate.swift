@@ -11,7 +11,7 @@ import UIKit
   /// 登录与注册密码加密通道；强引用保证 Flutter 引擎存活期间处理器持续有效。
   private var passwordEncryptionChannel: FlutterMethodChannel?
 
-  /// 当前 iOS 安装包语义版本名查询通道。
+  /// 当前 iOS 安装包版本名称和构建号查询通道。
   private var appPackageInfoChannel: FlutterMethodChannel?
 
   /// P1-05 下载后台通道；iOS 只提供有限后台执行窗口，不承诺无限持续下载。
@@ -132,7 +132,7 @@ import UIKit
     registerDownloadBackgroundChannel(engineBridge)
   }
 
-  /// 注册实际安装包版本名通道；只读取 Info.plist，不持有监听器或业务状态。
+  /// 注册实际安装包版本通道；只读取 Info.plist，不持有监听器或业务状态。
   ///
   /// - Parameter engineBridge: Flutter 隐式引擎桥，用于取得独立插件注册器。
   private func registerAppPackageInfoChannel(
@@ -149,7 +149,7 @@ import UIKit
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { call, result in
-      guard call.method == "getVersionName" else {
+      guard call.method == "getPackageInfo" else {
         result(FlutterMethodNotImplemented)
         return
       }
@@ -157,7 +157,14 @@ import UIKit
       let versionName = Bundle.main.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
       ) as? String
-      result(versionName)
+      /// Xcode 从 Flutter build number 写入的当前安装包构建号。
+      let versionCode = Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleVersion"
+      ) as? String
+      result([
+        "versionName": versionName ?? "",
+        "versionCode": versionCode ?? "",
+      ])
     }
     appPackageInfoChannel = channel
   }
