@@ -75,6 +75,15 @@ final class LocalBookImportRouteArguments {
   final String cleanupToken;
 }
 
+/// 从“我的”等入口打开书架时指定首个可见分组。
+final class BookshelfRouteArguments {
+  /// 创建书架初始分组参数。
+  const BookshelfRouteArguments({required this.initialGroupId});
+
+  /// 书架 ViewModel 首帧使用的系统或用户分组 ID。
+  final int initialGroupId;
+}
+
 /// 阅读器路由参数，支持从书架恢复进度或从目录指定章节进入。
 final class ReaderRouteArguments {
   /// 创建阅读器路由参数。

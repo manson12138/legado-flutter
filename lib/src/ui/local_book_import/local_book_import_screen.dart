@@ -75,28 +75,39 @@ final class _ImportHeader extends StatelessWidget {
                     : '已选择 ${state.selectedCount}/${state.items.length} 个文件',
               ),
               const SizedBox(height: SpacingToken.small),
-              Wrap(
-                spacing: SpacingToken.small,
-                runSpacing: SpacingToken.small,
+              Row(
                 children: <Widget>[
-                  OutlinedButton.icon(
-                    onPressed: state.busy ? null : () => onIntent(const PickLocalBooksIntent()),
-                    icon: const Icon(Icons.folder_open_outlined),
-                    label: const Text('选择文件'),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: state.busy
+                          ? null
+                          : () => onIntent(const PickLocalBooksIntent()),
+                      child: const Text('选择'),
+                    ),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: state.busy || state.items.isEmpty
-                        ? null
-                        : () => onIntent(SetAllLocalBooksSelectedIntent(!allSelected)),
-                    icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
-                    label: Text(allSelected ? '取消全选' : '全选'),
+                  const SizedBox(width: SpacingToken.small),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: state.busy || state.items.isEmpty
+                          ? null
+                          : () => onIntent(
+                              SetAllLocalBooksSelectedIntent(!allSelected),
+                            ),
+                      child: Text(allSelected ? '取消' : '全选'),
+                    ),
                   ),
-                  FilledButton.icon(
-                    onPressed: state.busy || state.selectedCount == 0
-                        ? null
-                        : () => onIntent(const ImportSelectedLocalBooksIntent()),
-                    icon: const Icon(Icons.library_add_outlined),
-                    label: const Text('加入书架'),
+                  const SizedBox(width: SpacingToken.small),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      onPressed: state.busy || state.selectedCount == 0
+                          ? null
+                          : () => onIntent(
+                              const ImportSelectedLocalBooksIntent(),
+                            ),
+                      icon: const Icon(Icons.library_add_outlined),
+                      label: const Text('加入书架'),
+                    ),
                   ),
                 ],
               ),

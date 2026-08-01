@@ -16,7 +16,9 @@
 - EPUB 按 spine 建立稳定 `epub:<entryPath>` 章节地址，读取 OPF 书名/作者，并在后台 isolate 展开单个 XHTML、移除标签和脚本影响后送入 M8 文本管线。
 - 新增 `UmdLocalBookParser`，等价移植 Android 内置 `UmdReader` 的小端分段、UTF-16LE 元数据/标题、章节偏移和 zlib 正文块逻辑；导入和目标章节读取均在后台 isolate。
 - 新增 `LocalBookImport` Contract、ViewModel、无状态 Screen 和 Route，支持系统多选、单选/全选、逐文件进度、成功/更新/失败状态和批量失败隔离。
-- Android `MainActivity` 已增加 TXT `ACTION_VIEW` 文件关联；`ExternalTxtOpenBridge` 在后台线程把冷启动或热启动收到的 `content://`/`file://` URI 流式复制到有界 cache 临时文件，Dart 组合根再顺序打开现有导入确认页。临时副本在导入成功、失败、取消或过期后清理，代码等待用户真机验证。
+- 单个选中文件导入或同内容更新成功后，导入页会携带已写入书架的 `Book` 快照直接替换到统一阅读入口；TXT/EPUB/UMD 继续进入文本阅读器，PDF 继续进入页面阅读器。多文件批量导入仍留在当前页展示汇总，失败不会错误进入阅读器。
+- Android `MainActivity` 已增加 TXT `ACTION_VIEW` 文件关联；`ExternalTxtOpenBridge` 在后台线程把冷启动或热启动收到的 `content://`/`file://` URI 流式复制到有界 cache 临时文件，Dart 组合根再顺序打开现有导入确认页。宿主使用 `singleTask` 保证外部打开复用同一 Flutter Activity/引擎，并关闭 Flutter 默认深链路接管，避免同一 `content://` 被再次当成页面路由压入返回栈；临时副本在导入成功、失败、取消或过期后清理，代码等待用户真机验证。
+- 本地书仍保存在当前游客或账号作用域的普通书架表中；书架系统分组现已显示已有的 `BookGroup.idLocal`，并在“我的 -> 本地书籍”提供明确入口。保活主框架直接切换现有书架实例和本地分组，不创建第三套本地书数据状态。
 - 欢迎页和 M7 书架顶部均新增“导入本地书”入口。
 - `ReadBookCoordinator` 已通过 `LocalBookContentService` 读取 TXT/EPUB，不再对全部 `loc_book` 返回 M08 占位错误；本地文本继续复用替换规则、字符锚点、书签、缓存和相邻章预加载。
 - 新增 `pdfx ^2.9.2` 依赖、`PdfLocalBookParser`、统一 `BookReaderRoute` 和 `PdfReaderRoute`。导入时读取真实页数并每页建立稳定目录；阅读时使用原生页面渲染、纵向翻页、双指缩放和页码目录跳转。

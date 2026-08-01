@@ -192,7 +192,13 @@ final class AdultContentRepository implements AdultContentGateway {
     String? author,
     String? kind,
     String? intro,
+    String? origin,
   }) async {
+    /// 本地导入书属于用户主动选择的设备内容，不参与远端成人屏蔽词筛选。
+    /// 在读取开关和词库前快速返回，避免本地书产生无意义的异步存储访问。
+    if (origin == 'loc_book') {
+      return false;
+    }
     if (!await isBlockingEnabled()) {
       return false;
     }

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
+import '../../app/app_route.dart';
+import '../../domain/model/book.dart';
 import '../../domain/model/local_book.dart';
 import '../../platform/external_local_book_open_service.dart';
 import '../../platform/local_book_platform_bridge.dart';
@@ -55,6 +57,9 @@ final class _LocalBookImportRouteState extends State<LocalBookImportRoute> {
 
   /// 是否已经请求释放本页面拥有的外部临时副本。
   bool _externalTemporaryReleased = false;
+
+  /// 是否已经开始用阅读器替换当前导入页，防止重复 Effect 创建重复路由。
+  bool _openingImportedReader = false;
 
   /// 创建 ViewModel 并监听平台副作用。
   @override
@@ -117,6 +122,11 @@ final class _LocalBookImportRouteState extends State<LocalBookImportRoute> {
         }
       case ShowLocalBookImportMessageEffect(message: final String message):
         _showMessage(message);
+      case OpenImportedLocalBookReaderEffect(
+        book: final Book book,
+        message: final String message,
+      ):
+        unawaited(_openImportedReader(book, message));
       case CloseLocalBookImportEffect():
         if (mounted) {
           await Navigator.of(context).maybePop();
@@ -132,6 +142,29 @@ final class _LocalBookImportRouteState extends State<LocalBookImportRoute> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// 用已经保存的书籍快照替换导入页，并交给统一入口分流文本或 PDF 阅读器。
+  Future<void> _openImportedReader(Book book, String message) async {
+    if (_openingImportedReader || !mounted) {
+      return;
+    }
+    _openingImportedReader = true;
+    try {
+      await Navigator.of(context).pushReplacementNamed<void, void>(
+        AppRoute.reader,
+        arguments: ReaderRouteArguments(
+          bookUrl: book.bookUrl,
+          initialMessage: message,
+          initialBook: book,
+          initialIsInBookshelf: true,
+          entry: 'bookshelf',
+        ),
+      );
+    } on Object {
+      _openingImportedReader = false;
+      _showMessage('书籍已加入书架，但暂时无法打开阅读器');
+    }
   }
 
   /// 幂等释放 Android 原生层生成的一次性外部 TXT 临时副本。

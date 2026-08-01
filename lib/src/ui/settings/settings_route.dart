@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
+import '../../domain/model/book_group.dart';
 import 'settings_screen.dart';
 
 /// 连接“我的”页面设置与应用路由的轻量入口。
@@ -13,6 +14,7 @@ final class SettingsRoute extends StatefulWidget {
     required this.themeModeListenable,
     required this.onChangeThemeMode,
     this.embedded = false,
+    this.onOpenLocalBooks,
     super.key,
   });
 
@@ -27,6 +29,9 @@ final class SettingsRoute extends StatefulWidget {
 
   /// 是否嵌入应用一级导航；嵌入时不显示返回按钮。
   final bool embedded;
+
+  /// 保活主框架直接切换到现有书架本地分组的可选回调。
+  final VoidCallback? onOpenLocalBooks;
 
   /// 创建持有一次性设置读取 Future 的路由状态。
   @override
@@ -103,6 +108,14 @@ final class _SettingsRouteState extends State<SettingsRoute> {
                       },
                       onOpenLanguageManagement: () {
                         _showLanguageManagement(context);
+                      },
+                      onOpenLocalBooks: widget.onOpenLocalBooks ?? () {
+                        Navigator.of(context).pushNamed(
+                          AppRoute.bookshelf,
+                          arguments: const BookshelfRouteArguments(
+                            initialGroupId: BookGroup.idLocal,
+                          ),
+                        );
                       },
                       onOpenBookSources: () {
                         Navigator.of(context).pushNamed(

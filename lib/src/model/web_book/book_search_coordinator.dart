@@ -415,6 +415,7 @@ final class BookSearchCoordinator {
         author: book.author,
         kind: book.kind,
         intro: book.intro,
+        origin: book.origin,
       );
       if (!adult) {
         filtered.add(book);

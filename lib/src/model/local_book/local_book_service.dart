@@ -6,6 +6,7 @@ import '../../domain/model/book_chapter.dart';
 import '../../domain/model/local_book.dart';
 import '../../domain/usecase/add_book_to_bookshelf_use_case.dart';
 import '../../help/error/app_result.dart';
+import '../../help/logging/app_logger.dart';
 import 'local_book_parser.dart';
 import 'local_book_storage.dart';
 
@@ -17,6 +18,8 @@ final class LocalBookImportCoordinator {
     required LocalBookParserRegistry parserRegistry,
     required BookshelfGateway bookshelfGateway,
     required AddBookToBookshelfUseCase addBook,
+    required AppLogger logger,
+    required int Function() currentUserId,
     required Future<void> Function(
       String eventName, {
       Map<String, Object?> props,
@@ -25,6 +28,8 @@ final class LocalBookImportCoordinator {
        _parserRegistry = parserRegistry,
        _bookshelfGateway = bookshelfGateway,
        _addBook = addBook,
+       _logger = logger,
+       _currentUserId = currentUserId,
        _analyticsRecorder = analyticsRecorder;
 
   /// 应用私有文件存储边界。
@@ -38,6 +43,12 @@ final class LocalBookImportCoordinator {
 
   /// 原子保存书籍和目录的业务动作。
   final AddBookToBookshelfUseCase _addBook;
+
+  /// 本地书导入到书架可见性全链路使用的统一诊断日志边界。
+  final AppLogger _logger;
+
+  /// 当前游客或账号本地数据作用域，仅转换为不可逆摘要后写入诊断日志。
+  final int Function() _currentUserId;
 
   /// 本地书导入完成事件写入边界。
   final Future<void> Function(
@@ -70,10 +81,24 @@ final class LocalBookImportCoordinator {
       final Book mergedBook = existingBook == null
           ? parsed.book
           : _mergeExistingBook(existingBook, parsed.book);
+      _logger.info(
+        tag: localBookShelfDiagnosticLogTag,
+        message: 'stage=import_parsed '
+            'bookId=${appLogDiagnosticId(bookUrl)} '
+            'scopeId=${_scopeDiagnosticId()} '
+            'format=${reference.format.name} '
+            'existing=${existingBook != null} '
+            'originLocal=${mergedBook.origin == 'loc_book'} '
+            'chapterCount=${parsed.chapters.length}',
+      );
       /// 事务写入结果。
       final AppResult<void> saved = await _addBook.save(mergedBook, parsed.chapters);
       switch (saved) {
         case AppSuccess<void>():
+          await _logCommittedBook(
+            book: mergedBook,
+            chapterCount: parsed.chapters.length,
+          );
           await _recordImportAnalytics(
             format: reference.format,
             result: existingBook == null ? 'imported' : 'updated',
@@ -86,7 +111,14 @@ final class LocalBookImportCoordinator {
         case AppFailure<void>(error: final error):
           throw LocalBookException(error.message);
       }
-    } on LocalBookException {
+    } on LocalBookException catch (error) {
+      _logger.warning(
+        tag: localBookShelfDiagnosticLogTag,
+        message: 'stage=import_failed '
+            'bookId=${_referenceDiagnosticId(reference)} '
+            'scopeId=${_scopeDiagnosticId()} '
+            'failureType=${error.runtimeType}',
+      );
       await _recordImportAnalytics(
         format: reference?.format ?? _formatFromName(pickedFile.name),
         result: 'failed',
@@ -97,6 +129,13 @@ final class LocalBookImportCoordinator {
       }
       rethrow;
     } catch (error) {
+      _logger.error(
+        tag: localBookShelfDiagnosticLogTag,
+        message: 'stage=import_failed '
+            'bookId=${_referenceDiagnosticId(reference)} '
+            'scopeId=${_scopeDiagnosticId()} '
+            'failureType=${error.runtimeType}',
+      );
       await _recordImportAnalytics(
         format: reference?.format ?? _formatFromName(pickedFile.name),
         result: 'failed',
@@ -107,6 +146,51 @@ final class LocalBookImportCoordinator {
       }
       throw const LocalBookException('本地书导入失败，请确认文件可读取且存储空间充足');
     }
+  }
+
+  /// 事务成功后按稳定主键回查一次，区分“保存返回成功”和“当前作用域确实可读”。
+  /// 诊断回查失败不能改变已经提交的导入业务结果。
+  Future<void> _logCommittedBook({
+    required Book book,
+    required int chapterCount,
+  }) async {
+    try {
+      final Book? persisted = await _bookshelfGateway.getBook(book.bookUrl);
+      _logger.info(
+        tag: localBookShelfDiagnosticLogTag,
+        message: 'stage=import_commit_verified '
+            'bookId=${appLogDiagnosticId(book.bookUrl)} '
+            'scopeId=${_scopeDiagnosticId()} '
+            'persisted=${persisted != null} '
+            'originLocal=${persisted?.origin == 'loc_book'} '
+            'chapterCount=$chapterCount',
+      );
+    } on Object catch (error) {
+      _logger.warning(
+        tag: localBookShelfDiagnosticLogTag,
+        message: 'stage=import_commit_verify_failed '
+            'bookId=${appLogDiagnosticId(book.bookUrl)} '
+            'scopeId=${_scopeDiagnosticId()} '
+            'failureType=${error.runtimeType}',
+      );
+    }
+  }
+
+  /// 将当前用户作用域转换为不可逆诊断标识，日志本身不保留账号 ID。
+  String _scopeDiagnosticId() {
+    try {
+      return appLogDiagnosticId('${_currentUserId()}');
+    } on Object {
+      return 'unavailable';
+    }
+  }
+
+  /// 从已持久化引用恢复稳定书籍诊断标识；复制前失败时返回固定占位值。
+  String _referenceDiagnosticId(LocalBookFileReference? reference) {
+    if (reference == null) {
+      return 'unavailable';
+    }
+    return appLogDiagnosticId('local://${reference.contentHash}');
   }
 
   /// 本地书导入结果失败时也只上传格式、结果和耗时分桶。

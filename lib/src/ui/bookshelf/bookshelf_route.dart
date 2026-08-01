@@ -7,6 +7,7 @@ import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
 import '../../app/reader_transition_spec.dart';
 import '../../domain/model/book.dart';
+import '../../domain/model/book_group.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/search_book.dart';
 import '../../domain/usecase/change_book_source_use_case.dart';
@@ -41,6 +42,8 @@ final class BookshelfRoute extends StatefulWidget {
     required this.dependencies,
     this.embedded = false,
     this.visibilityListenable,
+    this.requestedGroupIdListenable,
+    this.initialGroupId,
     super.key,
   });
 
@@ -52,6 +55,12 @@ final class BookshelfRoute extends StatefulWidget {
 
   /// 一级主导航是否正在展示书架目的地；隐藏时自动退出选择模式。
   final ValueListenable<bool>? visibilityListenable;
+
+  /// 保活主框架从“我的”等页面请求切换书架分组的轻量通知。
+  final ValueListenable<int?>? requestedGroupIdListenable;
+
+  /// 独立书架路由首帧直接使用的分组 ID；为空时显示全部。
+  final int? initialGroupId;
 
   /// 创建路由状态。
   @override
@@ -92,6 +101,9 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       refreshCoordinator: widget.dependencies.createBookshelfRefreshCoordinator(),
       layoutPreferences: widget.dependencies.bookshelfLayoutPreferences,
       startupPreloader: widget.dependencies.bookshelfHistoryStartupPreloader,
+      logger: widget.dependencies.logger,
+      currentUserId: widget.dependencies.currentUserScope.requireUserId,
+      initialGroupId: widget.initialGroupId ?? BookGroup.idAll,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _historyViewModel = ReadingHistoryViewModel(
@@ -104,6 +116,21 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     _pageController = PageController();
     _pageController.addListener(_handlePageScroll);
     widget.visibilityListenable?.addListener(_handleVisibilityChanged);
+    widget.requestedGroupIdListenable?.addListener(
+      _handleRequestedGroupChanged,
+    );
+  }
+
+  /// 响应保活“我的”页面发出的本地分组切换，不新建第二个书架页面实例。
+  void _handleRequestedGroupChanged() {
+    /// 当前主框架要求展示的分组；空值只用于重复请求复位。
+    final int? requestedGroupId =
+        widget.requestedGroupIdListenable?.value;
+    if (requestedGroupId == null) {
+      return;
+    }
+    _viewModel.onIntent(SelectBookshelfGroupIntent(requestedGroupId));
+    _selectPage(0);
   }
 
   /// 一级目的地隐藏时清空批量选择，避免回到书架继续误操作。
@@ -507,6 +534,9 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   @override
   void dispose() {
     widget.visibilityListenable?.removeListener(_handleVisibilityChanged);
+    widget.requestedGroupIdListenable?.removeListener(
+      _handleRequestedGroupChanged,
+    );
     _pageController.removeListener(_handlePageScroll);
     _pageController.dispose();
     _historyEffectSubscription.cancel();

@@ -15,6 +15,7 @@ final class SettingsScreen extends StatelessWidget {
     required this.onBack,
     required this.onOpenThemeManagement,
     required this.onOpenLanguageManagement,
+    required this.onOpenLocalBooks,
     required this.onOpenBookSources,
     required this.onOpenAuthentication,
     required this.onOpenDownloadManagement,
@@ -50,6 +51,9 @@ final class SettingsScreen extends StatelessWidget {
 
   /// 打开多语言管理的回调。
   final VoidCallback onOpenLanguageManagement;
+
+  /// 打开当前用户书架“本地”分组的回调。
+  final VoidCallback onOpenLocalBooks;
 
   /// 打开书源管理的回调。
   final VoidCallback onOpenBookSources;
@@ -157,6 +161,12 @@ final class SettingsScreen extends StatelessWidget {
               const _SectionTitle(title: '应用管理'),
               _SettingsGroup(
                 children: <Widget>[
+                  _SettingsItem(
+                    icon: Icons.snippet_folder_outlined,
+                    title: '本地书籍',
+                    subtitle: '查看已导入的 TXT、EPUB、UMD 和 PDF',
+                    onTap: onOpenLocalBooks,
+                  ),
                   _SettingsItem(
                     icon: Icons.hub_outlined,
                     title: '书源管理',

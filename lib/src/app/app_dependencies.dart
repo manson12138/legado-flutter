@@ -481,6 +481,8 @@ final class AppDependencies {
       parserRegistry: localBookParserRegistry,
       bookshelfGateway: bookRepository,
       addBook: addBookToBookshelf,
+      logger: logger,
+      currentUserId: currentUserScope.requireUserId,
       analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
     );
     /// M06 普通书源详情与目录编排服务。

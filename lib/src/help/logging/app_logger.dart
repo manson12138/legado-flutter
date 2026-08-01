@@ -22,6 +22,10 @@ const String networkLogTag = 'LEGADO_HTTP';
 /// 数据库操作日志在 Android Logcat 中使用的固定 Tag。
 const String databaseLogTag = 'LEGADO_DB';
 
+/// 本地书导入、数据库回查和书架本地分组可见性共用的诊断 Logcat Tag。
+/// 只允许记录不可逆标识、用户作用域摘要、数量和布尔状态。
+const String localBookShelfDiagnosticLogTag = 'LOCAL_BOOK_SHELF';
+
 /// 二维码添加书源全链路在 Android Logcat 中使用的固定 Tag。
 const String bookSourceQrLogTag = 'LEGADO_QR_SOURCE';
 

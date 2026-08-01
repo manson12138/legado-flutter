@@ -149,10 +149,19 @@ final class AppRouter {
           },
         );
       case AppRoute.bookshelf:
+        /// “我的 -> 本地书籍”等入口可指定书架首帧分组。
+        final Object? bookshelfArguments = settings.arguments;
+        final int? initialBookshelfGroupId =
+            bookshelfArguments is BookshelfRouteArguments
+            ? bookshelfArguments.initialGroupId
+            : null;
         return MaterialPageRoute<void>(
           settings: settings,
           builder: (BuildContext context) {
-            return BookshelfRoute(dependencies: dependencies);
+            return BookshelfRoute(
+              dependencies: dependencies,
+              initialGroupId: initialBookshelfGroupId,
+            );
           },
         );
       case AppRoute.localBookImport:

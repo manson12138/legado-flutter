@@ -116,6 +116,8 @@ final class LocalBookImportViewModel {
     int updated = 0;
     /// 本批次失败数量。
     int failed = 0;
+    /// 单文件批次成功时用于直接进入阅读器的完整导入结果。
+    LocalBookImportResult? singleSuccessfulResult;
     for (final int index in selectedIndices) {
       _replaceItem(index, _state.items[index].copyWith(status: LocalBookImportItemStatus.importing, clearMessage: true));
       try {
@@ -125,6 +127,9 @@ final class LocalBookImportViewModel {
           updated += 1;
         } else {
           succeeded += 1;
+        }
+        if (selectedIndices.length == 1) {
+          singleSuccessfulResult = result;
         }
         _replaceItem(
           index,
@@ -148,6 +153,19 @@ final class LocalBookImportViewModel {
       _emit(_state.copyWith(completed: _state.completed + 1));
     }
     _emit(_state.copyWith(busy: false));
+    final LocalBookImportResult? directReaderResult =
+        singleSuccessfulResult;
+    if (directReaderResult != null && failed == 0) {
+      _effectController.add(
+        OpenImportedLocalBookReaderEffect(
+          book: directReaderResult.book,
+          message: directReaderResult.updated
+              ? '已更新本地书'
+              : '已加入书架',
+        ),
+      );
+      return;
+    }
     _effectController.add(
       ShowLocalBookImportMessageEffect('导入完成：新增 $succeeded，本次更新 $updated，失败 $failed'),
     );

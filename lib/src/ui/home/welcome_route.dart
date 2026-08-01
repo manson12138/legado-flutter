@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_dependencies.dart';
 import '../../app/app_navigation_observer.dart';
+import '../../domain/model/book_group.dart';
 import '../book_source/book_source_route.dart';
 import '../bookshelf/bookshelf_route.dart';
 import '../search/search_route.dart';
@@ -50,6 +51,10 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
   /// 通知内嵌书架目的地当前是否可见，用于离开时取消选择模式。
   final ValueNotifier<bool> _bookshelfVisibility =
       ValueNotifier<bool>(true);
+
+  /// “我的”重复请求打开本地书时通知保活书架切换分组。
+  final ValueNotifier<int?> _bookshelfRequestedGroupId =
+      ValueNotifier<int?>(null);
 
   /// 防止一次主界面生命周期内重复弹出公告。
   bool _announcementRequested = false;
@@ -102,6 +107,14 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
     });
   }
 
+  /// 切换到保活书架并选择本地系统分组，不创建第二个数据库订阅页面。
+  void _openLocalBooks() {
+    /// 先复位使连续点击相同入口也能再次通知监听器。
+    _bookshelfRequestedGroupId.value = null;
+    _bookshelfRequestedGroupId.value = BookGroup.idLocal;
+    _viewModel.onIntent(const SelectPrimaryDestinationIntent(0));
+  }
+
   /// 根据组合根当前配置创建四个一级页面，并保留统一的依赖注入方式。
   List<Widget> _buildPrimaryPages() {
     return <Widget>[
@@ -109,6 +122,7 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
         dependencies: widget.dependencies,
         embedded: true,
         visibilityListenable: _bookshelfVisibility,
+        requestedGroupIdListenable: _bookshelfRequestedGroupId,
       ),
       SearchRoute(
         dependencies: widget.dependencies,
@@ -128,6 +142,7 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
         themeModeListenable: widget.themeModeListenable,
         onChangeThemeMode: widget.onChangeThemeMode,
         embedded: true,
+        onOpenLocalBooks: _openLocalBooks,
       ),
     ];
   }
@@ -136,6 +151,7 @@ final class _WelcomeRouteState extends State<WelcomeRoute> {
   @override
   void dispose() {
     _bookshelfVisibility.dispose();
+    _bookshelfRequestedGroupId.dispose();
     _viewModel.dispose();
     super.dispose();
   }

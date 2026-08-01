@@ -21,12 +21,14 @@ abstract interface class AdultContentGateway {
   /// 当前生效关键词数量，供“关于”页展示。
   Future<int> keywordCount();
 
-  /// 判定一本搜索结果或书架书是否为成人内容；命中书名/作者/分类/简介任意关键词即真。
+  /// 判定一本搜索结果或书架书是否为成人内容；本地导入书固定放行，
+  /// 其余书籍命中书名/作者/分类/简介任意关键词即真。
   Future<bool> isAdultBook({
     required String name,
     String? author,
     String? kind,
     String? intro,
+    String? origin,
   });
 
   /// 判定一个书源是否为成人书源；命中分组标签“成人”、名称/分组/备注关键词，

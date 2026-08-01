@@ -11,6 +11,7 @@ import '../../domain/usecase/delete_books_from_bookshelf_use_case.dart';
 import '../../domain/usecase/create_bookshelf_group_use_case.dart';
 import '../../domain/usecase/replace_books_group_use_case.dart';
 import '../../help/error/app_result.dart';
+import '../../help/logging/app_logger.dart';
 import '../../model/bookshelf/bookshelf_refresh_coordinator.dart';
 import 'bookshelf_contract.dart';
 
@@ -26,6 +27,9 @@ final class BookshelfViewModel {
     required BookshelfRefreshCoordinator refreshCoordinator,
     required BookshelfLayoutPreferences layoutPreferences,
     required BookshelfHistoryStartupPreloader startupPreloader,
+    required AppLogger logger,
+    required int Function() currentUserId,
+    int initialGroupId = BookGroup.idAll,
   }) : _bookshelfGateway = bookshelfGateway,
        _bookGroupGateway = bookGroupGateway,
        _deleteBooks = deleteBooks,
@@ -33,7 +37,10 @@ final class BookshelfViewModel {
        _replaceBooksGroup = replaceBooksGroup,
        _refreshCoordinator = refreshCoordinator,
        _layoutPreferences = layoutPreferences,
-       _startupPreloader = startupPreloader {
+       _startupPreloader = startupPreloader,
+       _logger = logger,
+       _currentUserId = currentUserId,
+       _state = BookshelfUiState(selectedGroupId: initialGroupId) {
     unawaited(_restoreLayout());
     _applyCompletedStartupSnapshot();
     unawaited(_applyPendingStartupSnapshot());
@@ -56,10 +63,16 @@ final class BookshelfViewModel {
   final BookshelfLayoutPreferences _layoutPreferences;
   /// 登录后在主界面启动遮罩期间创建的本地首快照服务。
   final BookshelfHistoryStartupPreloader _startupPreloader;
+  /// 本地书导入到书架可见性全链路使用的统一诊断日志边界。
+  final AppLogger _logger;
+  /// 当前游客或账号本地数据作用域，仅转换为不可逆摘要后写入诊断日志。
+  final int Function() _currentUserId;
+  /// 上一次本地分组筛选日志签名，避免无状态变化的重复重建刷屏。
+  String? _lastLocalFilterLogSignature;
   /// 用户是否已在异步恢复完成前切换布局，避免旧值覆盖新选择。
   bool _layoutChangedByUser = false;
   /// 当前状态。
-  BookshelfUiState _state = BookshelfUiState();
+  BookshelfUiState _state;
   /// 状态广播流。
   final StreamController<BookshelfUiState> _stateController = StreamController<BookshelfUiState>.broadcast();
   /// Effect 广播流。
@@ -166,10 +179,17 @@ final class BookshelfViewModel {
         _booksStreamReceived = true;
         _allBooks = List<Book>.unmodifiable(books);
         _booksReady = true;
+        _logBookSnapshot(stage: 'bookshelf_database_stream', books: books);
         _rebuild();
       },
       onError: (Object error) {
         _booksReady = true;
+        _logger.warning(
+          tag: localBookShelfDiagnosticLogTag,
+          message: 'stage=bookshelf_database_stream_failed '
+              'scopeId=${_scopeDiagnosticId()} '
+              'failureType=${error.runtimeType}',
+        );
         _emit(_state.copyWith(loading: false, errorMessage: '读取书架失败'));
       },
     );
@@ -207,6 +227,9 @@ final class BookshelfViewModel {
     final List<Book> filtered = _allBooks.where((Book book) {
       return _matchesGroup(book, effectiveGroupId) && _matchesQuery(book, _state.query);
     }).toList(growable: false);
+    if (effectiveGroupId == BookGroup.idLocal) {
+      _logLocalFilterResult(filtered);
+    }
     filtered.sort(_compareBooks);
     /// 当前显示模型。
     final List<BookshelfBookItem> items = filtered.map(_toItem).toList(growable: false);
@@ -228,6 +251,7 @@ final class BookshelfViewModel {
     /// 固定第一批系统分组。
     final List<BookGroup> systemGroups = <BookGroup>[
       const BookGroup(groupId: BookGroup.idAll, groupName: '全部'),
+      const BookGroup(groupId: BookGroup.idLocal, groupName: '本地'),
       const BookGroup(groupId: BookGroup.idNetNone, groupName: '未分组'),
       const BookGroup(groupId: BookGroup.idUnread, groupName: '未读'),
       const BookGroup(groupId: BookGroup.idReading, groupName: '阅读中'),
@@ -492,12 +516,70 @@ final class BookshelfViewModel {
     if (!_booksStreamReceived) {
       _allBooks = snapshot.bookshelfBooks;
       _booksReady = true;
+      _logBookSnapshot(
+        stage: 'bookshelf_startup_snapshot',
+        books: snapshot.bookshelfBooks,
+      );
     }
     if (!_groupsStreamReceived) {
       _userGroups = snapshot.bookGroups;
       _groupsReady = true;
     }
     _rebuild();
+  }
+
+  /// 记录书架数据源交付的本地书摘要，不记录书名、文件名、路径或正文。
+  void _logBookSnapshot({
+    required String stage,
+    required List<Book> books,
+  }) {
+    final List<Book> localBooks = books
+        .where((Book book) => book.origin == 'loc_book')
+        .toList(growable: false);
+    final List<String> localIds = localBooks
+        .take(12)
+        .map((Book book) => appLogDiagnosticId(book.bookUrl))
+        .toList(growable: false);
+    _logger.info(
+      tag: localBookShelfDiagnosticLogTag,
+      message: 'stage=$stage '
+          'scopeId=${_scopeDiagnosticId()} '
+          'totalCount=${books.length} '
+          'localCount=${localBooks.length} '
+          'localIds=${localIds.join(',')} '
+          'idsTruncated=${localBooks.length > localIds.length}',
+    );
+  }
+
+  /// 记录本地分组的候选数与最终可见数，用于识别搜索词造成的二次隐藏。
+  void _logLocalFilterResult(List<Book> visibleBooks) {
+    final int localCandidateCount = _allBooks
+        .where((Book book) => book.origin == 'loc_book')
+        .length;
+    final bool queryActive = _state.query.trim().isNotEmpty;
+    final String signature = '${_scopeDiagnosticId()}|$localCandidateCount|'
+        '${visibleBooks.length}|$queryActive';
+    if (_lastLocalFilterLogSignature == signature) {
+      return;
+    }
+    _lastLocalFilterLogSignature = signature;
+    _logger.info(
+      tag: localBookShelfDiagnosticLogTag,
+      message: 'stage=bookshelf_local_filter '
+          'scopeId=${_scopeDiagnosticId()} '
+          'candidateCount=$localCandidateCount '
+          'visibleCount=${visibleBooks.length} '
+          'queryActive=$queryActive',
+    );
+  }
+
+  /// 将当前用户作用域转换为不可逆诊断标识，日志本身不保留账号 ID。
+  String _scopeDiagnosticId() {
+    try {
+      return appLogDiagnosticId('${_currentUserId()}');
+    } on Object {
+      return 'unavailable';
+    }
   }
 
   /// 在首个数据快照到达前恢复上次选定的书架布局。

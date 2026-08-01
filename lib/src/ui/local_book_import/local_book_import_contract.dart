@@ -1,4 +1,5 @@
 import '../../domain/model/local_book.dart';
+import '../../domain/model/book.dart';
 
 /// 单个候选文件的导入状态。
 enum LocalBookImportItemStatus {
@@ -174,6 +175,21 @@ final class ShowLocalBookImportMessageEffect extends LocalBookImportEffect {
   const ShowLocalBookImportMessageEffect(this.message);
 
   /// 安全展示文本。
+  final String message;
+}
+
+/// 请求用刚写入书架的本地书直接替换导入页并进入统一阅读器。
+final class OpenImportedLocalBookReaderEffect extends LocalBookImportEffect {
+  /// 创建单本导入成功后的阅读导航副作用。
+  const OpenImportedLocalBookReaderEffect({
+    required this.book,
+    required this.message,
+  });
+
+  /// 已经完成书架和目录事务写入的最新书籍快照。
+  final Book book;
+
+  /// 进入文本阅读器后展示的一次性成功提示。
   final String message;
 }
 

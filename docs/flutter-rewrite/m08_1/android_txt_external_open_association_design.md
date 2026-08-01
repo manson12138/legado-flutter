@@ -159,3 +159,11 @@ token，`LocalBookImportRoute` 使用既有 `LocalBooksPickedIntent` 注入候�
 ## 9. 完成判断
 
 只有用户完成至少冷启动、热启动、真实 `content://` TXT 导入和取消清理验收后，才能把该能力从 `IN_PROGRESS` 改为 `DONE`。本分析文档本身不代表代码已经实现。
+
+## 10. 2026-07-31 首次真机反馈修正
+
+- 外部文件 Intent 会被自有 MethodChannel 正常消费，但 Flutter embedding 的默认深链路还会把同一个 `content://` 当成应用路由；导入页返回后因此露出“未找到路由”错误页。
+- `MainActivity` 已声明 `flutter_deeplinking_enabled=false`，外部文件 Uri 现在只经过 `ExternalTxtOpenBridge`，不再进入 Flutter 页面路由栈。
+- `MainActivity` 的启动模式由只复用栈顶实例的 `singleTop` 调整为 `singleTask`，避免从其他 App 打开 TXT 时创建第二个 Flutter Activity/引擎并返回旧实例的书架快照；后续请求统一经现有实例的 `onNewIntent` 处理。
+- 导入操作区由内容宽度驱动的 `Wrap` 改为固定单行比例布局；“全选/取消”文字变化不再把“加入书架”挤到第二排。
+- “导入完成”提示仍只会在 `AddBookToBookshelfUseCase.save` 的数据库事务成功后出现；书架通过既有数据库流刷新，不新增第二套手工书架状态。
