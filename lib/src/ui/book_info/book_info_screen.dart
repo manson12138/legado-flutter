@@ -767,7 +767,7 @@ final class _BookInfoTag extends StatelessWidget {
   }
 }
 
-/// 详情页四个主操作卡，对应 Android `BookInfoActions` 的 P0 版本。
+/// 详情页主操作卡区域，对应 Android `BookInfoActions` 的 P0 版本。
 final class _BookInfoPrimaryActions extends StatelessWidget {
   /// 创建主操作区。
   const _BookInfoPrimaryActions({required this.state, required this.onIntent});
@@ -931,25 +931,27 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(width: SpacingToken.small),
+            Expanded(
+              child: _BookInfoActionCard(
+                icon: updatingToc ? Icons.sync : Icons.update,
+                label: updatingToc ? '正在更新' : '更新目录',
+                state: updatingToc
+                    ? _BookInfoActionCardState.working
+                    : canUpdateToc
+                    ? _BookInfoActionCardState.available
+                    : _BookInfoActionCardState.pending,
+                detail: updatingToc
+                    ? '正在获取最新目录'
+                    : canUpdateToc
+                    ? '检查网页最新章节'
+                    : '本地书无需联网更新',
+                onTap: () => onIntent(
+                  const BookInfoMenuActionIntent(BookInfoMenuAction.refresh),
+                ),
+              ),
+            ),
           ],
-        ),
-        const SizedBox(height: SpacingToken.small),
-        _BookInfoActionCard(
-          icon: updatingToc ? Icons.sync : Icons.update,
-          label: updatingToc ? '正在更新' : '更新目录',
-          state: updatingToc
-              ? _BookInfoActionCardState.working
-              : canUpdateToc
-              ? _BookInfoActionCardState.available
-              : _BookInfoActionCardState.pending,
-          detail: updatingToc
-              ? '正在获取最新目录'
-              : canUpdateToc
-              ? '检查网页最新章节'
-              : '本地书无需联网更新',
-          onTap: () => onIntent(
-            const BookInfoMenuActionIntent(BookInfoMenuAction.refresh),
-          ),
         ),
       ],
     );
