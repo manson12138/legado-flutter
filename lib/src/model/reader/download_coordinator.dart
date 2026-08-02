@@ -97,7 +97,7 @@ final class DownloadCoordinator {
   /// 两次真实书源正文请求之间的最短间隔，降低连续访问触发站点风控的概率。
   final Duration minimumRequestInterval;
 
-  /// 单次章节正文请求的硬超时，避免异常书源让全局唯一 worker 永久卡住。
+  /// 单次章节正文请求的硬超时，避免异常书源长期占用一个全局下载并发槽位。
   final Duration chapterRequestTimeout;
 
   /// 自动换源允许锁定候选的最终安全底线，任一相邻正文低于该值都会拒绝候选。
@@ -109,7 +109,7 @@ final class DownloadCoordinator {
   /// 每一级最多进入详情、目录和相邻正文验证的候选数。
   static const int maximumAutomaticCandidatesPerStage = 3;
 
-  /// 一次自动换源从开始读取候选到停止的全局耗时上限，避免阻塞唯一下载 worker。
+  /// 一次自动换源从开始读取候选到停止的全局耗时上限，避免对应下载任务长期占用并发槽位。
   static const Duration automaticSourceMaximumDuration = Duration(minutes: 3);
 
   /// 单个梯度搜索阶段的最长占用时间，为详情、目录和正文验证保留全局预算。
@@ -496,7 +496,7 @@ final class DownloadCoordinator {
     await _refreshBackgroundService();
   }
 
-  /// 恢复全部暂停任务并继续严格串行调度。
+  /// 恢复全部暂停任务并按当前全局并发上限继续调度。
   Future<void> resumeAll() async {
     await _downloadGateway.resumeAll(DateTime.now().millisecondsSinceEpoch);
     _kick();

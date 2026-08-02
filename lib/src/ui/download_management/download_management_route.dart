@@ -68,7 +68,7 @@ final class _DownloadManagementScreen extends StatefulWidget {
     required this.onBack,
   });
 
-  /// App 级严格串行下载协调器。
+  /// App 级共享下载协调器，统一执行用户设置的全局并发上限。
   final DownloadCoordinator coordinator;
 
   /// 当前书架事实，用于显示书名和作者。
@@ -735,7 +735,7 @@ final class _DownloadManagementScreenState
     return '$count 字符';
   }
 
-  /// 加载目录并弹出起止章节范围，确认后加入全局串行下载队列。
+  /// 加载目录并弹出起止章节范围，确认后加入全局共享下载队列。
   Future<void> _showEnqueueRange(String bookUrl, String bookName) async {
     try {
       /// 当前书完整目录。
@@ -1167,7 +1167,7 @@ final class _DownloadChapterTaskTile extends StatelessWidget {
   /// 生成状态、重试和安全失败摘要。
   String _statusLabel() {
     return switch (task.status) {
-      DownloadTaskStatus.waiting => '等待串行下载',
+      DownloadTaskStatus.waiting => '等待下载',
       DownloadTaskStatus.running => '正在下载',
       DownloadTaskStatus.paused => '已暂停',
       DownloadTaskStatus.success => '已离线 · ${task.contentLength} 字符',
@@ -1324,7 +1324,7 @@ final class _ActiveDownloadTaskListState
 
 /// 一本书可执行的下载管理动作。
 enum _DownloadBookAction {
-  /// 选择起止章节范围加入串行队列。
+  /// 选择起止章节范围加入全局共享队列。
   addRange,
 
   /// 暂停本书活动任务。

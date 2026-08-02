@@ -102,8 +102,10 @@ Flutter 只正确修正 X、没有像 Android 一样使用更新后的 X 联动�
 验证；TTS、AI、同步等仍等待对应子系统迁移。
 小说阅读详情页完整 UI 对齐的实施优先级见
 [`m06/01_book_info_ui_rebuild_priority.md`](./m06/01_book_info_ui_rebuild_priority.md)。该文档当前为
-`IN_PROGRESS`；P0～P3 基础入口已写入 Flutter 详情页但尚无用户运行证据，阅读记录、
-换封面、相关书、书源登录/变量、Web 文件、清缓存、日志和同步仍需后续业务能力。
+`IN_PROGRESS`；P0～P3 基础入口已写入 Flutter 详情页但尚无用户运行证据；封面预览与更换、分组、
+允许更新、清除离线正文和重新搜索整书换源已经接入，详情内阅读时长时间线、相关书、书源变量、Web 文件、
+日志快捷入口和跨设备同步仍需后续业务能力。详情“后续能力”面板中的换封面说明已按真实菜单、操作卡和
+Route 调用链校准。
 搜索页的键盘收起、书名/作者结果 PageView 分类及详情主操作卡反馈方案见
 [`m06/02_search_result_and_book_info_interaction_plan.md`](./m06/02_search_result_and_book_info_interaction_plan.md)。
 该方案当前为 `IN_PROGRESS`；Flutter UI 已实现，待用户运行验证。
@@ -116,11 +118,12 @@ Flutter 只正确修正 X、没有像 Android 一样使用更新后的 X 联动�
 入口每次只读本地候选，并保证来源数量及相同详情 URL 的不同书源不丢失的存储选型、Schema v10 设计和
 入口契约见
 [`m06/04_search_book_source_candidates_persistence_design.md`](./m06/04_search_book_source_candidates_persistence_design.md)；
-当前为 `PROPOSED`，等待用户确认执行。
+当前为 `PARTIAL`：Schema v10、DAO、Repository 和 Gateway 已写入，但未注入 `AppDependencies`；搜索 Cell
+尚未整组写入，书架、阅读器、下载管理和换源后的详情入口仍构造单来源组，尚未执行只读恢复。
 搜索书名/作者/其他分类栏由 PageView 小数位置驱动共享滑动背景，以及阅读器顶部信息图标打开详情、
 暂退阅读系统模式并避免叠加双阅读器路由的方案见
 [`m11/search_selector_and_reader_detail_entry_design.md`](./m11/search_selector_and_reader_detail_entry_design.md)；
-当前为 `PROPOSED`，等待用户确认执行。
+当前代码已写入，等待用户验证。
 用户已确认采用官方 MMKV 2.4.x 并接受 Android 仅 64 位。项目级持久化清单、当前十组十一个键偏好迁移、
 SQLite/安全存储保留边界、首帧后 MMKV 初始化与兼容迁移，以及阅读器书籍快照复用、首次先导页、
 重复恢复页、最长 300 毫秒转场和应用级有界处理后正文 LRU 的当前合并实施方案见
@@ -513,6 +516,8 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 - M10 仍受 M9 和 M4 门禁约束，状态保持 `IN_PROGRESS`；安装、签名、JSF、WebView/Cookie、文件安全作用域和核心路径都等待用户结果。
 - M11 全功能迁移尚不能替代核心闭环验收。
 - 用户在获知 M10 尚待真机验收后要求继续执行 M11；整书换源、单章换源、离线下载及书架历史双页/API 质量上报均为代码已写入、等待用户验证，该决定不等同于 M9/M10 通过。
+- M00 功能矩阵已在 2026-08-02 按当前源码重新校准，统一使用 `BLOCKED`、`IMPLEMENTED_PENDING_VERIFICATION`、`PARTIAL`、`NOT_STARTED` 和 `DEFERRED`；旧阶段文档中的早期 `NOT_STARTED` 不能再作为当前功能事实。
+- 搜索书源候选持久化当前只有 Schema v10、DAO、Repository 和 Gateway，组合根及搜索/详情入口没有调用；这是未接线的 `PARTIAL` 基础设施，不得因表和类存在宣称功能完成。
 - UI 与阅读器重构已写入 R1～R5 第一批实现；未运行编译、分析、测试、格式化或应用启动，阶段保持 `IN_PROGRESS`，具体未完成项见重构方案的“实施快照”。
 - 小说正文阅读界面完整 UI 对齐已有 P0～P4 优先级文档，状态为 `IN_PROGRESS`；默认左右覆盖翻页、可选贝塞尔仿真翻页、章节标题分页、首行缩进、两端对齐、长章节首屏增量分页、后台分批续算、完整分页 LRU、点击区域、音量键翻页、页眉页脚时间/电量、亮度、方向、原生文字选择和用户高亮/下划线已写入 Flutter，但尚无用户运行证据。
 - 小说阅读详情页完整 UI 对齐已有 P0～P3 优先级文档，状态为 `IN_PROGRESS`；P0～P3 基础入口和可用子集已写入 Flutter 详情页但尚无用户运行证据，依赖型能力仍按文档继续拆分。

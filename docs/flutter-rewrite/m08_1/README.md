@@ -21,7 +21,7 @@
 - iOS `Info.plist` 已声明 `public.plain-text` 文档类型；`SceneDelegate` 同时接收冷启动 `connectionOptions.urlContexts` 和热启动 `scene(_:openURLContexts:)`，`ExternalTxtOpenBridge.swift` 对安全作用域或 App Inbox 文件执行协调读取、1 GiB 上限流式复制、有界排队和 cache 临时副本清理，并只删除确认位于本 App `Documents/Inbox` 的系统投递副本，不删除文件提供方原文件。iOS 与 Android 共用现有 `ExternalLocalBookOpenService`、导入确认页及后续私有副本/解析链路，并关闭 Flutter 默认深链路接管，代码等待用户真机验证。
 - 本地书仍保存在当前游客或账号作用域的普通书架表中；书架系统分组现已显示已有的 `BookGroup.idLocal`，并在“我的 -> 本地书籍”提供明确入口。保活主框架直接切换现有书架实例和本地分组，不创建第三套本地书数据状态。
 - 欢迎页和 M7 书架顶部均新增“导入本地书”入口。
-- `ReadBookCoordinator` 已通过 `LocalBookContentService` 读取 TXT/EPUB，不再对全部 `loc_book` 返回 M08 占位错误；本地文本继续复用替换规则、字符锚点、书签、缓存和相邻章预加载。
+- `ReadBookCoordinator` 已通过 `LocalBookContentService` 和注册表读取 TXT/EPUB/UMD，不再对全部 `loc_book` 返回 M08 占位错误；本地文本继续复用替换规则、字符锚点、书签、缓存和相邻章预加载。
 - 新增 `pdfx ^2.9.2` 依赖、`PdfLocalBookParser`、统一 `BookReaderRoute` 和 `PdfReaderRoute`。导入时读取真实页数并每页建立稳定目录；阅读时使用原生页面渲染、纵向翻页、双指缩放和页码目录跳转。
 - PDF 进度以零基页索引保存到章节字段，`chapterPos` 固定为 0；不执行正文替换，也不进入 `ReaderChapterContent` 文本分块模型。
 - 书架网络目录刷新会跳过 `loc_book` 和 `canUpdate=false` 的书籍，避免把本地书错误送入网络书源刷新器。

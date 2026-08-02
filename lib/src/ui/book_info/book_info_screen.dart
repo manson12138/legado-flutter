@@ -1298,7 +1298,7 @@ Future<void> _showFeatureMatrix(
             const _BookInfoFeatureTile(
               icon: Icons.wallpaper_outlined,
               title: '换封面 / 保存封面',
-              subtitle: '待接入封面搜索协调器和封面缓存策略。',
+              subtitle: '已接入：通过主操作卡、更多菜单或长按封面打开书源候选和本地图片面板。',
             ),
             _BookInfoFeatureTile(
               icon: Icons.folder_copy_outlined,

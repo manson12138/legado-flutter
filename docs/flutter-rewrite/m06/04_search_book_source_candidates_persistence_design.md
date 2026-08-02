@@ -1,7 +1,8 @@
 # 搜索命中书源候选持久化与详情入口只读恢复设计
 
-> 状态：`PROPOSED / 等待用户确认执行`  
+> 状态：`PARTIAL / Schema、DAO、Repository、Gateway 已写入，但业务调用链尚未接通`  
 > 创建日期：2026-07-30  
+> 最后静态核对：2026-08-02  
 > 范围：搜索结果 Cell 携带的同名同作者书源候选覆盖持久化，以及书架、阅读器、下载管理等非搜索入口打开详情时的本地候选恢复。
 
 ## 1. 用户确认的业务语义
@@ -328,7 +329,21 @@ AI 不运行 build、test、analyze、lint、format、数据库检查或应用�
 10. 快速连续点击 Cell，确认只打开一个详情且最终持久化组没有被旧事务覆盖。
 11. 升级旧安装后首次进入非搜索详情应安全退化为当前单来源；从搜索点击一次后再进入即可恢复多来源。
 
-## 14. 完成判断
+## 14. 当前实现事实与完成判断
 
-当前仅完成静态分析和实施设计。用户确认执行后才能修改业务代码和数据库 Schema；代码写入后仍只能标记
-`IMPLEMENTED / 待用户验证`，必须取得用户运行结果后才能描述为已验证。
+2026-08-02 按源码重新核对后，原“仅完成设计”的判断已经过时，当前实际存在：
+
+- `LegadoDatabase.schemaVersion == 11`，Schema v10 已创建 `book_source_candidates` 表和两个索引；
+- `BookSourceCandidateDao` 已实现按书名作者读取，以及事务内删除旧组并批量写入新组；
+- `BookSourceCandidateRepository` 和 `BookSourceCandidateGateway` 已实现读取与搜索快照整组覆盖契约；
+- Entity Map 和数据库表常量已经存在。
+
+但以下真实调用链仍缺失：
+
+- `AppDependencies.create()` 没有创建或注入 `BookSourceCandidateDao`、Repository 和 Gateway；
+- 搜索页处理 `OpenBookInfoEffect` 时直接导航，没有在点击 Cell 时调用 `replaceFromSearch()`；
+- 书架、阅读器、下载管理和换源后的详情入口仍各自构造单来源 `BookSearchResultGroup`，没有调用 `load()`；
+- 删除书源后的级联结果、快速连续点击和跨入口恢复尚无用户运行证据。
+
+因此本专项必须保持 `PARTIAL`，不能标记 `IMPLEMENTED`。只有组合根注入、搜索入口写入、非搜索入口只读恢复、
+错误与取消边界全部接通后，才能改为 `IMPLEMENTED_PENDING_VERIFICATION`；取得用户运行结果后才允许继续更新完成状态。

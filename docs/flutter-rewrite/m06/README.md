@@ -45,13 +45,13 @@
 - 搜索候选已按置顶、历史成功率和稳定后备顺序排列；详情页目录失败后的受控自动回退首批代码已写入，待用户验证，方案与边界见 [`02_search_source_ranking_and_detail_failover_plan.md`](./02_search_source_ranking_and_detail_failover_plan.md)。
 - 搜索 Cell 聚合来源整组覆盖持久化、非搜索详情入口只读恢复及精确来源数量的实施方案见
   [`04_search_book_source_candidates_persistence_design.md`](./04_search_book_source_candidates_persistence_design.md)，
-  当前为 `PROPOSED`，等待用户确认执行。
+  当前为 `PARTIAL`：Schema v10、DAO、Repository 和 Gateway 已存在，但组合根、搜索点击写入和非搜索入口读取尚未接通。
 
 1. M4 尚未取得 Android/iOS 真实 JavaScript 书源结果；M6 已接入 QuickJS 混合规则链路，不再预先拒绝脚本书源，但同步 `java.ajax/connect/get/post`、任意 JVM 类和 WebView 书源仍会返回明确的兼容边界错误。
 2. 普通规则也尚未由用户使用真实书源验证搜索、详情、分页目录和加入书架，因此不能标记 `ANDROID_READY`。
 3. 第一批只搜索第 1 页；搜索翻页、按分组/类型筛选和单源展开分页留待后续。
-4. 基础换源只使用当前结果组中的来源；独立全书源精确换源、相似度评分和阅读进度迁移留待后续。
-5. 封面目前展示信息字段，图片加载组件尚未接入。
+4. 基础换源继续使用当前结果组；独立整书换源已在 M11 接入重新搜索、候选详情/目录、原子主键迁移和阅读进度迁移，等待真实书源与事务验收。
+5. 详情封面显示、预览和共用封面替换面板已接入；封面候选、本地图片、恢复默认和历史快照同步等待双端验证。
 
 ## 用户验收步骤
 
