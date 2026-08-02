@@ -69,6 +69,7 @@ import '../domain/gateway/authentication_gateway.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
 import '../domain/usecase/save_book_content_process_use_case.dart';
 import '../domain/usecase/delete_books_from_bookshelf_use_case.dart';
+import '../domain/usecase/delete_reading_history_use_case.dart';
 import '../domain/usecase/create_bookshelf_group_use_case.dart';
 import '../domain/usecase/change_book_source_use_case.dart';
 import '../domain/usecase/import_book_sources_use_case.dart';
@@ -177,6 +178,7 @@ final class AppDependencies {
     required this.saveReadingProgress,
     required this.restoreReadingProgress,
     required this.recordReadingHistory,
+    required this.deleteReadingHistory,
     required this.saveBookContentProcess,
     required this.standardBookSourceService,
     required this.bookDetailService,
@@ -232,6 +234,7 @@ final class AppDependencies {
       database,
       bookDao,
       chapterDao,
+      readingHistoryDao,
       currentUserScope.requireUserId,
     );
     /// 封面搜索复用 `searchBooks` 的独立缓存边界。
@@ -459,6 +462,22 @@ final class AppDependencies {
     // 用组合根这一次性调用把持久化实现接进去，避免逐个页面 Screen/Route 都要新增
     // 参数传递这套跨页面展示缓存。
     CoverUrlCache.instance.configure(readerRepository);
+    /// 双端本地封面选择与应用私有副本服务。
+    const DefaultLocalBookCoverService localBookCoverService =
+        DefaultLocalBookCoverService();
+    /// 首帧前异步预建封面目录；失败时实际显示或选择仍会按需重试。
+    unawaited(
+      localBookCoverService.warmUp().onError(
+        (Object error, StackTrace stackTrace) {
+          logger.warning(
+            tag: appStartupLogTag,
+            message: 'stage=local_book_cover_directory_warmup_degraded',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        },
+      ),
+    );
     /// M08.1 应用私有本地书副本管理器。
     const LocalBookStorage localBookStorage = LocalBookStorage();
     /// M08.1 当前已经真实实现的 TXT 与 EPUB 解析器注册表。
@@ -497,9 +516,12 @@ final class AppDependencies {
       standardService: standardBookSourceService,
       logger: logger,
     );
-    /// 首次成功阅读和启动自动更新共同复用的历史快照保存动作。
+    /// 首次成功阅读时创建或覆盖历史快照的业务动作。
     final RecordReadingHistoryUseCase recordReadingHistory =
         RecordReadingHistoryUseCase(readingHistoryRepository);
+    /// 批量删除历史成员和级联目录快照，不影响同书的书架记录。
+    final DeleteReadingHistoryUseCase deleteReadingHistory =
+        DeleteReadingHistoryUseCase(readingHistoryRepository);
     /// 默认书源准备完成后在后台更新书架与历史目录，不阻塞启动首屏。
     final BookshelfHistoryAutoRefreshService
         bookshelfHistoryAutoRefreshService =
@@ -511,7 +533,6 @@ final class AppDependencies {
       checkpointDao: tocRefreshCheckpointDao,
       detailService: bookDetailService,
       saveBookshelfBook: addBookToBookshelf,
-      saveReadingHistory: recordReadingHistory,
       cancellationTokenFactory: DioHttpCancellationToken.new,
       logger: logger,
     );
@@ -632,13 +653,14 @@ final class AppDependencies {
         analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
       ),
       updateBookCustomCover: UpdateBookCustomCoverUseCase(bookRepository),
-      localBookCoverService: const DefaultLocalBookCoverService(),
+      localBookCoverService: localBookCoverService,
       replaceBooksGroup: ReplaceBooksGroupUseCase(bookRepository),
       loadBookChapters: LoadBookChaptersUseCase(bookRepository),
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
       saveReadingProgress: SaveReadingProgressUseCase(bookRepository),
       restoreReadingProgress: RestoreReadingProgressUseCase(bookRepository),
       recordReadingHistory: recordReadingHistory,
+      deleteReadingHistory: deleteReadingHistory,
       saveBookContentProcess: SaveBookContentProcessUseCase(readerRepository),
       standardBookSourceService: standardBookSourceService,
       bookDetailService: bookDetailService,
@@ -799,6 +821,9 @@ final class AppDependencies {
 
   /// 首次成功阅读后记录历史快照的业务动作。
   final RecordReadingHistoryUseCase recordReadingHistory;
+
+  /// 批量删除阅读历史成员和级联目录快照的业务动作。
+  final DeleteReadingHistoryUseCase deleteReadingHistory;
 
   /// 从稳定正文选区创建用户高亮或下划线的业务动作。
   final SaveBookContentProcessUseCase saveBookContentProcess;

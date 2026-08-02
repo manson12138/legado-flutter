@@ -8,6 +8,7 @@ import '../../domain/usecase/update_book_custom_cover_use_case.dart';
 import '../../model/web_book/book_cover_search_coordinator.dart';
 import '../../platform/local_book_cover_service.dart';
 import '../components/book_cover.dart';
+import '../components/cover_url_cache.dart';
 import '../theme/app_tokens.dart';
 import 'change_book_cover_contract.dart';
 import 'change_book_cover_view_model.dart';
@@ -111,26 +112,26 @@ final class _ChangeBookCoverSheetState extends State<ChangeBookCoverSheet> {
     }
   }
 
-  /// 打开系统图片选择器；平台返回后只把应用私有路径交回 ViewModel。
+  /// 打开系统图片选择器；平台复制完成后只把应用私有封面稳定标识交回 ViewModel。
   Future<void> _pickLocalBookCover() async {
     try {
-      /// 已复制到应用支持目录的本地封面路径；空值表示用户取消。
-      final String? coverPath = await widget.localBookCoverService
+      /// 已复制到应用支持目录的本地封面稳定标识；空值表示用户取消。
+      final String? coverReference = await widget.localBookCoverService
           .pickAndPersist(widget.book.bookUrl);
       if (!mounted) {
-        if (coverPath != null) {
+        if (coverReference != null) {
           await widget.localBookCoverService.deleteManagedCover(
-            coverPath,
+            coverReference,
             exceptPath: widget.book.customCoverUrl,
           );
         }
         return;
       }
-      if (coverPath == null) {
+      if (coverReference == null) {
         _viewModel.onIntent(const CancelLocalBookCoverPickIntent());
         return;
       }
-      _viewModel.onIntent(LocalBookCoverPickedIntent(coverPath));
+      _viewModel.onIntent(LocalBookCoverPickedIntent(coverReference));
     } on Object {
       if (!mounted) {
         return;
@@ -144,6 +145,15 @@ final class _ChangeBookCoverSheetState extends State<ChangeBookCoverSheet> {
 
   /// 保存成功后清理这本书旧的受管图片，再携带数据库最新书籍关闭面板。
   Future<void> _closeWithSavedBook(Book book) async {
+    /// 数据库已经确认生效的自定义封面稳定值。
+    final String customCover = book.customCoverUrl?.trim() ?? '';
+    if (customCover.isNotEmpty) {
+      CoverUrlCache.instance.remember(
+        name: book.name,
+        author: book.author,
+        url: customCover,
+      );
+    }
     try {
       await widget.localBookCoverService.deleteManagedCover(
         widget.book.customCoverUrl,

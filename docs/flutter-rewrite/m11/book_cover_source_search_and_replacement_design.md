@@ -170,9 +170,16 @@ Document Picker 的外部路径权限。
 “恢复默认封面”始终可用，因此无书源时用户仍可清除自定义封面。
 
 头部同时提供“选择本地图片”入口。选中的图片先按书籍主键与内容摘要复制到
-`Application Support/custom_book_covers`，复制成功后仍复用 `UpdateBookCustomCoverUseCase` 字段级写入；
+`Application Support/custom_book_covers`。数据库不保存可能随 iOS 容器变化的绝对路径，只保存
+`legado-cover://local/<文件名>` 稳定标识，显示时再同步解析为本次运行的真实沙盒路径；旧版本已经保存的
+`.../custom_book_covers/<文件名>` 绝对路径会自动按文件名兼容。复制成功后仍复用
+`UpdateBookCustomCoverUseCase` 字段级写入；
 保存失败会删除未生效副本，后续换成网络封面、另一张本地图片或恢复默认时会删除该书旧的受管副本。
 网络地址、应用目录之外的历史路径和其他书籍文件不会被清理。
+
+字段更新在同一 SQLite 事务内同时写入 `books` 和已存在的 `reading_history_books` 快照；没有历史记录时
+不会为换封面凭空创建历史。公共 `BookCover` 同步复用本进程已成功显示的稳定封面标识与 Flutter 图片
+缓存，书架/历史页面重建时不再先走异步地址兜底而闪出无封面占位。
 
 ### 5.2 书架入口
 
@@ -223,6 +230,7 @@ UI 层：
 - 缓存查询最多返回 200 条，避免无界读取 `searchBooks`；
 - 候选只保存必要的书名、作者、封面 URL、来源和书籍 URL；
 - 图片继续使用现有 `BookCover` 与 Flutter 图片缓存，不新增原图常驻内存缓存；
+- 应用启动后立即预热本地封面目录，后续页面切换同步解析稳定标识，不重复等待 `path_provider`；
 - 网格采用懒构建，不一次性实例化全部图片；
 - ViewModel 不保存 `BuildContext`；
 - 面板关闭、目标书变化或重试时都取消旧搜索，旧代次结果不得回写新状态；
@@ -242,6 +250,7 @@ UI 层：
 10. 搜索中关闭面板后不再更新已销毁页面，重新搜索不会接收上一代结果。
 11. 不新增数据库字段，不提升数据库版本和应用构建号。
 12. 无书源或搜索无结果时仍可选择本地图片；保存后重启应用封面继续可用，换成其他封面时不会误删相册原图。
+13. 本地封面在书架和已有阅读历史中同步更新；两个页面来回切换时不再重复显示“无封面 → 本地封面”。
 
 ## 9. 实施记录
 
@@ -251,9 +260,11 @@ UI 层：
 - `lib/src/ui/change_book_cover/` 提供共用 MVI 状态、ViewModel 和自适应底部面板；
 - `lib/src/platform/local_book_cover_service.dart` 负责双端系统图片选择、应用私有副本和受控清理；
 - `BookDao`、`BookshelfGateway`、`BookRepository` 与 `UpdateBookCustomCoverUseCase` 使用字段级 SQL 更新 `customCoverUrl`；
+- `BookRepository` 在同一事务内同步书架和已有阅读历史快照的 `customCoverUrl`；
 - `SearchBookDao` 与 `BookCoverCandidateRepository` 复用 `searchBooks`，查询最多 200 条非空封面缓存；
 - 书架长按单选操作栏和书籍详情操作卡、菜单、封面长按均已接入共用面板；
 - 面板关闭、停止和重新搜索都会取消旧 `BookSearchRun`，并以搜索代次拒绝迟到事件；
 - 面板头部可直接选择本地图片，即使没有书源或搜索无结果也能完成换封面。
+- 本地封面改存稳定 `legado-cover` 标识并兼容旧绝对路径，公共封面组件增加同步内存快路径，修复重启丢图和页面切换闪占位。
 
 依照项目约束，本轮没有运行 Flutter、Dart、构建、测试、分析、格式化或应用启动命令，功能等待用户验收。

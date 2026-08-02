@@ -7,6 +7,7 @@ import '../../domain/model/reading_progress.dart';
 import '../../help/error/app_error.dart';
 import '../dao/book_chapter_dao.dart';
 import '../dao/book_dao.dart';
+import '../dao/reading_history_dao.dart';
 import '../local/data_error.dart';
 import '../local/database_tables.dart';
 import '../local/legado_database.dart';
@@ -19,6 +20,7 @@ final class BookRepository
     this._database,
     this._bookDao,
     this._chapterDao,
+    this._readingHistoryDao,
     this._requireUserId,
   );
 
@@ -28,6 +30,8 @@ final class BookRepository
   final BookDao _bookDao;
   /// `chapters` 表 DAO。
   final BookChapterDao _chapterDao;
+  /// 与书架独立的阅读历史快照 DAO，用于同步用户封面事实。
+  final ReadingHistoryDao _readingHistoryDao;
 
   /// 返回当前认证用户 ID；未登录访问会由应用作用域抛出明确错误。
   final int Function() _requireUserId;
@@ -234,18 +238,32 @@ final class BookRepository
   ) {
     final int userId = _requireUserId();
     return guardDataOperation<Book>(() async {
-      /// 本次字段更新实际命中的书架行数。
-      final int changedRows = await _bookDao.updateCustomCover(
-        userId: userId,
-        bookUrl: bookUrl,
-        customCoverUrl: customCoverUrl,
-      );
-      if (changedRows == 0) {
-        throw const AppError(
-          kind: AppErrorKind.validation,
-          message: '书籍已不在书架中，无法更换封面',
+      await _database.transaction<void>((transaction) async {
+        /// 本次字段更新实际命中的书架行数。
+        final int changedRows = await _bookDao.updateCustomCover(
+          userId: userId,
+          bookUrl: bookUrl,
+          customCoverUrl: customCoverUrl,
+          executor: transaction,
         );
-      }
+        if (changedRows == 0) {
+          throw const AppError(
+            kind: AppErrorKind.validation,
+            message: '书籍已不在书架中，无法更换封面',
+          );
+        }
+        /// 已有历史快照同步同一个用户封面；没有阅读历史时不会创建新记录。
+        await _readingHistoryDao.updateCustomCover(
+          userId: userId,
+          bookUrl: bookUrl,
+          customCoverUrl: customCoverUrl,
+          executor: transaction,
+        );
+      });
+      _database.changeNotifier.notifyTables(<String>{
+        DatabaseTables.books,
+        DatabaseTables.readingHistoryBooks,
+      });
       /// 更新后重新读取的完整书籍事实，供详情页立即刷新且不复制旧字段。
       final Book? updatedBook = await _bookDao.getByUrl(userId, bookUrl);
       if (updatedBook == null) {

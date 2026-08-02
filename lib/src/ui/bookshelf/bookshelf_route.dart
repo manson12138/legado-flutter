@@ -23,18 +23,6 @@ import 'reading_history_contract.dart';
 import 'reading_history_screen.dart';
 import 'reading_history_view_model.dart';
 
-/// 书架选择模式溢出菜单动作，避免手机窄屏操作栏拥挤。
-enum _BookshelfSelectionAction {
-  /// 移动到用户分组。
-  move,
-
-  /// 对唯一选中的网络书执行整书换源。
-  changeSource,
-
-  /// 删除选中书籍。
-  delete,
-}
-
 /// 连接书架 ViewModel、对话框、导航 Effect 和纯 UI 的路由层。
 final class BookshelfRoute extends StatefulWidget {
   /// 创建书架路由。
@@ -84,6 +72,8 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   double _pageProgress = 0;
   /// 当前已展示的业务对话框。
   BookshelfDialog? _shownDialog;
+  /// 当前已展示的阅读历史删除确认对话框。
+  ReadingHistoryDialog? _shownHistoryDialog;
 
   /// 是否已有书架或历史阅读导航在栈中，阻止快速双击创建重复阅读器。
   bool _openingReader = false;
@@ -109,6 +99,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _historyViewModel = ReadingHistoryViewModel(
       gateway: widget.dependencies.readingHistoryGateway,
+      deleteHistory: widget.dependencies.deleteReadingHistory,
       layoutPreferences: widget.dependencies.bookshelfLayoutPreferences,
       startupPreloader: widget.dependencies.bookshelfHistoryStartupPreloader,
       logger: widget.dependencies.logger,
@@ -139,9 +130,15 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
 
   /// 一级目的地隐藏时清空批量选择，避免回到书架继续误操作。
   void _handleVisibilityChanged() {
-    if (widget.visibilityListenable?.value == false &&
-        _viewModel.state.selectionMode) {
-      _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    if (widget.visibilityListenable?.value == false) {
+      if (_viewModel.state.selectionMode) {
+        _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+      }
+      if (_historyViewModel.state.selectionMode) {
+        _historyViewModel.onIntent(
+          const ExitReadingHistorySelectionIntent(),
+        );
+      }
     }
   }
 
@@ -150,6 +147,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     final int targetIndex = index.clamp(0, 1).toInt();
     if (targetIndex != 0) {
       _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    }
+    if (targetIndex != 1) {
+      _historyViewModel.onIntent(
+        const ExitReadingHistorySelectionIntent(),
+      );
     }
     if (_pageController.hasClients) {
       _pageController.animateToPage(
@@ -164,6 +166,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   void _handlePageChanged(int index) {
     if (index != 0) {
       _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    }
+    if (index != 1) {
+      _historyViewModel.onIntent(
+        const ExitReadingHistorySelectionIntent(),
+      );
     }
   }
 
@@ -209,8 +216,17 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   }
 
   /// 构建固定在页面上方的书架/历史公共操作栏。
-  PreferredSizeWidget _buildTopAppBar(BookshelfUiState state) {
-    if (state.selectionMode && _pageProgress < 0.5) {
+  PreferredSizeWidget _buildTopAppBar(
+    BookshelfUiState state,
+    ReadingHistoryUiState historyState,
+  ) {
+    /// 当前横滑位置主要展示的是否为书架页。
+    final bool onBookshelf = _pageProgress < 0.5;
+    /// 当前主要页面是否正在使用封面网格布局。
+    final bool currentGridLayout = onBookshelf
+        ? state.layoutMode == BookshelfLayoutMode.grid
+        : historyState.layoutMode == ReadingHistoryLayoutMode.grid;
+    if (onBookshelf && state.selectionMode) {
       return AppBar(
         leading: IconButton(
           onPressed: () => _viewModel.onIntent(const ExitBookshelfSelectionIntent()),
@@ -219,63 +235,40 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         ),
         title: Text('已选择 ${state.selectedBookUrls.length} 本'),
         actions: <Widget>[
-          IconButton(onPressed: () => _viewModel.onIntent(const SelectAllBookshelfBooksIntent()), icon: const Icon(Icons.select_all), tooltip: '全选当前列表'),
-          IconButton(onPressed: () => _viewModel.onIntent(const RefreshBookshelfIntent()), icon: const Icon(Icons.refresh), tooltip: '刷新选中书籍'),
-          IconButton(
-            onPressed: state.selectedBookUrls.length == 1
-                ? () => _viewModel.onIntent(
-                    const OpenSelectedBookCoverChangeIntent(),
-                  )
-                : null,
-            icon: const Icon(Icons.wallpaper_outlined),
-            tooltip: '更换封面',
+          TextButton.icon(
+            onPressed: () => _viewModel.onIntent(
+              const SelectAllBookshelfBooksIntent(),
+            ),
+            icon: const Icon(Icons.select_all),
+            label: const Text('全选'),
           ),
-          PopupMenuButton<_BookshelfSelectionAction>(
-            tooltip: '更多选择操作',
-            onSelected: (_BookshelfSelectionAction action) {
-              switch (action) {
-                case _BookshelfSelectionAction.move:
-                  _viewModel.onIntent(
-                    const RequestMoveBookshelfBooksIntent(),
-                  );
-                case _BookshelfSelectionAction.changeSource:
-                  _viewModel.onIntent(
-                    const OpenSelectedBookSourceChangeIntent(),
-                  );
-                case _BookshelfSelectionAction.delete:
-                  _viewModel.onIntent(
-                    const RequestDeleteBookshelfBooksIntent(),
-                  );
-              }
-            },
-            itemBuilder: (BuildContext context) =>
-                <PopupMenuEntry<_BookshelfSelectionAction>>[
-                  const PopupMenuItem<_BookshelfSelectionAction>(
-                    value: _BookshelfSelectionAction.move,
-                    child: ListTile(
-                      leading: Icon(Icons.drive_file_move_outline),
-                      title: Text('移动分组'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  PopupMenuItem<_BookshelfSelectionAction>(
-                    value: _BookshelfSelectionAction.changeSource,
-                    enabled: state.selectedBookUrls.length == 1,
-                    child: const ListTile(
-                      leading: Icon(Icons.swap_horiz),
-                      title: Text('整书换源'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const PopupMenuItem<_BookshelfSelectionAction>(
-                    value: _BookshelfSelectionAction.delete,
-                    child: ListTile(
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('删除'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                ],
+        ],
+      );
+    }
+    if (!onBookshelf && historyState.selectionMode) {
+      return AppBar(
+        leading: IconButton(
+          onPressed: () => _historyViewModel.onIntent(
+            const ExitReadingHistorySelectionIntent(),
+          ),
+          icon: const Icon(Icons.close),
+          tooltip: '退出选择',
+        ),
+        title: Text('已选择 ${historyState.selectedBookUrls.length} 本'),
+        actions: <Widget>[
+          TextButton.icon(
+            onPressed: () => _historyViewModel.onIntent(
+              const SelectAllReadingHistoryBooksIntent(),
+            ),
+            icon: const Icon(Icons.select_all),
+            label: const Text('全选'),
+          ),
+          TextButton.icon(
+            onPressed: () => _historyViewModel.onIntent(
+              const RequestDeleteReadingHistoryIntent(),
+            ),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('删除'),
           ),
         ],
       );
@@ -296,7 +289,13 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       ),
       actions: <Widget>[
         IconButton(onPressed: () => _handleTopAction(0), icon: const Icon(Icons.upload_file_outlined), tooltip: '导入本地书'),
-        IconButton(onPressed: () => _handleTopAction(1), icon: Icon(_pageProgress < 0.5 && state.layoutMode == BookshelfLayoutMode.grid ? Icons.view_list : Icons.grid_view), tooltip: '切换列表或网格'),
+        IconButton(
+          onPressed: () => _handleTopAction(1),
+          icon: Icon(
+            currentGridLayout ? Icons.view_list : Icons.grid_view,
+          ),
+          tooltip: '切换列表或网格',
+        ),
         IconButton(onPressed: () => _handleTopAction(2), icon: Icon(_pageProgress < 0.5 && state.refreshing ? Icons.stop_circle_outlined : Icons.refresh), tooltip: _pageProgress < 0.5 && state.refreshing ? '停止刷新' : '刷新'),
       ],
     );
@@ -320,6 +319,10 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
             transitionSpec: transitionSpec,
           ),
         );
+      case ShowReadingHistoryMessageEffect(message: final String message):
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -504,6 +507,59 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     });
   }
 
+  /// 根据历史 UiState 同步一次删除确认对话框，避免重复展示同一实例。
+  void _syncHistoryDialog(ReadingHistoryDialog? dialog) {
+    if (dialog == null || identical(dialog, _shownHistoryDialog)) {
+      return;
+    }
+    _shownHistoryDialog = dialog;
+    WidgetsBinding.instance.addPostFrameCallback((Duration timeStamp) async {
+      if (!mounted || !identical(dialog, _shownHistoryDialog)) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext context) => _buildHistoryDialog(dialog),
+      );
+      if (identical(dialog, _shownHistoryDialog)) {
+        _shownHistoryDialog = null;
+        _historyViewModel.onIntent(
+          const DismissReadingHistoryDialogIntent(),
+        );
+      }
+    });
+  }
+
+  /// 构建历史删除确认，明确不会删除同一本书的书架成员和阅读数据。
+  Widget _buildHistoryDialog(ReadingHistoryDialog dialog) {
+    return switch (dialog) {
+      DeleteReadingHistoryDialog(
+        bookUrls: final Set<String> bookUrls,
+      ) => AlertDialog(
+        title: const Text('确认删除阅读历史'),
+        content: Text(
+          '将删除 ${bookUrls.length} 本书的历史记录和历史目录快照。'
+          '不会从书架删除书籍，也不会删除本地原始文件。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _historyViewModel.onIntent(
+                const ConfirmDeleteReadingHistoryIntent(),
+              );
+            },
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    };
+  }
+
   /// 构建删除或移动分组对话框。
   Widget _buildDialog(BookshelfDialog dialog) {
     return switch (dialog) {
@@ -561,43 +617,56 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         /// 当前可渲染状态。
         final BookshelfUiState state = snapshot.data ?? _viewModel.state;
         _syncDialog(state.dialog);
-        return PopScope<Object?>(
-          canPop: !state.selectionMode,
-          onPopInvokedWithResult: (bool didPop, Object? result) {
-            if (!didPop && state.selectionMode) {
-              _viewModel.onIntent(
-                const ExitBookshelfSelectionIntent(),
-              );
-            }
-          },
-          child: AppScaffold(
-            appBar: _buildTopAppBar(state),
-            body: PageView(
-              controller: _pageController,
-              onPageChanged: _handlePageChanged,
-              children: <Widget>[
-                BookshelfScreen(
-                  state: state,
-                  onIntent: _viewModel.onIntent,
-                  onPageSelected: _selectPage,
-                  showBackButton: !widget.embedded,
-                ),
-                StreamBuilder<ReadingHistoryUiState>(
-                  stream: _historyViewModel.states,
-                  initialData: _historyViewModel.state,
-                  builder: (
-                    BuildContext context,
-                    AsyncSnapshot<ReadingHistoryUiState> snapshot,
-                  ) {
-                    return ReadingHistoryScreen(
-                      state: snapshot.data ?? _historyViewModel.state,
+        return StreamBuilder<ReadingHistoryUiState>(
+          stream: _historyViewModel.states,
+          initialData: _historyViewModel.state,
+          builder: (
+            BuildContext context,
+            AsyncSnapshot<ReadingHistoryUiState> historySnapshot,
+          ) {
+            /// 当前可渲染的阅读历史状态。
+            final ReadingHistoryUiState historyState =
+                historySnapshot.data ?? _historyViewModel.state;
+            _syncHistoryDialog(historyState.dialog);
+            /// 当前页面是否处于任意一种批量选择模式。
+            final bool selectionMode =
+                state.selectionMode || historyState.selectionMode;
+            return PopScope<Object?>(
+              canPop: !selectionMode,
+              onPopInvokedWithResult: (bool didPop, Object? result) {
+                if (didPop) {
+                  return;
+                }
+                if (state.selectionMode) {
+                  _viewModel.onIntent(
+                    const ExitBookshelfSelectionIntent(),
+                  );
+                }
+                if (historyState.selectionMode) {
+                  _historyViewModel.onIntent(
+                    const ExitReadingHistorySelectionIntent(),
+                  );
+                }
+              },
+              child: AppScaffold(
+                appBar: _buildTopAppBar(state, historyState),
+                body: PageView(
+                  controller: _pageController,
+                  onPageChanged: _handlePageChanged,
+                  children: <Widget>[
+                    BookshelfScreen(
+                      state: state,
+                      onIntent: _viewModel.onIntent,
+                    ),
+                    ReadingHistoryScreen(
+                      state: historyState,
                       onIntent: _historyViewModel.onIntent,
-                    );
-                  },
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );

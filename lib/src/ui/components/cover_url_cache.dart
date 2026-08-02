@@ -34,6 +34,14 @@ final class CoverUrlCache {
   /// 生成稳定缓存键；书名和作者都先去除首尾空白，避免格式差异导致命中失败。
   String _key(String name, String author) => '${name.trim()}|${author.trim()}';
 
+  /// 同步读取本进程已经成功显示过的封面，供列表重建时直接复用首帧。
+  String? lookupSync({required String name, required String author}) {
+    if (name.trim().isEmpty) {
+      return null;
+    }
+    return _memory[_key(name, author)];
+  }
+
   /// 查找同一本书之前在任意页面成功显示过的封面地址；先查内存，未命中再查数据库。
   Future<String?> lookup({required String name, required String author}) async {
     if (name.trim().isEmpty) {

@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../app/reader_transition_spec.dart';
 import '../../model/bookshelf/bookshelf_refresh_coordinator.dart';
-import '../components/app_scaffold.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 import 'book_grid_layout.dart';
 import 'bookshelf_contract.dart';
-import 'bookshelf_page_switcher.dart';
 
 /// 读取点击瞬间封面 RenderBox 的全局矩形，不把 Context 或 RenderObject 传入阅读路由。
 Rect? _bookshelfCoverGlobalRect(BuildContext? context) {
@@ -43,8 +41,6 @@ final class BookshelfScreen extends StatelessWidget {
   const BookshelfScreen({
     required this.state,
     required this.onIntent,
-    required this.onPageSelected,
-    this.showBackButton = true,
     super.key,
   });
 
@@ -53,102 +49,170 @@ final class BookshelfScreen extends StatelessWidget {
   /// 用户操作统一入口。
   final ValueChanged<BookshelfIntent> onIntent;
 
-  /// 书架/历史目标页切换回调。
-  final ValueChanged<int> onPageSelected;
-
-  /// 普通模式顶部栏是否展示返回按钮。
-  final bool showBackButton;
-
-  /// 构建选择模式或普通模式顶部栏和共享页面状态。
+  /// 构建高度稳定的筛选区、书籍内容和选择态悬浮操作条。
   @override
   Widget build(BuildContext context) {
-    return Column(
-        children: <Widget>[
-          if (!state.selectionMode) _BookshelfControls(state: state, onIntent: onIntent),
-          if (state.refreshing || state.refreshProgress.total > 0)
-            _BookshelfRefreshStatus(state: state, onIntent: onIntent),
-          if (state.refreshFailures.isNotEmpty)
-            _BookshelfRefreshFailures(failures: state.refreshFailures),
-          Expanded(child: _BookshelfBody(state: state, onIntent: onIntent)),
-        ],
-    );
-  }
-
-  /// 构建普通顶部栏。
-  PreferredSizeWidget _normalAppBar() {
-    return AppBar(
-      automaticallyImplyLeading: false,
-      leading: showBackButton
-          ? IconButton(
-              onPressed: () => onIntent(const BackFromBookshelfIntent()),
-              icon: const Icon(Icons.arrow_back),
-              tooltip: '返回',
-            )
-          : null,
-      title: BookshelfPageSwitcher(
-        pageProgress: 0,
-        onSelected: onPageSelected,
-      ),
-      actions: <Widget>[
-        IconButton(
-          onPressed: () => onIntent(const OpenBookshelfLocalBookImportIntent()),
-          icon: const Icon(Icons.upload_file_outlined),
-          tooltip: '导入本地书',
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: Column(
+            children: <Widget>[
+              // 选择模式继续保留搜索、分组和排序区，避免内容高度突变导致书架跳动。
+              _BookshelfControls(state: state, onIntent: onIntent),
+              if (state.refreshing || state.refreshProgress.total > 0)
+                _BookshelfRefreshStatus(state: state, onIntent: onIntent),
+              if (state.refreshFailures.isNotEmpty)
+                _BookshelfRefreshFailures(failures: state.refreshFailures),
+              Expanded(
+                child: _BookshelfBody(state: state, onIntent: onIntent),
+              ),
+            ],
+          ),
         ),
-        IconButton(
-          onPressed: () => onIntent(const ToggleBookshelfLayoutIntent()),
-          icon: Icon(state.layoutMode == BookshelfLayoutMode.grid ? Icons.view_list : Icons.grid_view),
-          tooltip: '切换列表或网格',
-        ),
-        IconButton(
-          onPressed: state.refreshing
-              ? () => onIntent(const CancelBookshelfRefreshIntent())
-              : () => onIntent(const RefreshBookshelfIntent()),
-          icon: Icon(state.refreshing ? Icons.stop_circle_outlined : Icons.refresh),
-          tooltip: state.refreshing ? '停止刷新' : '刷新目录',
-        ),
+        if (state.selectionMode)
+          Positioned(
+            left: SpacingToken.medium,
+            right: SpacingToken.medium,
+            bottom: SpacingToken.small,
+            child: _BookshelfSelectionActions(
+              state: state,
+              onIntent: onIntent,
+            ),
+          ),
       ],
     );
   }
 
-  /// 构建选择模式顶部栏。
-  PreferredSizeWidget _selectionAppBar() {
-    return AppBar(
-      leading: IconButton(
-        onPressed: () => onIntent(const ExitBookshelfSelectionIntent()),
-        icon: const Icon(Icons.close),
-        tooltip: '退出选择',
+}
+
+/// 选择模式底部悬浮操作条，用文字和图标同时说明批量动作且不改变列表布局高度。
+final class _BookshelfSelectionActions extends StatelessWidget {
+  /// 创建书架选择操作条。
+  const _BookshelfSelectionActions({
+    required this.state,
+    required this.onIntent,
+  });
+
+  /// 当前选择数量和单选能力判断所需状态。
+  final BookshelfUiState state;
+  /// 批量操作 Intent 入口。
+  final ValueChanged<BookshelfIntent> onIntent;
+
+  /// 构建可横向滚动的高对比度操作面板，窄屏不会挤掉动作文字。
+  @override
+  Widget build(BuildContext context) {
+    /// 仅选择一本书时才允许使用的单书操作。
+    final bool singleSelection = state.selectedBookUrls.length == 1;
+    return SafeArea(
+      top: false,
+      child: Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        elevation: 8,
+        borderRadius: BorderRadius.circular(RadiusToken.large),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: 68,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                _BookshelfSelectionActionButton(
+                  icon: Icons.refresh,
+                  label: '刷新',
+                  onPressed: () => onIntent(
+                    const RefreshBookshelfIntent(),
+                  ),
+                ),
+                _BookshelfSelectionActionButton(
+                  icon: Icons.drive_file_move_outline,
+                  label: '分组',
+                  onPressed: () => onIntent(
+                    const RequestMoveBookshelfBooksIntent(),
+                  ),
+                ),
+                _BookshelfSelectionActionButton(
+                  icon: Icons.wallpaper_outlined,
+                  label: '换封面',
+                  onPressed: singleSelection
+                      ? () => onIntent(
+                          const OpenSelectedBookCoverChangeIntent(),
+                        )
+                      : null,
+                ),
+                _BookshelfSelectionActionButton(
+                  icon: Icons.swap_horiz,
+                  label: '换源',
+                  onPressed: singleSelection
+                      ? () => onIntent(
+                          const OpenSelectedBookSourceChangeIntent(),
+                        )
+                      : null,
+                ),
+                _BookshelfSelectionActionButton(
+                  icon: Icons.delete_outline,
+                  label: '删除',
+                  destructive: true,
+                  onPressed: () => onIntent(
+                    const RequestDeleteBookshelfBooksIntent(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      title: Text('已选择 ${state.selectedBookUrls.length} 本'),
-      actions: <Widget>[
-        IconButton(
-          onPressed: () => onIntent(const SelectAllBookshelfBooksIntent()),
-          icon: const Icon(Icons.select_all),
-          tooltip: '全选当前列表',
+    );
+  }
+}
+
+/// 书架选择操作条中的单个带文字动作。
+final class _BookshelfSelectionActionButton extends StatelessWidget {
+  /// 创建一个批量操作按钮。
+  const _BookshelfSelectionActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.destructive = false,
+  });
+
+  /// 动作图标。
+  final IconData icon;
+  /// 动作短标签。
+  final String label;
+  /// 空值表示当前选择数量不满足动作要求。
+  final VoidCallback? onPressed;
+  /// 是否使用错误色强调不可逆删除动作。
+  final bool destructive;
+
+  /// 构建固定最小宽度按钮，让图标与动作名称始终同时可见。
+  @override
+  Widget build(BuildContext context) {
+    /// 删除动作使用错误色，其余动作使用主题前景色。
+    final Color foreground = destructive
+        ? Theme.of(context).colorScheme.error
+        : Theme.of(context).colorScheme.onSurface;
+    return SizedBox(
+      width: 70,
+      height: 68,
+      child: InkWell(
+        onTap: onPressed,
+        child: Opacity(
+          opacity: onPressed == null ? 0.38 : 1,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, color: foreground, size: 22),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: foreground,
+                ),
+              ),
+            ],
+          ),
         ),
-        IconButton(
-          onPressed: () => onIntent(const RefreshBookshelfIntent()),
-          icon: const Icon(Icons.refresh),
-          tooltip: '刷新选中书籍',
-        ),
-        IconButton(
-          onPressed: () => onIntent(const RequestMoveBookshelfBooksIntent()),
-          icon: const Icon(Icons.drive_file_move_outline),
-          tooltip: '移动分组',
-        ),
-        IconButton(
-          onPressed: state.selectedBookUrls.length == 1
-              ? () => onIntent(const OpenSelectedBookSourceChangeIntent())
-              : null,
-          icon: const Icon(Icons.swap_horiz),
-          tooltip: '整书换源',
-        ),
-        IconButton(
-          onPressed: () => onIntent(const RequestDeleteBookshelfBooksIntent()),
-          icon: const Icon(Icons.delete_outline),
-          tooltip: '删除',
-        ),
-      ],
+      ),
     );
   }
 }
@@ -368,7 +432,12 @@ final class _BookshelfList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
-      padding: const EdgeInsets.all(SpacingToken.medium),
+      padding: const EdgeInsets.fromLTRB(
+        SpacingToken.medium,
+        SpacingToken.medium,
+        SpacingToken.medium,
+        92,
+      ),
       itemCount: state.books.length,
       itemBuilder: (BuildContext context, int index) {
         /// 当前书籍显示项。
@@ -402,6 +471,15 @@ final class _BookshelfList extends StatelessWidget {
           child: Card(
             key: ValueKey<String>(item.book.bookUrl),
             color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(RadiusToken.medium),
+              side: selected
+                  ? BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
+                    )
+                  : BorderSide.none,
+            ),
             child: ListTile(
               onTap: () => onIntent(
                 TapBookshelfBookIntent(
@@ -478,9 +556,11 @@ final class _BookshelfGrid extends StatelessWidget {
             .clamp(BookGridLayout.minimumColumns, BookGridLayout.maximumColumns)
             .toInt();
         return GridView.builder(
-          padding: EdgeInsets.symmetric(
-            horizontal: horizontalPadding,
-            vertical: SpacingToken.medium,
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            SpacingToken.medium,
+            horizontalPadding,
+            92,
           ),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
@@ -511,6 +591,15 @@ final class _BookshelfGrid extends StatelessWidget {
               child: Card(
                 key: ValueKey<String>(item.book.bookUrl),
                 color: selected ? Theme.of(context).colorScheme.secondaryContainer : null,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(RadiusToken.medium),
+                  side: selected
+                      ? BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2.5,
+                        )
+                      : BorderSide.none,
+                ),
                 clipBehavior: Clip.antiAlias,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -555,8 +644,14 @@ final class _BookshelfGrid extends StatelessWidget {
                                   bookName: item.book.name,
                                   bookAuthor: item.book.author,
                                 ),
-                                if (selected)
-                                  const Positioned(top: 4, left: 4, child: Icon(Icons.check_circle, size: 16)),
+                                if (state.selectionMode)
+                                  Positioned(
+                                    top: SpacingToken.xSmall,
+                                    right: SpacingToken.xSmall,
+                                    child: _BookshelfSelectionIndicator(
+                                      selected: selected,
+                                    ),
+                                  ),
                                 if (chapterStatusText != null)
                                   Positioned(
                                     left: 0,
@@ -623,6 +718,43 @@ final class _BookshelfGrid extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// 在书架网格封面右上角展示清晰的选中或未选中状态。
+final class _BookshelfSelectionIndicator extends StatelessWidget {
+  /// 创建书架选择状态标记。
+  const _BookshelfSelectionIndicator({required this.selected});
+
+  /// 当前书籍是否已经选中。
+  final bool selected;
+
+  /// 构建带阴影的强调色勾选圆或空心圆。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前主题强调色。
+    final Color primary = Theme.of(context).colorScheme.primary;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: selected ? primary : Theme.of(context).colorScheme.surface,
+        shape: BoxShape.circle,
+        border: Border.all(color: primary, width: 2),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(color: Colors.black26, blurRadius: 3),
+        ],
+      ),
+      child: SizedBox(
+        width: 28,
+        height: 28,
+        child: selected
+            ? Icon(
+                Icons.check,
+                size: 19,
+                color: Theme.of(context).colorScheme.onPrimary,
+              )
+            : null,
+      ),
     );
   }
 }

@@ -129,12 +129,12 @@ final class CancelLocalBookCoverPickIntent extends ChangeBookCoverIntent {
   const CancelLocalBookCoverPickIntent();
 }
 
-/// 系统选择器已经把图片复制到应用私有目录，继续字段级保存。
+/// 系统选择器已经把图片复制到应用私有目录，继续字段级保存稳定标识。
 final class LocalBookCoverPickedIntent extends ChangeBookCoverIntent {
   /// 创建本地封面保存 Intent。
   const LocalBookCoverPickedIntent(this.coverPath);
 
-  /// 已复制到应用私有目录的完整路径。
+  /// 已复制到应用私有目录且不含易变沙盒绝对前缀的稳定标识。
   final String coverPath;
 }
 
@@ -188,6 +188,6 @@ final class DeleteUnusedLocalBookCoverEffect extends ChangeBookCoverEffect {
   /// 创建未使用副本清理 Effect。
   const DeleteUnusedLocalBookCoverEffect(this.coverPath);
 
-  /// 等待删除的应用私有图片路径。
+  /// 等待删除的应用私有图片稳定标识或兼容旧绝对路径。
   final String coverPath;
 }

@@ -7,20 +7,24 @@ import '../../app/bookshelf_history_startup_preloader.dart';
 import '../../app/reader_transition_spec.dart';
 import '../../domain/gateway/reading_history_gateway.dart';
 import '../../domain/model/book.dart';
+import '../../domain/usecase/delete_reading_history_use_case.dart';
+import '../../help/error/app_result.dart';
 import '../../help/logging/app_logger.dart';
 import 'reading_history_contract.dart';
 
-/// 管理阅读历史实时快照、布局和刷新观察，以及阅读器导航。
+/// 管理阅读历史实时快照、布局、选择删除、刷新观察和阅读器导航。
 final class ReadingHistoryViewModel {
   /// 创建并立即订阅历史数据。
   ReadingHistoryViewModel({
     required ReadingHistoryGateway gateway,
+    required DeleteReadingHistoryUseCase deleteHistory,
     required BookshelfLayoutPreferences layoutPreferences,
     required BookshelfHistoryStartupPreloader startupPreloader,
     required AppLogger logger,
     required int Function() currentUserId,
     required ValueListenable<int?> userScopeListenable,
   }) : _gateway = gateway,
+       _deleteHistory = deleteHistory,
        _layoutPreferences = layoutPreferences,
        _startupPreloader = startupPreloader,
        _logger = logger,
@@ -35,6 +39,8 @@ final class ReadingHistoryViewModel {
 
   /// 阅读历史领域边界。
   final ReadingHistoryGateway _gateway;
+  /// 经过校验和错误归一化的历史批量删除动作。
+  final DeleteReadingHistoryUseCase _deleteHistory;
   /// 阅读历史列表/网格模式的持久化读取与写入边界。
   final BookshelfLayoutPreferences _layoutPreferences;
   /// 登录后在主界面启动遮罩期间创建的本地首快照服务。
@@ -83,7 +89,35 @@ final class ReadingHistoryViewModel {
         bookUrl: final String bookUrl,
         transitionSpec: final transitionSpec,
       ):
-        _openBook(bookUrl, transitionSpec: transitionSpec);
+        if (_state.selectionMode) {
+          _toggleSelection(bookUrl);
+        } else {
+          _openBook(bookUrl, transitionSpec: transitionSpec);
+        }
+      case LongPressReadingHistoryBookIntent(bookUrl: final String bookUrl):
+        _emit(
+          _state.copyWith(
+            selectionMode: true,
+            selectedBookUrls: <String>{bookUrl},
+          ),
+        );
+      case SelectAllReadingHistoryBooksIntent():
+        _emit(
+          _state.copyWith(
+            selectionMode: _allBooks.isNotEmpty,
+            selectedBookUrls: _allBooks
+                .map((Book book) => book.bookUrl)
+                .toSet(),
+          ),
+        );
+      case ExitReadingHistorySelectionIntent():
+        _exitSelection();
+      case RequestDeleteReadingHistoryIntent():
+        _requestDelete();
+      case ConfirmDeleteReadingHistoryIntent():
+        unawaited(_confirmDelete());
+      case DismissReadingHistoryDialogIntent():
+        _emit(_state.copyWith(clearDialog: true));
       case ToggleReadingHistoryLayoutIntent():
         _layoutChangedByUser = true;
         final ReadingHistoryLayoutMode layoutMode =
@@ -137,6 +171,13 @@ final class ReadingHistoryViewModel {
         }
         _historyStreamReceived = true;
         _allBooks = List<Book>.unmodifiable(books);
+        /// 数据库变化后仍然存在的历史 URL，用于剔除已删除选择。
+        final Set<String> existingUrls = books
+            .map((Book book) => book.bookUrl)
+            .toSet();
+        /// 当前选择与最新历史快照的交集。
+        final Set<String> selectedUrls =
+            _state.selectedBookUrls.intersection(existingUrls);
         _logger.info(
           tag: bookshelfHistoryScopeLogTag,
           message: 'stage=history_database_stream '
@@ -148,6 +189,9 @@ final class ReadingHistoryViewModel {
             loading: false,
             refreshing: false,
             books: _allBooks,
+            selectionMode:
+                _state.selectionMode && selectedUrls.isNotEmpty,
+            selectedBookUrls: selectedUrls,
             clearError: true,
           ),
         );
@@ -199,6 +243,9 @@ final class ReadingHistoryViewModel {
         loading: true,
         refreshing: false,
         books: const <Book>[],
+        selectionMode: false,
+        selectedBookUrls: const <String>{},
+        clearDialog: true,
         clearError: true,
       ),
     );
@@ -327,6 +374,74 @@ final class ReadingHistoryViewModel {
         );
         return;
       }
+    }
+  }
+
+  /// 在选择模式中切换一本历史书籍；最后一本取消后自动退出选择模式。
+  void _toggleSelection(String bookUrl) {
+    /// 本次操作使用的可修改选择集合。
+    final Set<String> selected = Set<String>.from(_state.selectedBookUrls);
+    if (!selected.add(bookUrl)) {
+      selected.remove(bookUrl);
+    }
+    _emit(
+      _state.copyWith(
+        selectionMode: selected.isNotEmpty,
+        selectedBookUrls: selected,
+      ),
+    );
+  }
+
+  /// 清空历史选择和待确认对话框，供返回、切页和删除成功共用。
+  void _exitSelection() {
+    if (!_state.selectionMode && _state.selectedBookUrls.isEmpty) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        selectionMode: false,
+        selectedBookUrls: const <String>{},
+        clearDialog: true,
+      ),
+    );
+  }
+
+  /// 冻结当前选择并请求路由展示明确影响范围的删除确认。
+  void _requestDelete() {
+    if (_state.selectedBookUrls.isEmpty) {
+      return;
+    }
+    _emit(
+      _state.copyWith(
+        dialog: DeleteReadingHistoryDialog(_state.selectedBookUrls),
+      ),
+    );
+  }
+
+  /// 删除确认对话框冻结的历史集合，成功后退出选择，失败时保留选择便于重试。
+  Future<void> _confirmDelete() async {
+    /// 对话框中冻结的稳定 URL 集合。
+    final Set<String> bookUrls = switch (_state.dialog) {
+      DeleteReadingHistoryDialog(bookUrls: final Set<String> urls) => urls,
+      _ => const <String>{},
+    };
+    if (bookUrls.isEmpty) {
+      return;
+    }
+    _emit(_state.copyWith(clearDialog: true));
+    /// 删除历史事务结果。
+    final AppResult<void> result = await _deleteHistory.execute(bookUrls);
+    switch (result) {
+      case AppSuccess<void>():
+        _startupPreloader.invalidate();
+        _exitSelection();
+        _effectController.add(
+          ShowReadingHistoryMessageEffect('已删除 ${bookUrls.length} 条阅读历史'),
+        );
+      case AppFailure<void>(error: final error):
+        _effectController.add(
+          ShowReadingHistoryMessageEffect(error.message),
+        );
     }
   }
 

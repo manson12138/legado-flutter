@@ -413,14 +413,17 @@ final class StandardBookSourceService {
     int maxPages = 100,
     String? initialPageUrl,
     Set<String> previouslyVisitedPageUrls = const <String>{},
+    bool enableLogging = true,
   }) async {
     /// 【搜书诊断日志】当前书籍不可逆标识。
     final String bookId = appLogDiagnosticId(book.bookUrl);
     /// 【搜书诊断日志】完整目录加载耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
-    _logger.info(tag: bookTocLogTag, message: '目录分页加载开始 bookId=$bookId maxPages=$maxPages');
-    // FLUTTER_REWRITE_DEBUG_LOG：输出本次目录请求使用的书源身份、地址关系和完整目录规则。
-    _logTocRuleDiagnostics(source: source, book: book, bookId: bookId);
+    if (enableLogging) {
+      _logger.info(tag: bookTocLogTag, message: '目录分页加载开始 bookId=$bookId maxPages=$maxPages');
+      // FLUTTER_REWRITE_DEBUG_LOG：输出本次目录请求使用的书源身份、地址关系和完整目录规则。
+      _logTocRuleDiagnostics(source: source, book: book, bookId: bookId);
+    }
     /// 目录 URL、响应脚本和分页规则共享的 Android 兼容书籍状态。
     final LegadoScriptExecutionState scriptExecutionState = await _createScriptExecutionState(
       source: source,
@@ -471,14 +474,16 @@ final class StandardBookSourceService {
         cancellationToken: cancellationToken,
       );
       // FLUTTER_REWRITE_DEBUG_LOG：记录目录请求地址、方法和非敏感请求结构，不输出 Header 值或请求正文。
-      _logger.debug(
-        tag: bookTocLogTag,
-        message: '$_debugLogMarker 目录请求准备 bookId=$bookId page=${visited.length} '
-            'requestUri=${_sanitizeDiagnosticText(resolved.request.uri.toString())} '
-            'method=${resolved.request.method.name} bodyType=${resolved.request.body.runtimeType} '
-            'headerNames=${resolved.request.headers.keys.join(',')} '
-            'cookieMode=${resolved.request.cookieMode.name} retryCount=${resolved.retryCount}',
-      );
+      if (enableLogging) {
+        _logger.debug(
+          tag: bookTocLogTag,
+          message: '$_debugLogMarker 目录请求准备 bookId=$bookId page=${visited.length} '
+              'requestUri=${_sanitizeDiagnosticText(resolved.request.uri.toString())} '
+              'method=${resolved.request.method.name} bodyType=${resolved.request.body.runtimeType} '
+              'headerNames=${resolved.request.headers.keys.join(',')} '
+              'cookieMode=${resolved.request.cookieMode.name} retryCount=${resolved.retryCount}',
+        );
+      }
       /// 当前目录响应。
       final DecodedHttpResponse response = await _executeDecoded(
         resolved,
@@ -490,6 +495,7 @@ final class StandardBookSourceService {
         scriptBook: book,
         scriptExecutionState: scriptExecutionState,
         scriptOperation: LegadoScriptOperation.toc,
+        enableLogging: enableLogging,
       );
       /// 当前目录页解析结果；`late final` 仅用于在异常路径先输出本页完整诊断数据。
       late final ParsedTocPage parsed;
@@ -505,29 +511,33 @@ final class StandardBookSourceService {
         );
       } catch (error) {
         // FLUTTER_REWRITE_DEBUG_LOG：规则抛错时也保留脱敏后的完整响应，避免只有异常类型没有输入数据。
-        _logger.error(
-          tag: bookTocLogTag,
-          message: '$_debugLogMarker 目录规则解析抛错 bookId=$bookId page=${visited.length} '
-              'errorType=${error.runtimeType}',
-        );
-        _logTocResponseDiagnostics(
-          bookId: bookId,
-          page: visited.length,
-          reason: 'parserException',
-          response: response,
-        );
+        if (enableLogging) {
+          _logger.error(
+            tag: bookTocLogTag,
+            message: '$_debugLogMarker 目录规则解析抛错 bookId=$bookId page=${visited.length} '
+                'errorType=${error.runtimeType}',
+          );
+          _logTocResponseDiagnostics(
+            bookId: bookId,
+            page: visited.length,
+            reason: 'parserException',
+            response: response,
+          );
+        }
         rethrow;
       }
       /// 【搜书诊断日志】记录每页解析规模，便于定位分页循环或空页。
-      _logger.debug(
-        tag: bookTocLogTag,
-        message: '$_debugLogMarker 目录页解析完成 bookId=$bookId page=${visited.length} '
-            'pageChapterCount=${parsed.chapters.length} nextPageCount=${parsed.nextPageUris.length} '
-            'accumulatedCount=${chapters.length} matchedNodeCount=${parsed.matchedNodeCount} '
-            'skippedEmptyTitleCount=${parsed.skippedEmptyTitleCount} '
-            'fallbackChapterUrlCount=${parsed.fallbackChapterUrlCount}',
-      );
-      if (parsed.chapters.isEmpty) {
+      if (enableLogging) {
+        _logger.debug(
+          tag: bookTocLogTag,
+          message: '$_debugLogMarker 目录页解析完成 bookId=$bookId page=${visited.length} '
+              'pageChapterCount=${parsed.chapters.length} nextPageCount=${parsed.nextPageUris.length} '
+              'accumulatedCount=${chapters.length} matchedNodeCount=${parsed.matchedNodeCount} '
+              'skippedEmptyTitleCount=${parsed.skippedEmptyTitleCount} '
+              'fallbackChapterUrlCount=${parsed.fallbackChapterUrlCount}',
+        );
+      }
+      if (enableLogging && parsed.chapters.isEmpty) {
         // FLUTTER_REWRITE_DEBUG_LOG：空目录页是当前问题的关键失败点，此时输出脱敏后的完整响应正文。
         _logTocResponseDiagnostics(
           bookId: bookId,
@@ -556,11 +566,13 @@ final class StandardBookSourceService {
       nextUri = candidate;
     }
     if (chapters.isEmpty) {
-      _logger.warning(
-        tag: bookTocLogTag,
-        message: '目录分页结束但无章节 bookId=$bookId pageCount=${visited.length} '
-            'elapsedMs=${stopwatch.elapsedMilliseconds}',
-      );
+      if (enableLogging) {
+        _logger.warning(
+          tag: bookTocLogTag,
+          message: '目录分页结束但无章节 bookId=$bookId pageCount=${visited.length} '
+              'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+      }
       throw const StandardRuleException('目录规则合法但章节列表为空');
     }
     /// 根据 Android `chapterList` 的 `-` 前缀得到最终显示顺序。
@@ -574,12 +586,14 @@ final class StandardBookSourceService {
     }
     /// 不可变完整目录。
     final List<BookChapter> immutableResult = List<BookChapter>.unmodifiable(result);
-    _logger.info(
-      tag: bookTocLogTag,
-      message: '目录分页加载完成 bookId=$bookId pageCount=${visited.length} '
-          'chapterCount=${immutableResult.length} reverse=$reverse '
-          'elapsedMs=${stopwatch.elapsedMilliseconds}',
-    );
+    if (enableLogging) {
+      _logger.info(
+        tag: bookTocLogTag,
+        message: '目录分页加载完成 bookId=$bookId pageCount=${visited.length} '
+            'chapterCount=${immutableResult.length} reverse=$reverse '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
+      );
+    }
     /// 下一次增量检查使用的分页锚点。
     final String anchorPageUrl = reverse ? visited.first : visited.last;
     /// 新检查点使用的已访问分页并集；完整刷新时前一集合为空。
@@ -1088,6 +1102,7 @@ final class StandardBookSourceService {
     String? sourceRegex,
     String? keyword,
     int? page,
+    bool enableLogging = true,
   }) async {
     /// 当前尝试序号。
     int attempt = 0;
@@ -1156,12 +1171,14 @@ final class StandardBookSourceService {
             cancellationToken: cancellationToken,
           );
         }
-        _logger.debug(
-          tag: logTag,
-          message: 'HTTP 响应已解码 operation=$operation subjectId=$subjectId '
-              'status=${decoded.response.statusCode} byteCount=${decoded.response.bytes.length} '
-              'charset=${decoded.charset} attempt=${attempt + 1}',
-        );
+        if (enableLogging) {
+          _logger.debug(
+            tag: logTag,
+            message: 'HTTP 响应已解码 operation=$operation subjectId=$subjectId '
+                'status=${decoded.response.statusCode} byteCount=${decoded.response.bytes.length} '
+                'charset=${decoded.charset} attempt=${attempt + 1}',
+          );
+        }
         return decoded;
       } on UnifiedHttpException catch (error) {
         if (!_canRetry(error.kind) || attempt >= resolved.retryCount) {
@@ -1169,12 +1186,14 @@ final class StandardBookSourceService {
         }
         attempt += 1;
         /// 【搜书诊断日志】记录有限重试的分类和序号，不记录请求地址或请求体。
-        _logger.warning(
-          tag: logTag,
-          message: 'HTTP 请求准备重试 operation=$operation subjectId=$subjectId '
-              'failureKind=${error.kind.name} nextAttempt=${attempt + 1}/${resolved.retryCount + 1}',
-          error: error,
-        );
+        if (enableLogging) {
+          _logger.warning(
+            tag: logTag,
+            message: 'HTTP 请求准备重试 operation=$operation subjectId=$subjectId '
+                'failureKind=${error.kind.name} nextAttempt=${attempt + 1}/${resolved.retryCount + 1}',
+            error: error,
+          );
+        }
       }
     }
   }

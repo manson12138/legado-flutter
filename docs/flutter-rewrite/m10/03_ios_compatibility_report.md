@@ -21,6 +21,7 @@
 |---|---|---|---|---|
 | I01 | Document Picker 导入书源 JSON | 取消无副作用；成功进入确认流程 | 待填写 | NOT_STARTED |
 | I02 | 导入 TXT/EPUB/UMD/PDF 后撤销原文件访问 | 应用私有副本仍可重开 | 待填写 | NOT_STARTED |
+| I02A | 从“文件”、浏览器或其他 App 外部打开 TXT（冷启动/热启动） | 候选中出现 App；进入现有导入确认页；取消、失败和成功均清理临时副本且不重复导航 | 待填写 | NOT_STARTED |
 | I03 | 拒绝相机权限 | 显示设置说明与剪贴板替代，无无响应入口 | 待填写 | NOT_STARTED |
 | I04 | WKWebView 登录、重定向、关闭 | Cookie 回写统一 Store；再次请求携带同域 Cookie | 待填写 | NOT_STARTED |
 | I05 | 登录页进入后台再回来 | 页面可继续或可刷新；Cookie 不丢失 | 待填写 | NOT_STARTED |

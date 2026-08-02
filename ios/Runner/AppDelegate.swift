@@ -17,6 +17,12 @@ import UIKit
   /// P1-05 下载后台通道；iOS 只提供有限后台执行窗口，不承诺无限持续下载。
   private var downloadBackgroundChannel: FlutterMethodChannel?
 
+  /// iOS 外部 TXT 打开桥；强引用保证 Flutter 引擎存活期间队列和通道持续有效。
+  private var externalTxtOpenBridge: ExternalTxtOpenBridge?
+
+  /// Flutter 引擎尚未初始化时由 Scene 暂存的外部文件 URL，最多保留四项。
+  private var pendingExternalTxtOpenURLs: [URL] = []
+
   /// 当前有限后台下载任务标识；`.invalid` 表示没有活动窗口。
   private var downloadBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -92,6 +98,7 @@ import UIKit
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     registerAppPackageInfoChannel(engineBridge)
     registerPasswordEncryptionChannel(engineBridge)
+    registerExternalTxtOpenBridge(engineBridge)
     /// 取得只服务 M08 窗口常亮能力的插件注册器；Xcode 26 下该 API 返回可空值。
     guard let registrar = engineBridge.pluginRegistry.registrar(
       forPlugin: "ReaderPlatformBridge"
@@ -130,6 +137,54 @@ import UIKit
     }
     readerPlatformChannel = channel
     registerDownloadBackgroundChannel(engineBridge)
+  }
+
+  /// 接收 Scene 冷启动或热启动交付的外部 TXT URL，并在原生桥就绪后顺序消费。
+  ///
+  /// - Parameter urls: UIKit 提供的文件 URL；仅在当前进程内短暂保存。
+  func handleExternalTxtOpenURLs(_ urls: [URL]) {
+    if urls.isEmpty {
+      return
+    }
+    if let externalTxtOpenBridge {
+      externalTxtOpenBridge.enqueue(urls)
+      return
+    }
+    for url in urls {
+      if pendingExternalTxtOpenURLs.count >= 4 {
+        break
+      }
+      /// URL 字符串只用于引擎初始化前去重，不写日志或持久化。
+      let identity = url.absoluteString
+      if pendingExternalTxtOpenURLs.contains(
+        where: { $0.absoluteString == identity }
+      ) {
+        continue
+      }
+      pendingExternalTxtOpenURLs.append(url)
+    }
+  }
+
+  /// 注册与 Android 同契约的 iOS 外部 TXT 通道，并补投引擎初始化前收到的冷启动请求。
+  ///
+  /// - Parameter engineBridge: Flutter 隐式引擎桥，用于取得独立插件注册器。
+  private func registerExternalTxtOpenBridge(
+    _ engineBridge: FlutterImplicitEngineBridge
+  ) {
+    guard let registrar = engineBridge.pluginRegistry.registrar(
+      forPlugin: "ExternalTxtOpenBridge"
+    ) else {
+      return
+    }
+    /// 当前 Flutter 引擎生命周期内唯一的 iOS 外部 TXT 桥。
+    let bridge = ExternalTxtOpenBridge(binaryMessenger: registrar.messenger())
+    externalTxtOpenBridge = bridge
+    if !pendingExternalTxtOpenURLs.isEmpty {
+      /// 冷启动 Scene 可能早于引擎完成初始化，注册后立即补投并清空临时队列。
+      let pendingURLs = pendingExternalTxtOpenURLs
+      pendingExternalTxtOpenURLs.removeAll(keepingCapacity: false)
+      bridge.enqueue(pendingURLs)
+    }
   }
 
   /// 注册实际安装包版本通道；只读取 Info.plist，不持有监听器或业务状态。

@@ -10,6 +10,7 @@
 - 新增书源登录 WebView 路由；进入前写入统一 Cookie，完成、后台和内存警告时回写 Cookie。
 - `java.webView` 页面请求接入 `FlutterWebViewScriptBridge`，具备独立页面、超时、取消、结果回传和 Delegate/页面释放。
 - 本地书继续通过 Document Picker 选择后立即复制到应用私有目录，只持久化相对路径和 SHA-256 身份。
+- 外部 TXT 已通过 `public.plain-text` 文档类型进入 iOS 打开候选；Scene 冷/热启动 URL 由 `ExternalTxtOpenBridge.swift` 协调安全作用域并流式暂存，再复用现有导入确认、私有副本、解析和阅读链路，等待真机验证。
 - 二维码继续使用 `mobile_scanner`；iOS 权限拒绝页明确提示系统设置与剪贴板替代路径。
 - 阅读器在旋转/尺寸变化后按稳定字符锚点恢复；前后台重新应用系统栏和常亮设置。
 - iOS 宿主进入后台时临时关闭常亮，恢复前台时按 Dart 最近设置恢复，退出阅读器或终止时恢复原系统值。
@@ -21,7 +22,7 @@
 2. 本次未运行 `flutter pub get`，所以 `pubspec.lock` 和 iOS Pods 仍等待用户更新。
 3. JSF/QuickJS 尚无 iPhone 15 Pro Max、iOS 26 的构建与 S2～S5/S7 样本结果；历史同步 `java.webView` 仍可能遇到 Promise 语义差异。
 4. WKWebView 登录、HttpOnly Cookie、第三方 Cookie、验证码和网页进程回收尚无真机结果。
-5. Document Picker 安全作用域的原生释放时机需要通过真机文件提供者场景观察；Dart 代码已确保不保存外部路径。
+5. Document Picker 与外部 TXT 打开的安全作用域、iCloud/第三方文件提供者协调读取和临时副本释放需要通过真机场景观察；Dart 代码已确保不保存外部路径。
 6. 普通 HTTP 外部书源仍受 iOS ATS 约束；当前没有全局放开，HTTPS 是首批默认支持路径。
 
 ## 新增依赖说明
@@ -36,6 +37,7 @@
 - [x] 同一 JSF/QuickJS iOS 路径保留并补齐页面 WebView。
 - [x] WKWebView/Cookie 双向同步代码。
 - [x] Document Picker 后应用私有副本路径。
+- [x] 外部 TXT 文档类型、Scene 冷/热启动接收、有界临时副本与统一导入确认链路。
 - [x] iOS 相机二维码入口与拒绝替代提示。
 - [x] Safe Area、尺寸变化、系统栏和常亮代码。
 - [x] 登录、扫码、阅读和 PDF 的生命周期/资源释放边界。

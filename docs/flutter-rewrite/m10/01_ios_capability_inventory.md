@@ -11,6 +11,7 @@
 | Cookie | `LegadoCookieManager` + `FlutterWebViewCookieBridge` | 统一数据库与 WKHTTPCookieStore 按域双向同步；不记录内容 | 登录完成/后台/内存警告回写 | 实现待验证 |
 | 书源文件 | `file_picker` 内存字节 | Document Picker 结果不保存外部 URL | 解码后只保留书源数据 | 实现待验证 |
 | 本地书文件 | `file_picker` + `LocalBookStorage.persist` | Picker 结果立即复制到应用私有目录 | 只保存相对路径与指纹；失败补偿清理 | 实现待验证 |
+| 外部 TXT 打开 | `ExternalLocalBookOpenService` + 现有导入确认页 | `public.plain-text` 文档关联；Scene 冷/热启动接收 URL，协调安全作用域后流式复制到有界 cache 副本 | 导入成功、失败或取消后按随机 token 清理；超过一天的残留启动清理 | 实现待验证 |
 | 二维码 | `mobile_scanner` | 使用相机权限和 iOS 原生采集 | inactive 停止、resumed 恢复、dispose 释放 Controller | 实现待验证 |
 | 相机拒绝 | 扫码错误页 | 提示到系统设置授权，或返回使用剪贴板导入 | 不保留无响应入口 | 已接入 |
 | Safe Area | `AppScaffold`/页面 `SafeArea` | 避开灵动岛、圆角和 Home Indicator | 尺寸变化由 Flutter 重布局 | 实现待验证 |
@@ -43,3 +44,4 @@
 | 任意外部存储路径长期访问 | 不支持；必须复制到应用沙盒 |
 | 无限期后台 Web 服务/下载 | 首批不支持，避免无响应入口 |
 | 通配明文 HTTP | 不全局放开；HTTPS、局域网或按域例外 |
+| 只分享一段纯文字 | 当前文档关联只接收 TXT 文件 URL；原始文字 Share Extension 后续按明确需求实现 |

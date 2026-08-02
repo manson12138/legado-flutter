@@ -70,6 +70,86 @@ final class ReadingHistoryRepository implements ReadingHistoryGateway {
     });
   }
 
+  /// 在事务内确认历史成员仍存在后再替换快照，关闭用户删除与后台刷新之间的复活窗口。
+  @override
+  Future<bool> refreshExistingHistory(
+    Book book,
+    List<BookChapter> chapters,
+  ) {
+    /// 当前游客或登录账号的历史数据作用域。
+    final int userId = _requireUserId();
+    return guardDataOperation<bool>(() async {
+      /// 本次事务是否实际刷新了仍存在的历史成员。
+      bool refreshed = false;
+      await _database.transaction<void>((transaction) async {
+        /// 事务内重新读取的历史成员事实。
+        final Book? existingBook = await _dao.getBook(
+          userId,
+          book.bookUrl,
+          executor: transaction,
+        );
+        if (existingBook == null) {
+          return;
+        }
+        /// 合并事务内最新进度和用户封面后的历史书籍，避免后台旧快照覆盖用户事实。
+        final Book refreshedBook = book
+            .copyWithProgress(
+              chapterIndex: existingBook.durChapterIndex,
+              chapterPos: existingBook.durChapterPos,
+              readTime: existingBook.durChapterTime,
+              chapterTitle: existingBook.durChapterTitle,
+            )
+            .copyWithCustomCover(existingBook.customCoverUrl);
+        await _dao.upsertBook(
+          userId,
+          refreshedBook,
+          executor: transaction,
+        );
+        await _dao.deleteChapters(
+          userId,
+          book.bookUrl,
+          executor: transaction,
+        );
+        await _dao.upsertChapters(
+          userId,
+          chapters,
+          executor: transaction,
+        );
+        refreshed = true;
+      });
+      if (refreshed) {
+        _database.changeNotifier.notifyTables(<String>{
+          DatabaseTables.readingHistoryBooks,
+          DatabaseTables.readingHistoryChapters,
+        });
+      }
+      return refreshed;
+    });
+  }
+
+  /// 在单一事务中删除历史书籍，让目录外键级联并在提交后统一刷新页面观察者。
+  @override
+  Future<void> deleteHistory(Set<String> bookUrls) {
+    /// 当前游客或登录账号的历史数据作用域。
+    final int userId = _requireUserId();
+    return guardDataOperation<void>(() async {
+      if (bookUrls.isEmpty) {
+        return;
+      }
+      await _database.transaction<void>((transaction) async {
+        await _dao.deleteBooks(
+          userId,
+          bookUrls,
+          executor: transaction,
+        );
+      });
+      _database.changeNotifier.notifyTables(<String>{
+        DatabaseTables.readingHistoryBooks,
+        DatabaseTables.readingHistoryChapters,
+      });
+    });
+  }
+
   @override
   Future<bool> updateHistoryProgress({
     required String bookUrl,

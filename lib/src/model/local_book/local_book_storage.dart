@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/model/book.dart';
@@ -212,10 +213,16 @@ final class LocalBookStorage {
 
   /// 返回应用私有本地书目录并确保目录存在。
   Future<Directory> _rootDirectory() async {
-    /// 当前平台为数据库分配的应用私有目录。
-    final String databasesPath = await getDatabasesPath();
-    /// 与数据库同级的本地书目录。
-    final Directory directory = Directory(path.join(path.dirname(databasesPath), 'local_books'));
+    /// iOS 不允许在数据容器根目录创建业务目录，改用明确可写的 Application Support。
+    final Directory directory;
+    if (Platform.isIOS) {
+      final Directory supportDirectory = await getApplicationSupportDirectory();
+      directory = Directory(path.join(supportDirectory.path, 'local_books'));
+    } else {
+      /// Android 保持既有位置，避免升级后已导入的本地书副本失联。
+      final String databasesPath = await getDatabasesPath();
+      directory = Directory(path.join(path.dirname(databasesPath), 'local_books'));
+    }
     if (!await directory.exists()) {
       await directory.create(recursive: true);
     }

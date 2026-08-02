@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../domain/model/local_book.dart';
 
-/// 保存 Android 外部“打开方式”入口生成的一次性本地书候选。
+/// 保存 Android/iOS 外部“打开方式”入口生成的一次性本地书候选。
 final class ExternalLocalBookOpenRequest {
   /// 创建等待导入确认的外部文件请求。
   const ExternalLocalBookOpenRequest({
@@ -19,7 +19,7 @@ final class ExternalLocalBookOpenRequest {
   final String cleanupToken;
 }
 
-/// Android 外部本地书入口出现受控失败时抛出的平台边界错误。
+/// Android/iOS 外部本地书入口出现受控失败时抛出的平台边界错误。
 final class ExternalLocalBookOpenException implements Exception {
   /// 创建不包含文件路径和正文的安全错误。
   const ExternalLocalBookOpenException(this.message);
@@ -46,9 +46,10 @@ abstract interface class ExternalLocalBookOpenService {
   Future<void> dispose();
 }
 
-/// 使用 MethodChannel 连接 Android ExternalTxtOpenBridge。
+/// 使用 MethodChannel 连接 Android/iOS `ExternalTxtOpenBridge`。
 ///
-/// iOS 本轮没有声明文档类型，因此该通道在 iOS 返回未实现时安全视为没有请求。
+/// Android 从 `ACTION_VIEW` 接收 URI，iOS 从 Scene URL Context 接收安全作用域文件；
+/// 两端都先生成有界 cache 临时副本，再复用同一 Dart 导入确认与清理链路。
 final class DefaultExternalLocalBookOpenService
     implements ExternalLocalBookOpenService {
   /// 创建应用生命周期内唯一外部本地书入口服务。
@@ -71,7 +72,7 @@ final class DefaultExternalLocalBookOpenService
   @override
   Stream<void> get requests => _requestController.stream;
 
-  /// 接收 Android onNewIntent 后的轻量可用通知。
+  /// 接收 Android `onNewIntent` 或 iOS Scene 热启动后的轻量可用通知。
   Future<void> _handleNativeCall(MethodCall call) async {
     if (_disposed || call.method != 'externalTxtOpenAvailable') {
       return;
@@ -145,9 +146,9 @@ final class DefaultExternalLocalBookOpenService
         <String, Object?>{'token': cleanupToken},
       );
     } on MissingPluginException {
-      // iOS 本轮没有生成 Android 临时副本，无需执行清理。
+      // 未接入宿主桥的平台没有生成临时副本，无需执行清理。
     } on PlatformException {
-      // cache 临时文件仍会由 Android 宿主在下次启动时按过期时间清理。
+      // cache 临时文件仍会由 Android/iOS 宿主在下次启动时按过期时间清理。
     }
   }
 

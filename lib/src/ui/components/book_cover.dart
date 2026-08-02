@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../help/media/app_media_directories.dart';
 import '../../help/media/media_cache_downloader.dart';
+import '../../platform/local_book_cover_service.dart';
 import 'cover_url_cache.dart';
 
 /// 统一处理书架和详情封面、缺失占位、加载失败和跨页面已知可用地址回退。
@@ -29,7 +30,7 @@ final class BookCover extends StatefulWidget {
     super.key,
   });
 
-  /// 网络 URL、本地文件 URL 或本地完整路径。
+  /// 网络 URL、本地文件 URL、本地完整路径或应用私有封面稳定标识。
   final String? coverUrl;
   /// 无障碍封面说明。
   final String semanticLabel;
@@ -61,6 +62,10 @@ final class BookCover extends StatefulWidget {
 final class _BookCoverState extends State<BookCover> {
   /// 当前正在尝试展示的地址；为空表示没有可尝试的地址，直接展示占位。
   String? _attemptUrl;
+  /// 当前显示地址对应的稳定持久化值，受管本地封面不会回写易变绝对路径。
+  String? _attemptPersistentUrl;
+  /// 等待 Application Support 目录就绪后解析的受管封面标识。
+  String? _pendingManagedReference;
   /// 是否已经尝试过缓存候选，避免主地址失败后反复查询。
   bool _usedCacheFallback = false;
   /// 已经成功写入缓存的地址，避免同一次加载重复写入。
@@ -85,14 +90,61 @@ final class _BookCoverState extends State<BookCover> {
   /// 把当前尝试重置为调用方提供的原始地址；为空时立即尝试缓存候选。
   void _resetAttempt() {
     /// 清理后的原始地址。
-    final String trimmed = widget.coverUrl?.trim() ?? '';
-    _usedCacheFallback = false;
+    final String originalValue = widget.coverUrl?.trim() ?? '';
+    /// 书名为空时不启用跨页面缓存。
+    final String? name = widget.bookName;
+    /// 作者为空时不启用跨页面缓存。
+    final String? author = widget.bookAuthor;
+    /// 当前进程曾成功显示的同步缓存，避免列表重建后先闪占位。
+    final String? memoryCachedValue = originalValue.isEmpty &&
+            name != null &&
+            author != null
+        ? CoverUrlCache.instance.lookupSync(name: name, author: author)
+        : null;
+    /// 优先使用调用方事实，没有地址时才使用进程内已知可用地址。
+    final String initialValue = originalValue.isNotEmpty
+        ? originalValue
+        : memoryCachedValue?.trim() ?? '';
+    _usedCacheFallback = memoryCachedValue != null;
     _rememberedUrl = null;
-    _attemptUrl = trimmed.isEmpty ? null : trimmed;
-    if (_attemptUrl == null) {
+    _attemptPersistentUrl = initialValue.isEmpty
+        ? null
+        : LocalBookCoverReference.normalize(initialValue);
+    _attemptUrl = initialValue.isEmpty
+        ? null
+        : LocalBookCoverReference.resolveSync(initialValue);
+    _pendingManagedReference = initialValue.isNotEmpty &&
+            _attemptUrl == null &&
+            LocalBookCoverReference.isManaged(initialValue)
+        ? initialValue
+        : null;
+    final String? pendingManagedReference = _pendingManagedReference;
+    if (pendingManagedReference != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(_resolveManagedReference(pendingManagedReference)),
+      );
+    } else if (_attemptUrl == null) {
       /// 原始地址为空时没有“加载失败”事件可依赖，直接主动查一次缓存。
       WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_tryCacheFallback()));
     }
+  }
+
+  /// 异步取得当前运行真实沙盒路径，完成后直接进入图片缓存加载链路。
+  Future<void> _resolveManagedReference(String reference) async {
+    /// 当前运行可读取的真实文件路径。
+    final String? resolvedPath = await LocalBookCoverReference.resolve(reference);
+    if (!mounted || _pendingManagedReference != reference) {
+      return;
+    }
+    _pendingManagedReference = null;
+    if (resolvedPath == null || resolvedPath.isEmpty) {
+      await _tryCacheFallback();
+      return;
+    }
+    setState(() {
+      _attemptUrl = resolvedPath;
+      _attemptPersistentUrl = LocalBookCoverReference.normalize(reference);
+    });
   }
 
   /// 从缓存里找一个和刚失败地址不同的候选；找不到就走向调用方的 onExhausted。
@@ -114,19 +166,48 @@ final class _BookCoverState extends State<BookCover> {
     if (!mounted) {
       return;
     }
-    if (cached == null || cached == widget.coverUrl?.trim()) {
+    /// 当前调用方地址的稳定形式。
+    final String currentValue = LocalBookCoverReference.normalize(
+      widget.coverUrl?.trim() ?? '',
+    );
+    if (cached == null ||
+        LocalBookCoverReference.normalize(cached) == currentValue) {
       widget.onExhausted?.call();
       return;
     }
-    setState(() => _attemptUrl = cached);
+    /// 缓存地址在当前运行中对应的同步显示路径。
+    final String? resolvedCached = LocalBookCoverReference.resolveSync(cached);
+    if (resolvedCached != null && resolvedCached.isNotEmpty) {
+      setState(() {
+        _attemptUrl = resolvedCached;
+        _attemptPersistentUrl = LocalBookCoverReference.normalize(cached);
+      });
+      return;
+    }
+    if (!LocalBookCoverReference.isManaged(cached)) {
+      widget.onExhausted?.call();
+      return;
+    }
+    /// 稳定本地标识等待目录预热后的真实路径。
+    final String? resolvedManaged = await LocalBookCoverReference.resolve(cached);
+    if (!mounted || resolvedManaged == null || resolvedManaged.isEmpty) {
+      widget.onExhausted?.call();
+      return;
+    }
+    setState(() {
+      _attemptUrl = resolvedManaged;
+      _attemptPersistentUrl = LocalBookCoverReference.normalize(cached);
+    });
   }
 
   /// 记录成功加载的地址；同一次加载只写入一次。
   void _rememberSuccess(String url) {
-    if (_rememberedUrl == url) {
+    /// 受管本地封面使用稳定标识，其他地址使用真实显示地址。
+    final String rememberedValue = _attemptPersistentUrl ?? url;
+    if (_rememberedUrl == rememberedValue) {
       return;
     }
-    _rememberedUrl = url;
+    _rememberedUrl = rememberedValue;
     /// 书名。
     final String? name = widget.bookName;
     /// 作者名。
@@ -134,7 +215,11 @@ final class _BookCoverState extends State<BookCover> {
     if (name == null || author == null) {
       return;
     }
-    CoverUrlCache.instance.remember(name: name, author: author, url: url);
+    CoverUrlCache.instance.remember(
+      name: name,
+      author: author,
+      url: rememberedValue,
+    );
   }
 
   /// 当前尝试地址加载失败：先查缓存，查过还是不行就展示占位并通知调用方。

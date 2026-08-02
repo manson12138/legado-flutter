@@ -141,6 +141,7 @@ final class BookDetailService {
     String? initialPageUrl,
     int maximumPages = 100,
     Set<String> previouslyVisitedPageUrls = const <String>{},
+    bool enableTocLogging = true,
   }) async {
     /// 当前书籍的来源书源。
     final BookSource? source = await _sourceGateway.getByUrl(book.origin);
@@ -169,6 +170,7 @@ final class BookDetailService {
       initialPageUrl: initialPageUrl,
       maxPages: maximumPages,
       previouslyVisitedPageUrls: previouslyVisitedPageUrls,
+      enableLogging: enableTocLogging,
     );
     return RefreshedBookResult(
       book: withChapterSummary(detailBook, loadedToc.chapters),

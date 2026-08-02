@@ -95,6 +95,8 @@ final class _HistoryList extends StatelessWidget {
       itemBuilder: (BuildContext context, int index) {
         /// 当前历史书籍。
         final Book book = state.books[index];
+        /// 当前历史列表项是否已被选中。
+        final bool selected = state.selectedBookUrls.contains(book.bookUrl);
         /// 本次按下时形成的一次性封面几何。
         ReaderTransitionSpec? transitionSpec;
         /// 当前可见历史列表项中封面 Builder 的短生命周期上下文。
@@ -114,12 +116,27 @@ final class _HistoryList extends StatelessWidget {
           },
           child: Card(
             key: ValueKey<String>('history-${book.bookUrl}'),
+            color: selected
+                ? Theme.of(context).colorScheme.secondaryContainer
+                : null,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(RadiusToken.medium),
+              side: selected
+                  ? BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
+                    )
+                  : BorderSide.none,
+            ),
             child: ListTile(
               onTap: () => onIntent(
                 OpenReadingHistoryBookIntent(
                   book.bookUrl,
                   transitionSpec: transitionSpec,
                 ),
+              ),
+              onLongPress: () => onIntent(
+                LongPressReadingHistoryBookIntent(book.bookUrl),
               ),
               leading: Builder(
                 builder: (BuildContext context) {
@@ -134,7 +151,14 @@ final class _HistoryList extends StatelessWidget {
               title: Text(book.name),
               subtitle: Text('${book.author}\n${book.durChapterTitle ?? '已阅读'}'),
               isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
+              trailing: state.selectionMode
+                  ? Checkbox(
+                      value: selected,
+                      onChanged: (bool? value) => onIntent(
+                        OpenReadingHistoryBookIntent(book.bookUrl),
+                      ),
+                    )
+                  : const Icon(Icons.chevron_right),
             ),
           ),
         );
@@ -184,10 +208,24 @@ final class _HistoryGrid extends StatelessWidget {
           itemBuilder: (BuildContext context, int index) {
             /// 当前历史书籍。
             final Book book = state.books[index];
+            /// 当前历史网格项是否已被选中。
+            final bool selected = state.selectedBookUrls.contains(book.bookUrl);
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: BookGridLayout.cardHorizontalInset),
               child: Card(
                 key: ValueKey<String>('history-grid-${book.bookUrl}'),
+                color: selected
+                    ? Theme.of(context).colorScheme.secondaryContainer
+                    : null,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(RadiusToken.medium),
+                  side: selected
+                      ? BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2.5,
+                        )
+                      : BorderSide.none,
+                ),
                 clipBehavior: Clip.antiAlias,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -221,7 +259,23 @@ final class _HistoryGrid extends StatelessWidget {
                                 transitionSpec: transitionSpec,
                               ),
                             ),
-                            child: _HistoryCover(book: book),
+                            onLongPress: () => onIntent(
+                              LongPressReadingHistoryBookIntent(book.bookUrl),
+                            ),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: <Widget>[
+                                _HistoryCover(book: book),
+                                if (state.selectionMode)
+                                  Positioned(
+                                    top: SpacingToken.xSmall,
+                                    right: SpacingToken.xSmall,
+                                    child: _HistorySelectionIndicator(
+                                      selected: selected,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           );
                         },
                       ),
@@ -229,6 +283,9 @@ final class _HistoryGrid extends StatelessWidget {
                     InkWell(
                       onTap: () => onIntent(
                         OpenReadingHistoryBookIntent(book.bookUrl),
+                      ),
+                      onLongPress: () => onIntent(
+                        LongPressReadingHistoryBookIntent(book.bookUrl),
                       ),
                       child: Padding(
                         padding: const EdgeInsets.all(SpacingToken.xSmall),
@@ -246,6 +303,43 @@ final class _HistoryGrid extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// 在历史网格封面右上角明确展示选中或未选中的圆形状态。
+final class _HistorySelectionIndicator extends StatelessWidget {
+  /// 创建历史选择状态标记。
+  const _HistorySelectionIndicator({required this.selected});
+
+  /// 当前书籍是否已经选中。
+  final bool selected;
+
+  /// 构建高对比度勾选圆或未选中空心圆。
+  @override
+  Widget build(BuildContext context) {
+    /// 当前主题强调色。
+    final Color primary = Theme.of(context).colorScheme.primary;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: selected ? primary : Theme.of(context).colorScheme.surface,
+        shape: BoxShape.circle,
+        border: Border.all(color: primary, width: 2),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(color: Colors.black26, blurRadius: 3),
+        ],
+      ),
+      child: SizedBox(
+        width: 26,
+        height: 26,
+        child: selected
+            ? Icon(
+                Icons.check,
+                size: 18,
+                color: Theme.of(context).colorScheme.onPrimary,
+              )
+            : null,
+      ),
     );
   }
 }

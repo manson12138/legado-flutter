@@ -11,7 +11,7 @@ void main(List<String> arguments) {
   }
   /// 构建配置文件由 Android 与 iOS 共用，密钥只在内存中完成编码。
   final File configFile = File(arguments.single);
-  if (!configFile.isFileSync()) {
+  if (!configFile.existsSync()) {
     stderr.writeln('缺少 app_build_secrets.json。');
     exitCode = 66;
     return;

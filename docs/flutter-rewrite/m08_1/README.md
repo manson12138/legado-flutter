@@ -6,7 +6,7 @@
 
 - 新增 `LocalBookFormat`、系统选择文件、应用内文件引用、解析结果和导入结果领域模型。
 - 新增 `LocalBookPlatformBridge`。Android 与 iOS 都通过系统文档选择器多选；插件只返回可立即复制的路径和元数据，不在 UI isolate 读取文件内容。
-- 新增 `LocalBookStorage`。文件先计算 SHA-256，再复制到数据库同级的 `local_books/` 应用私有目录；数据库只保存相对路径、格式、指纹、大小和写入时间，不保存 picker 临时绝对路径。
+- 新增 `LocalBookStorage`。文件先计算 SHA-256，再复制到 `local_books/` 应用私有目录；iOS 使用明确可写的 Application Support，Android 保持既有数据库同级位置以兼容存量副本。数据库只保存相对路径、格式、指纹、大小和写入时间，不保存 picker 临时绝对路径。
 - `bookUrl` 使用 `local://<sha256>`。同一内容重复导入命中同一记录并更新目录；同名但内容不同因指纹不同可以并存。
 - 复制采用同目录 `.importing` 临时文件完成后改名；解析或数据库写入失败时补偿删除本次新副本。
 - 新增统一 `LocalBookParser` 与 `LocalBookParserRegistry`。未注册格式返回明确错误，不回退成 TXT 或空书。
@@ -18,6 +18,7 @@
 - 新增 `LocalBookImport` Contract、ViewModel、无状态 Screen 和 Route，支持系统多选、单选/全选、逐文件进度、成功/更新/失败状态和批量失败隔离。
 - 单个选中文件导入或同内容更新成功后，导入页会携带已写入书架的 `Book` 快照直接替换到统一阅读入口；TXT/EPUB/UMD 继续进入文本阅读器，PDF 继续进入页面阅读器。多文件批量导入仍留在当前页展示汇总，失败不会错误进入阅读器。
 - Android `MainActivity` 已增加 TXT `ACTION_VIEW` 文件关联；`ExternalTxtOpenBridge` 在后台线程把冷启动或热启动收到的 `content://`/`file://` URI 流式复制到有界 cache 临时文件，Dart 组合根再顺序打开现有导入确认页。宿主使用 `singleTask` 保证外部打开复用同一 Flutter Activity/引擎，并关闭 Flutter 默认深链路接管，避免同一 `content://` 被再次当成页面路由压入返回栈；临时副本在导入成功、失败、取消或过期后清理，代码等待用户真机验证。
+- iOS `Info.plist` 已声明 `public.plain-text` 文档类型；`SceneDelegate` 同时接收冷启动 `connectionOptions.urlContexts` 和热启动 `scene(_:openURLContexts:)`，`ExternalTxtOpenBridge.swift` 对安全作用域或 App Inbox 文件执行协调读取、1 GiB 上限流式复制、有界排队和 cache 临时副本清理，并只删除确认位于本 App `Documents/Inbox` 的系统投递副本，不删除文件提供方原文件。iOS 与 Android 共用现有 `ExternalLocalBookOpenService`、导入确认页及后续私有副本/解析链路，并关闭 Flutter 默认深链路接管，代码等待用户真机验证。
 - 本地书仍保存在当前游客或账号作用域的普通书架表中；书架系统分组现已显示已有的 `BookGroup.idLocal`，并在“我的 -> 本地书籍”提供明确入口。保活主框架直接切换现有书架实例和本地分组，不创建第三套本地书数据状态。
 - 欢迎页和 M7 书架顶部均新增“导入本地书”入口。
 - `ReadBookCoordinator` 已通过 `LocalBookContentService` 读取 TXT/EPUB，不再对全部 `loc_book` 返回 M08 占位错误；本地文本继续复用替换规则、字符锚点、书签、缓存和相邻章预加载。
@@ -33,7 +34,7 @@
 - EPUB nav/NCX 标题层级、图片块、封面和受控资源 URI；当前目录顺序来自 spine，标题来自 XHTML。
 - Big5 自动判别和用户手动切换 TXT 编码；当前无 BOM 且非 UTF-8 时按 GBK 回退。
 - 超大 TXT 流式分块扫描；当前整本读取发生在后台 isolate，但仍受内存上限约束。
-- 文件夹浏览、递归扫描、自动同步和导入取消；Android 外部 TXT 打开代码已写入但待用户真机验证，其他格式外部关联与 iOS“打开方式”仍未实现。
+- 文件夹浏览、递归扫描、自动同步和导入取消；Android/iOS 外部 TXT 打开代码已写入但待用户真机验证，其他格式外部关联仍未实现；只分享一段纯文字而非 TXT 文件 URL 的 iOS Share Extension 也不在本轮范围。
 - 原文件变化后的同身份更新与章节锚点迁移；当前内容变化会产生新 SHA-256 身份。
 - 删除书架记录时“保留/删除应用内副本”双选和孤儿副本清理任务。
 - iOS 真机安全作用域生命周期验证，以及 Android SAF 各文件提供方兼容验证。
@@ -66,5 +67,8 @@ AI 未运行 format、analyze、test、build 或真机命令。请由你执行�
 13. 在 TXT/EPUB/UMD 中滚动、添加书签、切换替换规则、返回并重新打开，确认恢复到同一章节和接近原字符位置。
 14. 关闭 App 后重新启动并断开原文件提供方，确认已经导入的 TXT/EPUB/UMD/PDF 仍可从应用私有副本读取。
 15. 在书架执行刷新，确认本地书不会出现“原书源不存在”；网络书仍按 M7 行为刷新。
+16. iOS 卸载旧包后重新安装，从“文件”、浏览器下载页或其他提供 TXT 文件 URL 的 App 选择“用其他 App 打开”，确认候选中出现 `Legado Flutter`，冷启动进入导入确认页且文件默认选中。
+17. 保持 iOS App 在前台，再从其他 App 打开第二个 TXT，确认热启动进入新的导入确认页；直接返回、导入失败和导入成功后均不重复出现旧请求。
+18. 在 iCloud Drive 和至少一个第三方文件提供方分别打开 TXT，确认安全作用域释放后已经导入的书仍可依赖应用私有副本重开；空文件、非 TXT 和超过 1 GiB 的文件显示受控错误。
 
 用户提供运行结果前，本阶段保持 `IN_PROGRESS`。

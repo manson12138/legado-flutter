@@ -189,4 +189,60 @@ final class ReadingHistoryDao {
     }
     return changedRows;
   }
+
+  /// 只更新已有历史快照的用户自定义封面；没有历史记录时返回零且不新增快照。
+  Future<int> updateCustomCover({
+    required int userId,
+    required String bookUrl,
+    required String? customCoverUrl,
+    DatabaseExecutor? executor,
+  }) async {
+    /// 当前更新使用的数据库或上层事务执行器。
+    final DatabaseExecutor writeExecutor =
+        executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'UPDATE',
+      table: DatabaseTables.readingHistoryBooks,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
+    );
+    /// 已有阅读历史快照的更新行数。
+    final int changedRows = await writeExecutor.update(
+      DatabaseTables.readingHistoryBooks,
+      <String, Object?>{'customCoverUrl': customCoverUrl},
+      where: 'userId = ? AND bookUrl = ?',
+      whereArgs: <Object?>[userId, bookUrl],
+    );
+    if (executor == null && changedRows > 0) {
+      _database.changeNotifier.notifyTables(
+        <String>{DatabaseTables.readingHistoryBooks},
+      );
+    }
+    return changedRows;
+  }
+
+  /// 批量删除当前用户指定书籍的历史快照，历史目录由 SQLite 外键级联删除。
+  Future<int> deleteBooks(
+    int userId,
+    Set<String> bookUrls, {
+    required DatabaseExecutor executor,
+  }) async {
+    if (bookUrls.isEmpty) {
+      return 0;
+    }
+    /// 批量删除使用的稳定参数占位符。
+    final String placeholders =
+        List<String>.filled(bookUrls.length, '?').join(',');
+    _database.logOperation(
+      operation: 'DELETE',
+      table: DatabaseTables.readingHistoryBooks,
+      where: 'userId = ? AND bookUrl IN ($placeholders)',
+      argumentCount: bookUrls.length + 1,
+    );
+    return executor.delete(
+      DatabaseTables.readingHistoryBooks,
+      where: 'userId = ? AND bookUrl IN ($placeholders)',
+      whereArgs: <Object?>[userId, ...bookUrls],
+    );
+  }
 }

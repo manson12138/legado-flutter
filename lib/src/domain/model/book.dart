@@ -58,7 +58,7 @@ final class Book {
   final String? customTag;
   /// 书源返回的封面 URL。
   final String? coverUrl;
-  /// 用户覆盖的封面 URL。
+  /// 用户覆盖的封面 URL；本地封面使用不含易变沙盒前缀的 `legado-cover` 稳定标识。
   final String? customCoverUrl;
   /// 书源返回的简介。
   final String? intro;

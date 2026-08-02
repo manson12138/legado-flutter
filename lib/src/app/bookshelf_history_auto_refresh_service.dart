@@ -8,7 +8,6 @@ import '../domain/model/book.dart';
 import '../domain/model/book_chapter.dart';
 import '../domain/model/toc_refresh_checkpoint.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
-import '../domain/usecase/record_reading_history_use_case.dart';
 import '../help/error/app_result.dart';
 import '../help/logging/app_logger.dart';
 import '../model/web_book/book_detail_service.dart';
@@ -29,7 +28,6 @@ final class BookshelfHistoryAutoRefreshService {
     required TocRefreshCheckpointDao checkpointDao,
     required BookDetailService detailService,
     required AddBookToBookshelfUseCase saveBookshelfBook,
-    required RecordReadingHistoryUseCase saveReadingHistory,
     required HttpCancellationToken Function() cancellationTokenFactory,
     required AppLogger logger,
     this.maximumConcurrency = 2,
@@ -40,7 +38,6 @@ final class BookshelfHistoryAutoRefreshService {
        _checkpointDao = checkpointDao,
        _detailService = detailService,
        _saveBookshelfBook = saveBookshelfBook,
-       _saveReadingHistory = saveReadingHistory,
        _cancellationTokenFactory = cancellationTokenFactory,
        _logger = logger;
 
@@ -64,9 +61,6 @@ final class BookshelfHistoryAutoRefreshService {
 
   /// 原子保存书架书籍和目录的业务动作。
   final AddBookToBookshelfUseCase _saveBookshelfBook;
-
-  /// 原子保存阅读历史书籍和目录快照的业务动作。
-  final RecordReadingHistoryUseCase _saveReadingHistory;
 
   /// 为每本书创建独立 HTTP 取消令牌。
   final HttpCancellationToken Function() _cancellationTokenFactory;
@@ -290,21 +284,14 @@ final class BookshelfHistoryAutoRefreshService {
               )) {
                 return;
               }
-              final Book historyBook = target.bookshelfBook == null
-                  ? refreshedBook
-                  : refreshedBook.copyWithProgress(
-                      chapterIndex: historySnapshot.durChapterIndex,
-                      chapterPos: historySnapshot.durChapterPos,
-                      readTime: historySnapshot.durChapterTime,
-                      chapterTitle: historySnapshot.durChapterTitle,
-                    );
-              final AppResult<void> historyResult =
-                  await _saveReadingHistory.execute(
-                    historyBook,
+              /// 事务内仍存在时才会提交，并合并最新进度和用户封面。
+              final bool historyRefreshed =
+                  await _readingHistoryGateway.refreshExistingHistory(
+                    refreshedBook,
                     chapters,
                   );
-              if (historyResult case AppFailure<void>(error: final error)) {
-                throw StateError(error.message);
+              if (!historyRefreshed && target.bookshelfBook == null) {
+                continue;
               }
             }
             if (chapters.isEmpty) {
@@ -467,6 +454,7 @@ final class BookshelfHistoryAutoRefreshService {
         maximumPages: checkpoint.reverse ? 1 : 100,
         previouslyVisitedPageUrls:
             checkpoint.visitedPageUrls.toSet(),
+        enableTocLogging: false,
       );
       if (incremental.reverse != checkpoint.reverse) {
         throw const _IncrementalRefreshFallback('reverse_changed');
@@ -513,6 +501,7 @@ final class BookshelfHistoryAutoRefreshService {
     final RefreshedBookResult refreshed = await _detailService.refreshBook(
       book: book,
       cancellationToken: cancellationToken,
+      enableTocLogging: false,
     );
     return _AutoRefreshOutcome(
       refreshed: refreshed,
