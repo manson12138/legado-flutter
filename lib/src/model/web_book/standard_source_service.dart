@@ -22,6 +22,34 @@ import '../analyze_rule/legado_rule_evaluator.dart';
 import '../analyze_rule/standard_rule_engine.dart';
 import 'standard_source_parser.dart';
 
+/// 保存一次目录分页加载的章节与增量检查点元数据。
+final class LoadedTocResult {
+  /// 创建不可变目录加载结果。
+  LoadedTocResult({
+    required List<BookChapter> chapters,
+    required this.anchorPageUrl,
+    required List<String> visitedPageUrls,
+    required this.reverse,
+    required this.pageCount,
+  }) : chapters = List<BookChapter>.unmodifiable(chapters),
+       visitedPageUrls = List<String>.unmodifiable(visitedPageUrls);
+
+  /// 本次按最终显示顺序重新编号后的章节。
+  final List<BookChapter> chapters;
+
+  /// 正序目录为最后访问页，倒序目录为首个访问页。
+  final String anchorPageUrl;
+
+  /// 本次加载完成后已确认的分页地址集合。
+  final List<String> visitedPageUrls;
+
+  /// 章节规则是否按最新章节在前返回。
+  final bool reverse;
+
+  /// 本次实际访问的目录页数。
+  final int pageCount;
+}
+
 /// 普通书源四段网络与解析编排入口。
 ///
 /// 本服务不负责跨书源并发，也不直接持久化结果；并发上限与数据库事务由上层 UseCase 管理。
@@ -366,6 +394,26 @@ final class StandardBookSourceService {
     HttpCancellationToken? cancellationToken,
     int maxPages = 100,
   }) async {
+    final LoadedTocResult result = await loadTocWithMetadata(
+      source: source,
+      book: book,
+      runPreUpdateJavaScript: runPreUpdateJavaScript,
+      cancellationToken: cancellationToken,
+      maxPages: maxPages,
+    );
+    return result.chapters;
+  }
+
+  /// 请求目录并返回分页锚点；[initialPageUrl] 只供已有检查点的启动增量刷新使用。
+  Future<LoadedTocResult> loadTocWithMetadata({
+    required BookSource source,
+    required Book book,
+    bool runPreUpdateJavaScript = false,
+    HttpCancellationToken? cancellationToken,
+    int maxPages = 100,
+    String? initialPageUrl,
+    Set<String> previouslyVisitedPageUrls = const <String>{},
+  }) async {
     /// 【搜书诊断日志】当前书籍不可逆标识。
     final String bookId = appLogDiagnosticId(book.bookUrl);
     /// 【搜书诊断日志】完整目录加载耗时计时器。
@@ -394,8 +442,16 @@ final class StandardBookSourceService {
     final String updatedBookUrl =
         scriptExecutionState.modelState.fieldValue(bookModel: true, field: 'bookUrl')?.toString() ??
         book.bookUrl;
-    /// 首个目录地址；优先使用刷新后的目录地址，空值回退刷新后的详情地址。
-    Uri nextUri = Uri.parse(updatedTocUrl.isEmpty ? updatedBookUrl : updatedTocUrl);
+    /// 已验证非空的增量起始页；不存在时从书籍当前目录入口完整加载。
+    final String normalizedInitialPageUrl = initialPageUrl?.trim() ?? '';
+    /// 首个目录地址；检查点优先，否则使用刷新后的目录或详情地址。
+    Uri nextUri = Uri.parse(
+      normalizedInitialPageUrl.isNotEmpty
+          ? normalizedInitialPageUrl
+          : updatedTocUrl.isEmpty
+          ? updatedBookUrl
+          : updatedTocUrl,
+    );
     /// 已访问地址，防止规则产生分页环。
     final Set<String> visited = <String>{};
     /// 按章节地址去重的章节。
@@ -488,7 +544,11 @@ final class StandardBookSourceService {
       }
       /// 尚未访问的下一页。
       final Uri? candidate = parsed.nextPageUris
-          .where((Uri uri) => !visited.contains(uri.toString()))
+          .where(
+            (Uri uri) =>
+                !visited.contains(uri.toString()) &&
+                !previouslyVisitedPageUrls.contains(uri.toString()),
+          )
           .firstOrNull;
       if (candidate == null) {
         break;
@@ -520,7 +580,20 @@ final class StandardBookSourceService {
           'chapterCount=${immutableResult.length} reverse=$reverse '
           'elapsedMs=${stopwatch.elapsedMilliseconds}',
     );
-    return immutableResult;
+    /// 下一次增量检查使用的分页锚点。
+    final String anchorPageUrl = reverse ? visited.first : visited.last;
+    /// 新检查点使用的已访问分页并集；完整刷新时前一集合为空。
+    final Set<String> allVisitedPageUrls = <String>{
+      ...previouslyVisitedPageUrls,
+      ...visited,
+    };
+    return LoadedTocResult(
+      chapters: immutableResult,
+      anchorPageUrl: anchorPageUrl,
+      visitedPageUrls: allVisitedPageUrls.toList(growable: false),
+      reverse: reverse,
+      pageCount: visited.length,
+    );
   }
 
   /// 请求并顺序合并完整章节正文，检测循环分页并限制最多页数。

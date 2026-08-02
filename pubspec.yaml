@@ -1,7 +1,7 @@
 name: legado_flutter
 description: "Legado Android 与 iOS 共用的 Flutter 重写工程。"
 publish_to: 'none'
-version: 1.0.1+11
+version: 1.0.1+12
 
 environment:
   sdk: '>=3.11.3 <4.0.0'
@@ -43,6 +43,10 @@ dev_dependencies:
     sdk: flutter
 
 flutter:
+  # iOS 插件继续统一由 CocoaPods 管理，避免新 Flutter SDK 自动切换 Swift Package Manager 后
+  # 与现有 Podfile.lock、Runner.xcworkspace 和 Xcode 直接运行流程产生两套依赖接线。
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
   assets:
     - assets/default_data/book_sources.json

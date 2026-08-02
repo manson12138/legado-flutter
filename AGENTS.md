@@ -7,6 +7,10 @@ This repository was extracted (with full commit history) from `flutter_app/` and
 the read-only reference implementation this Flutter rewrite is built against; it now lives in a
 sibling repository rather than a parent directory.
 
+The original Android native source repository is located at
+`/Users/contradiction/Desktop/code/legado-with-MD3`. Use this absolute path when locating Android
+reference implementations.
+
 ## Flutter Project Instructions
 
 Before any task, read `docs/flutter-rewrite/FLUTTER_REWRITE_EXECUTION_PLAN.md` first, then use
@@ -21,8 +25,9 @@ For rewrite tasks:
   before implementing phase work.
 - Do not run Flutter/Dart/Gradle/Xcode builds, tests, analysis, lint, formatting checks, or app
   startup; the user runs verification.
-- Treat the original Android implementation (in the sibling `legado-with-MD3` repository) as
-  read-only reference unless the user explicitly asks to modify it there.
+- Treat the original Android implementation (in the sibling repository at
+  `/Users/contradiction/Desktop/code/legado-with-MD3`) as read-only reference unless the user
+  explicitly asks to modify it there.
 - Re-evaluate the AI index when stable routes, layers, gateways, database schema, platform bridges,
   supported formats, or phase gates change.
 - Whenever a change touches persisted data (new/changed/removed table columns, new tables, changed

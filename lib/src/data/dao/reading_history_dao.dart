@@ -83,19 +83,14 @@ final class ReadingHistoryDao {
   }
 
   /// 观察历史书籍表，提交变化后重新查询。
-  Stream<List<Book>> watchAllBooks(int userId) async* {
+  Stream<List<Book>> watchAllBooks(int userId) {
     final Set<String> observedTables = <String>{
       DatabaseTables.readingHistoryBooks,
     };
-    int observedRevision =
-        _database.changeNotifier.revisionForTables(observedTables);
-    while (true) {
-      yield await getAllBooks(userId);
-      observedRevision = await _database.changeNotifier.waitForTableChange(
-        observedTables,
-        observedRevision,
-      );
-    }
+    return _database.changeNotifier.watchQuery<List<Book>>(
+      tableNames: observedTables,
+      query: () => getAllBooks(userId),
+    );
   }
 
   /// 在调用方事务中替换历史书籍快照。

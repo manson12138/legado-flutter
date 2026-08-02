@@ -71,6 +71,7 @@ final class _SearchRouteState extends State<SearchRoute> with RouteAware {
       coordinator: widget.dependencies.createBookSearchCoordinator(),
       historyGateway: widget.dependencies.searchHistoryGateway,
       searchPreferences: widget.dependencies.searchPreferences,
+      userScopeListenable: widget.dependencies.currentUserScope.userId,
       analyticsRecorder:
           widget.dependencies.remoteBookSourceSyncService.recordAnalyticsEvent,
       logger: widget.dependencies.logger,

@@ -18,6 +18,9 @@
 - 本次没有修改数据库结构，也没有调整 `LegadoDatabase.schemaVersion` 或
   `pubspec.yaml` 构建号。
 - Android/iOS 真机或模拟器验收仍由用户执行。
+- 保活 `SearchRoute` 的 `SearchViewModel` 已直接监听 `CurrentUserScope.userId`：认证恢复、
+  登录、退出或换号时立即清空旧作用域瞬时搜索状态并重读新作用域历史，读取代次会拒绝游客或旧账号的
+  较慢结果覆盖当前账号。
 
 明确不包含：
 
@@ -40,7 +43,10 @@ SearchViewModel
 
 `SearchHistoryRepository` 使用唯一固定缓存键 `flutter_m06_search_history` 保存最多 20 条 JSON 字符串。所有账号读写同一行，因此 B 登录后会看到 A 的搜索词；“清空”也会删除所有账号共用的记录。
 
-搜索页已经通过认证门进入，账号变化时带用户 key 的 `MaterialApp` 会重建并释放旧 `SearchViewModel`。但持久化层仍必须独立捕获用户作用域，不能只依赖页面重建来保证隔离。
+搜索页位于主框架 `IndexedStack` 中并保持状态。2026-08-02 的 iOS 真机日志证明，启动时搜索页先在游客
+作用域初始化；认证恢复到账号后，现有导航路由没有释放该 `SearchViewModel`。数据库中账号 13 的用户键
+仍有 11 条历史，但两次启动都只记录了 `historyCount=0`，因此页面显示为空。持久化层独立捕获用户作用域
+仍是必要边界，ViewModel 同时必须监听作用域变化，不能依赖根 Widget 或路由重建。
 
 ## 3. 存储与旧数据决策
 
@@ -68,7 +74,9 @@ flutter_m06_search_history_user_v1_27
 - `SearchHistoryRepository` 通过组合根注入的 `CurrentUserScope.requireUserId` 获取当前用户；`load`、`record`、`clear` 每次入口先捕获一次用户 ID 和最终缓存键。
 - `record` 内部读取旧列表、去重、置顶、截断和写回必须始终使用入口捕获的同一个键，不能在异步等待后重新读取当前用户，否则账号切换可能把 A 的关键字写入 B。
 - 搜索历史读改写使用 Repository 内的有界串行尾任务，避免用户快速连续提交两个关键字时发生“后完成的旧快照覆盖新快照”。搜索历史频率低，单队列串行不会形成可感知性能瓶颈，也不需要维护按用户增长的锁 Map。
-- 账号切换时旧 `SearchViewModel` 已由用户 key 根导航树释放；它的运行编号会取消搜索并拒绝旧 UI 回调。即使旧持久化操作已经开始，也只能写入它入口捕获的旧用户键。
+- 账号切换时保活 `SearchViewModel` 直接监听 `CurrentUserScope.userId`，取消旧搜索、清空关键字、结果和旧
+  历史，并重新读取新用户键；历史读取代次会拒绝较慢的游客或旧账号结果。即使旧持久化操作已经开始，
+  也只能写入入口捕获的旧用户键，且不会再发布到新账号页面。
 - 未登录调用 `SearchHistoryGateway` 使用固定游客键 `flutter_m06_search_history_user_v1_-1`；不得回退到旧固定键、空用户键或无归属公共历史。
 - 日志继续只记录历史数量，不记录搜索词原文、用户 ID 或缓存键。
 
@@ -83,6 +91,8 @@ flutter_m06_search_history_user_v1_27
   - 创建 `SearchHistoryRepository` 时已注入 `currentUserScope.requireUserId`。
 - `lib/src/app/current_user_scope.dart`
   - 已将职责注释从“书架与历史”扩展为“所有明确要求用户隔离的本地数据”，不改变其 Token 边界。
+- `lib/src/ui/search/search_route.dart`、`lib/src/ui/search/search_view_model.dart`
+  - 已注入并监听用户作用域；保活页面在认证恢复和账号切换时重读历史，并隔离旧异步结果。
 - `docs/flutter-rewrite/m06/README.md`、`docs/flutter-rewrite/m11/README.md`、`docs/flutter-rewrite/AI_PROJECT_INDEX.md`
   - 已更新搜索历史归属、旧数据处理、验收和未同步限制。
 

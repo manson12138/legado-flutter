@@ -4,7 +4,7 @@
 >
 > 本文档只记录静态基线和决策规则，不代表已进行编译、签名校验或真机覆盖安装验证。
 >
-> 基线日期：2026-07-25
+> 基线日期：2026-08-02
 >
 > 当前发布节点：`1.0.0+7 / Public Beta 1`，详见 [`docs/flutter-rewrite/releases/1.0.0-build-7-public-beta-1.md`](./docs/flutter-rewrite/releases/1.0.0-build-7-public-beta-1.md)。
 
@@ -14,11 +14,11 @@
 |---|---|---|
 | Android applicationId | `io.legado.flutter` | `android/app/build.gradle.kts` |
 | Android namespace | `io.legado.flutter` | `android/app/build.gradle.kts` |
-| 应用显示版本 `versionName` | `1.0.0` | `pubspec.yaml` 的 `version: 1.0.0+7` |
-| Android 安装版本 `versionCode` | `7` | `pubspec.yaml` 的 `version: 1.0.0+7`，由 Gradle 使用 `flutter.versionCode` |
+| 应用显示版本 `versionName` | `1.0.1` | `pubspec.yaml` 的 `version: 1.0.1+12` |
+| Android 安装版本 `versionCode` | `12` | `pubspec.yaml` 的 `version: 1.0.1+12`，由 Gradle 使用 `flutter.versionCode` |
 | iOS Bundle Identifier | `io.legado.flutter` | `ios/Runner.xcodeproj/project.pbxproj` |
 | SQLite 文件名 | `legado_flutter.db` | `lib/src/data/local/legado_database.dart` |
-| SQLite Schema 版本 | `9` | `LegadoDatabase.schemaVersion`；书架、分组、目录、阅读历史、进度和下载附属状态按登录用户隔离 |
+| SQLite Schema 版本 | `11` | `LegadoDatabase.schemaVersion`；新增用户级目录增量更新检查点，既有书架、历史与目录数据原位保留 |
 | 本地书副本目录 | 与数据库目录同级的 `local_books/` | `lib/src/model/local_book/local_book_storage.dart` |
 | 当前 Android release 签名配置 | `debug` 签名配置 | `android/app/build.gradle.kts` |
 

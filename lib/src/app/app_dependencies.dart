@@ -32,6 +32,7 @@ import '../data/dao/replace_rule_dao.dart';
 import '../data/dao/download_task_dao.dart';
 import '../data/dao/reading_history_dao.dart';
 import '../data/dao/search_book_dao.dart';
+import '../data/dao/toc_refresh_checkpoint_dao.dart';
 import '../data/local/database_tables.dart';
 import '../data/local/legado_database.dart';
 import '../data/local/preferences/app_preferences_store.dart';
@@ -49,6 +50,7 @@ import '../data/repository/reading_history_repository.dart';
 import '../data/repository/remote_app_configuration_repository.dart';
 import '../data/repository/authentication_repository.dart';
 import '../platform/password_encryption_platform_service.dart';
+import '../platform/local_book_cover_service.dart';
 import '../domain/gateway/adult_content_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
 import '../domain/gateway/book_cover_candidate_gateway.dart';
@@ -168,6 +170,7 @@ final class AppDependencies {
     required this.createBookshelfGroup,
     required this.changeBookSource,
     required this.updateBookCustomCover,
+    required this.localBookCoverService,
     required this.replaceBooksGroup,
     required this.loadBookChapters,
     required this.saveBookChapters,
@@ -202,6 +205,9 @@ final class AppDependencies {
     final BookChapterDao chapterDao = BookChapterDao(database);
     /// 阅读历史书籍与目录快照 DAO，不复用书架成员表。
     final ReadingHistoryDao readingHistoryDao = ReadingHistoryDao(database);
+    /// 启动目录增量检查点 DAO，只由应用级后台刷新服务访问。
+    final TocRefreshCheckpointDao tocRefreshCheckpointDao =
+        TocRefreshCheckpointDao(database);
     /// 书架分组 DAO，只在数据组合根内创建。
     final BookGroupDao bookGroupDao = BookGroupDao(database);
     /// 书源表 DAO，只在数据组合根内创建，不向 UI 暴露。
@@ -500,6 +506,9 @@ final class AppDependencies {
         BookshelfHistoryAutoRefreshService(
       startupPreloader: bookshelfHistoryStartupPreloader,
       currentUserScope: currentUserScope,
+      chapterGateway: bookRepository,
+      readingHistoryGateway: readingHistoryRepository,
+      checkpointDao: tocRefreshCheckpointDao,
       detailService: bookDetailService,
       saveBookshelfBook: addBookToBookshelf,
       saveReadingHistory: recordReadingHistory,
@@ -623,6 +632,7 @@ final class AppDependencies {
         analyticsRecorder: remoteBookSourceSyncService.recordAnalyticsEvent,
       ),
       updateBookCustomCover: UpdateBookCustomCoverUseCase(bookRepository),
+      localBookCoverService: const DefaultLocalBookCoverService(),
       replaceBooksGroup: ReplaceBooksGroupUseCase(bookRepository),
       loadBookChapters: LoadBookChaptersUseCase(bookRepository),
       saveBookChapters: SaveBookChaptersUseCase(bookRepository),
@@ -768,6 +778,9 @@ final class AppDependencies {
 
   /// 只更新 `customCoverUrl` 的书架封面保存动作。
   final UpdateBookCustomCoverUseCase updateBookCustomCover;
+
+  /// 双端系统图片选择与应用私有本地封面副本管理服务。
+  final LocalBookCoverService localBookCoverService;
 
   /// 批量替换书籍分组 UseCase。
   final ReplaceBooksGroupUseCase replaceBooksGroup;

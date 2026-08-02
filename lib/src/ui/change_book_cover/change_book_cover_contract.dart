@@ -9,6 +9,7 @@ final class ChangeBookCoverUiState {
     this.initializing = true,
     this.searching = false,
     this.saving = false,
+    this.pickingLocalImage = false,
     List<BookCoverCandidate> candidates = const <BookCoverCandidate>[],
     this.matchLevel,
     this.progress = const BookSearchProgress(
@@ -32,6 +33,9 @@ final class ChangeBookCoverUiState {
 
   /// 是否正在字段级保存用户选择。
   final bool saving;
+
+  /// 是否正在等待系统图片选择器返回。
+  final bool pickingLocalImage;
 
   /// 当前最高匹配层级的网络封面候选。
   final List<BookCoverCandidate> candidates;
@@ -62,6 +66,7 @@ final class ChangeBookCoverUiState {
     bool? initializing,
     bool? searching,
     bool? saving,
+    bool? pickingLocalImage,
     List<BookCoverCandidate>? candidates,
     BookCoverMatchLevel? matchLevel,
     BookSearchProgress? progress,
@@ -78,6 +83,7 @@ final class ChangeBookCoverUiState {
       initializing: initializing ?? this.initializing,
       searching: searching ?? this.searching,
       saving: saving ?? this.saving,
+      pickingLocalImage: pickingLocalImage ?? this.pickingLocalImage,
       candidates: candidates ?? this.candidates,
       matchLevel: clearMatchLevel ? null : matchLevel ?? this.matchLevel,
       progress: progress ?? this.progress,
@@ -109,6 +115,27 @@ final class RefreshBookCoverCandidatesIntent extends ChangeBookCoverIntent {
 final class StopBookCoverSearchIntent extends ChangeBookCoverIntent {
   /// 创建停止 Intent。
   const StopBookCoverSearchIntent();
+}
+
+/// 请求通过系统选择器更换为本地图片。
+final class PickLocalBookCoverIntent extends ChangeBookCoverIntent {
+  /// 创建本地图片选择 Intent。
+  const PickLocalBookCoverIntent();
+}
+
+/// 系统选择器取消或失败后恢复面板交互。
+final class CancelLocalBookCoverPickIntent extends ChangeBookCoverIntent {
+  /// 创建本地图片选择取消 Intent。
+  const CancelLocalBookCoverPickIntent();
+}
+
+/// 系统选择器已经把图片复制到应用私有目录，继续字段级保存。
+final class LocalBookCoverPickedIntent extends ChangeBookCoverIntent {
+  /// 创建本地封面保存 Intent。
+  const LocalBookCoverPickedIntent(this.coverPath);
+
+  /// 已复制到应用私有目录的完整路径。
+  final String coverPath;
 }
 
 /// 选择一个网络候选封面。
@@ -148,4 +175,19 @@ final class ShowChangeBookCoverMessageEffect extends ChangeBookCoverEffect {
 
   /// 面向用户的简短提示。
   final String message;
+}
+
+/// 请求 Route 边界打开系统图片选择器。
+final class RequestLocalBookCoverPickerEffect extends ChangeBookCoverEffect {
+  /// 创建系统选择器 Effect。
+  const RequestLocalBookCoverPickerEffect();
+}
+
+/// 本地封面保存失败，请求 Route 删除尚未生效的应用私有副本。
+final class DeleteUnusedLocalBookCoverEffect extends ChangeBookCoverEffect {
+  /// 创建未使用副本清理 Effect。
+  const DeleteUnusedLocalBookCoverEffect(this.coverPath);
+
+  /// 等待删除的应用私有图片路径。
+  final String coverPath;
 }

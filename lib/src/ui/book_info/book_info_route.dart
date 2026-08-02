@@ -292,6 +292,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
       searchCoordinator:
           widget.dependencies.createBookCoverSearchCoordinator(),
       updateCustomCover: widget.dependencies.updateBookCustomCover,
+      localBookCoverService: widget.dependencies.localBookCoverService,
     );
     if (!mounted || updatedBook == null) {
       return;

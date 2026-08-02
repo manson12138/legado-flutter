@@ -54,20 +54,13 @@ final class BookGroupDao {
   }
 
   /// 观察全部分组；表变化时重新查询。
-  Stream<List<BookGroup>> watchAll(int userId) async* {
+  Stream<List<BookGroup>> watchAll(int userId) {
     /// 当前观察依赖的表集合。
     final Set<String> observedTables = <String>{DatabaseTables.bookGroups};
-    /// 已消费的最近一次相关表提交版本。
-    int observedRevision = _database.changeNotifier.revisionForTables(
-      observedTables,
+    return _database.changeNotifier.watchQuery<List<BookGroup>>(
+      tableNames: observedTables,
+      query: () => getAll(userId),
     );
-    while (true) {
-      yield await getAll(userId);
-      observedRevision = await _database.changeNotifier.waitForTableChange(
-        observedTables,
-        observedRevision,
-      );
-    }
   }
 
   /// 替换写入一个分组。

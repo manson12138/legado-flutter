@@ -6,6 +6,7 @@ import '../../domain/model/book.dart';
 import '../../domain/model/search_book.dart';
 import '../../domain/usecase/update_book_custom_cover_use_case.dart';
 import '../../model/web_book/book_cover_search_coordinator.dart';
+import '../../platform/local_book_cover_service.dart';
 import '../components/book_cover.dart';
 import '../theme/app_tokens.dart';
 import 'change_book_cover_contract.dart';
@@ -18,6 +19,7 @@ Future<Book?> showChangeBookCoverSheet({
   required List<SearchBook> initialCandidates,
   required BookCoverSearchCoordinator searchCoordinator,
   required UpdateBookCustomCoverUseCase updateCustomCover,
+  required LocalBookCoverService localBookCoverService,
 }) {
   return showModalBottomSheet<Book>(
     context: context,
@@ -31,6 +33,7 @@ Future<Book?> showChangeBookCoverSheet({
         initialCandidates: initialCandidates,
         searchCoordinator: searchCoordinator,
         updateCustomCover: updateCustomCover,
+        localBookCoverService: localBookCoverService,
       );
     },
   );
@@ -44,6 +47,7 @@ final class ChangeBookCoverSheet extends StatefulWidget {
     required this.initialCandidates,
     required this.searchCoordinator,
     required this.updateCustomCover,
+    required this.localBookCoverService,
     super.key,
   });
 
@@ -58,6 +62,9 @@ final class ChangeBookCoverSheet extends StatefulWidget {
 
   /// 字段级封面更新动作。
   final UpdateBookCustomCoverUseCase updateCustomCover;
+
+  /// 系统图片选择与应用私有封面副本管理边界。
+  final LocalBookCoverService localBookCoverService;
 
   /// 创建底部面板状态。
   @override
@@ -92,11 +99,83 @@ final class _ChangeBookCoverSheetState extends State<ChangeBookCoverSheet> {
     }
     switch (effect) {
       case CloseBookCoverWithResultEffect(book: final Book book):
-        Navigator.of(context).pop(book);
+        unawaited(_closeWithSavedBook(book));
       case ShowChangeBookCoverMessageEffect(message: final String message):
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(message)));
+      case RequestLocalBookCoverPickerEffect():
+        unawaited(_pickLocalBookCover());
+      case DeleteUnusedLocalBookCoverEffect(coverPath: final String coverPath):
+        unawaited(_deleteUnusedLocalBookCover(coverPath));
+    }
+  }
+
+  /// 打开系统图片选择器；平台返回后只把应用私有路径交回 ViewModel。
+  Future<void> _pickLocalBookCover() async {
+    try {
+      /// 已复制到应用支持目录的本地封面路径；空值表示用户取消。
+      final String? coverPath = await widget.localBookCoverService
+          .pickAndPersist(widget.book.bookUrl);
+      if (!mounted) {
+        if (coverPath != null) {
+          await widget.localBookCoverService.deleteManagedCover(
+            coverPath,
+            exceptPath: widget.book.customCoverUrl,
+          );
+        }
+        return;
+      }
+      if (coverPath == null) {
+        _viewModel.onIntent(const CancelLocalBookCoverPickIntent());
+        return;
+      }
+      _viewModel.onIntent(LocalBookCoverPickedIntent(coverPath));
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      _viewModel.onIntent(const CancelLocalBookCoverPickIntent());
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('选择或保存本地图片失败')));
+    }
+  }
+
+  /// 保存成功后清理这本书旧的受管图片，再携带数据库最新书籍关闭面板。
+  Future<void> _closeWithSavedBook(Book book) async {
+    try {
+      await widget.localBookCoverService.deleteManagedCover(
+        widget.book.customCoverUrl,
+        exceptPath: book.customCoverUrl,
+      );
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('旧本地封面清理失败，不影响新封面')),
+          );
+      }
+    }
+    if (mounted) {
+      Navigator.of(context).pop(book);
+    }
+  }
+
+  /// 删除数据库保存失败后未被引用的应用私有图片。
+  Future<void> _deleteUnusedLocalBookCover(String coverPath) async {
+    try {
+      await widget.localBookCoverService.deleteManagedCover(coverPath);
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('未使用的本地封面清理失败')),
+        );
     }
   }
 
@@ -231,6 +310,20 @@ final class _ChangeBookCoverHeader extends StatelessWidget {
               tooltip: '重新搜索封面',
             ),
           IconButton(
+            onPressed:
+                state.initializing || state.saving || state.pickingLocalImage
+                ? null
+                : () => onIntent(const PickLocalBookCoverIntent()),
+            icon: state.pickingLocalImage
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.folder_open_outlined),
+            tooltip: '选择本地图片',
+          ),
+          IconButton(
             onPressed: onClose,
             icon: const Icon(Icons.close),
             tooltip: '关闭',
@@ -335,7 +428,7 @@ final class _ChangeBookCoverBody extends StatelessWidget {
                           ? '书源默认'
                           : book.originName,
                       selected: currentCustomCover.isEmpty,
-                      enabled: !state.saving,
+                      enabled: !state.saving && !state.pickingLocalImage,
                       onTap: () =>
                           onIntent(const RestoreDefaultBookCoverIntent()),
                     );
@@ -351,7 +444,7 @@ final class _ChangeBookCoverBody extends StatelessWidget {
                       title: '当前封面',
                       subtitle: '用户自定义',
                       selected: true,
-                      enabled: !state.saving,
+                      enabled: !state.saving && !state.pickingLocalImage,
                       onTap: () => onIntent(
                         SelectBookCoverCandidateIntent(currentCustomCover),
                       ),
@@ -377,7 +470,7 @@ final class _ChangeBookCoverBody extends StatelessWidget {
                         ? '未知作者'
                         : candidate.book.author,
                     selected: currentCustomCover == candidate.coverUrl,
-                    enabled: !state.saving,
+                    enabled: !state.saving && !state.pickingLocalImage,
                     onTap: () => onIntent(
                       SelectBookCoverCandidateIntent(candidate.coverUrl),
                     ),

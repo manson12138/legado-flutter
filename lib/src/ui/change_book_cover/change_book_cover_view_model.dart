@@ -75,11 +75,57 @@ final class ChangeBookCoverViewModel {
         unawaited(_startSearch());
       case StopBookCoverSearchIntent():
         _stopSearch();
+      case PickLocalBookCoverIntent():
+        _requestLocalBookCover();
+      case CancelLocalBookCoverPickIntent():
+        _cancelLocalBookCoverPick();
+      case LocalBookCoverPickedIntent(coverPath: final String coverPath):
+        _acceptLocalBookCover(coverPath);
       case SelectBookCoverCandidateIntent(coverUrl: final String coverUrl):
         unawaited(_saveCover(coverUrl));
       case RestoreDefaultBookCoverIntent():
         unawaited(_saveCover(null));
     }
+  }
+
+  /// 停止网络搜索并让 Route 边界打开系统图片选择器。
+  void _requestLocalBookCover() {
+    if (_disposed ||
+        _state.initializing ||
+        _state.saving ||
+        _state.pickingLocalImage) {
+      return;
+    }
+    _stopSearch();
+    _emit(
+      _state.copyWith(
+        pickingLocalImage: true,
+        clearErrorMessage: true,
+      ),
+    );
+    _effectController.add(const RequestLocalBookCoverPickerEffect());
+  }
+
+  /// 系统选择器未返回图片时恢复面板操作。
+  void _cancelLocalBookCoverPick() {
+    if (_disposed || !_state.pickingLocalImage) {
+      return;
+    }
+    _emit(_state.copyWith(pickingLocalImage: false));
+  }
+
+  /// 接收已复制到应用私有目录的路径并进入统一字段级保存链路。
+  void _acceptLocalBookCover(String coverPath) {
+    if (_disposed || !_state.pickingLocalImage) {
+      return;
+    }
+    /// 去除系统边界可能携带的首尾空白。
+    final String normalizedPath = coverPath.trim();
+    _emit(_state.copyWith(pickingLocalImage: false));
+    if (normalizedPath.isEmpty) {
+      return;
+    }
+    unawaited(_saveCover(normalizedPath, discardLocalCoverOnFailure: true));
   }
 
   /// 加载书源可用性、详情候选和 SQLite 缓存，并在没有替代封面时自动搜索。
@@ -263,8 +309,11 @@ final class ChangeBookCoverViewModel {
   }
 
   /// 保存候选 URL；空值表示恢复书源默认封面。
-  Future<void> _saveCover(String? coverUrl) async {
-    if (_disposed || _state.saving) {
+  Future<void> _saveCover(
+    String? coverUrl, {
+    bool discardLocalCoverOnFailure = false,
+  }) async {
+    if (_disposed || _state.saving || _state.pickingLocalImage) {
       return;
     }
     _stopSearch();
@@ -281,6 +330,11 @@ final class ChangeBookCoverViewModel {
       case AppSuccess<Book>(value: final Book book):
         _effectController.add(CloseBookCoverWithResultEffect(book));
       case AppFailure<Book>(error: final error):
+        if (discardLocalCoverOnFailure &&
+            coverUrl != null &&
+            coverUrl.trim() != (_book.customCoverUrl?.trim() ?? '')) {
+          _effectController.add(DeleteUnusedLocalBookCoverEffect(coverUrl));
+        }
         _emit(
           _state.copyWith(
             saving: false,

@@ -1,7 +1,12 @@
 import 'dart:async';
 
 import '../api/http/http_contract.dart';
+import '../data/dao/toc_refresh_checkpoint_dao.dart';
+import '../domain/gateway/chapter_gateway.dart';
+import '../domain/gateway/reading_history_gateway.dart';
 import '../domain/model/book.dart';
+import '../domain/model/book_chapter.dart';
+import '../domain/model/toc_refresh_checkpoint.dart';
 import '../domain/usecase/add_book_to_bookshelf_use_case.dart';
 import '../domain/usecase/record_reading_history_use_case.dart';
 import '../help/error/app_result.dart';
@@ -19,6 +24,9 @@ final class BookshelfHistoryAutoRefreshService {
   BookshelfHistoryAutoRefreshService({
     required BookshelfHistoryStartupPreloader startupPreloader,
     required CurrentUserScope currentUserScope,
+    required ChapterGateway chapterGateway,
+    required ReadingHistoryGateway readingHistoryGateway,
+    required TocRefreshCheckpointDao checkpointDao,
     required BookDetailService detailService,
     required AddBookToBookshelfUseCase saveBookshelfBook,
     required RecordReadingHistoryUseCase saveReadingHistory,
@@ -27,6 +35,9 @@ final class BookshelfHistoryAutoRefreshService {
     this.maximumConcurrency = 2,
   }) : _startupPreloader = startupPreloader,
        _currentUserScope = currentUserScope,
+       _chapterGateway = chapterGateway,
+       _readingHistoryGateway = readingHistoryGateway,
+       _checkpointDao = checkpointDao,
        _detailService = detailService,
        _saveBookshelfBook = saveBookshelfBook,
        _saveReadingHistory = saveReadingHistory,
@@ -38,6 +49,15 @@ final class BookshelfHistoryAutoRefreshService {
 
   /// 当前认证用户作用域。
   final CurrentUserScope _currentUserScope;
+
+  /// 读取书架完整目录，供增量页与旧快照安全合并。
+  final ChapterGateway _chapterGateway;
+
+  /// 读取未入架历史书的完整目录快照。
+  final ReadingHistoryGateway _readingHistoryGateway;
+
+  /// 保存用户级增量目录检查点。
+  final TocRefreshCheckpointDao _checkpointDao;
 
   /// 联网刷新详情与完整目录的服务。
   final BookDetailService _detailService;
@@ -56,6 +76,12 @@ final class BookshelfHistoryAutoRefreshService {
 
   /// 启动后台刷新允许的最大并发数。
   final int maximumConcurrency;
+
+  /// 同一账号最近成功更新后跳过重复启动刷新的时间窗口。
+  static const Duration _freshnessWindow = Duration(minutes: 30);
+
+  /// 即使增量更新持续成功，也要周期性完整校准目录。
+  static const Duration _fullRefreshInterval = Duration(days: 7);
 
   /// 当前活动任务持有的全部 HTTP 取消令牌。
   final Set<HttpCancellationToken> _activeTokens = <HttpCancellationToken>{};
@@ -155,6 +181,11 @@ final class BookshelfHistoryAutoRefreshService {
             : existing.withReadingHistoryBook(book);
       }
 
+      await _checkpointDao.deleteBooksNotIn(
+        userId,
+        targetsByUrl.keys.toSet(),
+      );
+
       final List<_AutoRefreshTarget> targets = targetsByUrl.values
           .where((_AutoRefreshTarget target) {
             final Book book = target.refreshSource;
@@ -180,6 +211,10 @@ final class BookshelfHistoryAutoRefreshService {
       int nextIndex = 0;
       int succeeded = 0;
       int failed = 0;
+      int skippedFresh = 0;
+      int incrementalRefreshes = 0;
+      int fullRefreshes = 0;
+      int fallbackRefreshes = 0;
 
       Future<void> worker() async {
         while (_isCurrentRun(
@@ -191,14 +226,26 @@ final class BookshelfHistoryAutoRefreshService {
           final int index = nextIndex;
           nextIndex += 1;
           final _AutoRefreshTarget target = targets[index];
+          final int now = DateTime.now().millisecondsSinceEpoch;
+          final TocRefreshCheckpoint? checkpoint =
+              await _checkpointDao.get(userId, target.refreshSource.bookUrl);
+          if (_isFreshCheckpoint(
+            checkpoint: checkpoint,
+            book: target.refreshSource,
+            now: now,
+          )) {
+            skippedFresh += 1;
+            continue;
+          }
           final HttpCancellationToken token = _cancellationTokenFactory();
           _activeTokens.add(token);
           try {
-            final RefreshedBookResult refreshed = await _detailService
-                .refreshBook(
-                  book: target.refreshSource,
-                  cancellationToken: token,
-                )
+            final _AutoRefreshOutcome outcome = await _refreshTarget(
+              target: target,
+              checkpoint: checkpoint,
+              now: now,
+              cancellationToken: token,
+            )
                 .timeout(
                   const Duration(seconds: 60),
                   onTimeout: () {
@@ -214,18 +261,28 @@ final class BookshelfHistoryAutoRefreshService {
               return;
             }
 
+            final RefreshedBookResult refreshed = outcome.refreshed;
+            final List<BookChapter> chapters = outcome.chapters;
+            final Book refreshedBook = _detailService.withChapterSummary(
+              target.refreshSource.tocUrl.isEmpty
+                  ? refreshed.book
+                  : target.refreshSource,
+              chapters,
+            );
+
             if (target.bookshelfBook != null) {
               final AppResult<void> saveResult =
                   await _saveBookshelfBook.save(
-                    refreshed.book,
-                    refreshed.chapters,
+                    refreshedBook,
+                    chapters,
                   );
               if (saveResult case AppFailure<void>(error: final error)) {
                 throw StateError(error.message);
               }
             }
 
-            if (target.readingHistoryBook != null) {
+            final Book? historySnapshot = target.readingHistoryBook;
+            if (historySnapshot != null) {
               if (!_isCurrentRun(
                 userId: userId,
                 userGeneration: userGeneration,
@@ -234,23 +291,47 @@ final class BookshelfHistoryAutoRefreshService {
                 return;
               }
               final Book historyBook = target.bookshelfBook == null
-                  ? refreshed.book
-                  : refreshed.book.copyWithProgress(
-                      chapterIndex:
-                          target.readingHistoryBook!.durChapterIndex,
-                      chapterPos: target.readingHistoryBook!.durChapterPos,
-                      readTime: target.readingHistoryBook!.durChapterTime,
-                      chapterTitle:
-                          target.readingHistoryBook!.durChapterTitle,
+                  ? refreshedBook
+                  : refreshedBook.copyWithProgress(
+                      chapterIndex: historySnapshot.durChapterIndex,
+                      chapterPos: historySnapshot.durChapterPos,
+                      readTime: historySnapshot.durChapterTime,
+                      chapterTitle: historySnapshot.durChapterTitle,
                     );
               final AppResult<void> historyResult =
                   await _saveReadingHistory.execute(
                     historyBook,
-                    refreshed.chapters,
+                    chapters,
                   );
               if (historyResult case AppFailure<void>(error: final error)) {
                 throw StateError(error.message);
               }
+            }
+            if (chapters.isEmpty) {
+              throw StateError('目录更新完成但无法保存空目录检查点');
+            }
+            await _checkpointDao.upsert(
+              userId,
+              TocRefreshCheckpoint(
+                bookUrl: refreshedBook.bookUrl,
+                sourceUrl: refreshedBook.origin,
+                tocUrl: refreshedBook.tocUrl,
+                anchorPageUrl: refreshed.anchorPageUrl,
+                visitedPageUrls: refreshed.visitedPageUrls,
+                anchorChapterUrl: chapters.last.url,
+                reverse: refreshed.reverse,
+                chapterCount: chapters.length,
+                lastSuccessfulAt: now,
+                lastFullRefreshAt: outcome.lastFullRefreshAt,
+              ),
+            );
+            if (outcome.fullRefresh) {
+              fullRefreshes += 1;
+            } else {
+              incrementalRefreshes += 1;
+            }
+            if (outcome.fallbackUsed) {
+              fallbackRefreshes += 1;
             }
             succeeded += 1;
           } on Object catch (error) {
@@ -291,7 +372,9 @@ final class BookshelfHistoryAutoRefreshService {
           message:
               'stage=bookshelf_history_auto_refresh_completed '
               'targetCount=${targets.length} succeeded=$succeeded '
-              'failed=$failed',
+              'failed=$failed skippedFresh=$skippedFresh '
+              'incremental=$incrementalRefreshes full=$fullRefreshes '
+              'fallback=$fallbackRefreshes',
         );
       }
     } on Object catch (error) {
@@ -310,6 +393,195 @@ final class BookshelfHistoryAutoRefreshService {
     }
   }
 
+  /// 判断检查点是否仍属于当前书籍且处于短时间免重复刷新窗口。
+  bool _isFreshCheckpoint({
+    required TocRefreshCheckpoint? checkpoint,
+    required Book book,
+    required int now,
+  }) {
+    if (checkpoint == null || !_checkpointMatchesBook(checkpoint, book)) {
+      return false;
+    }
+    final int elapsed = now - checkpoint.lastSuccessfulAt;
+    return elapsed >= 0 && elapsed < _freshnessWindow.inMilliseconds;
+  }
+
+  /// 核对书源、目录入口和书籍主键，避免换源后复用旧分页地址。
+  bool _checkpointMatchesBook(
+    TocRefreshCheckpoint checkpoint,
+    Book book,
+  ) {
+    return checkpoint.bookUrl == book.bookUrl &&
+        checkpoint.sourceUrl == book.origin &&
+        checkpoint.tocUrl == book.tocUrl &&
+        checkpoint.anchorPageUrl.isNotEmpty &&
+        checkpoint.visitedPageUrls.contains(checkpoint.anchorPageUrl) &&
+        checkpoint.anchorChapterUrl.isNotEmpty;
+  }
+
+  /// 优先从检查点页增量刷新；检查点异常、目录漂移或周期校准到期时完整刷新。
+  Future<_AutoRefreshOutcome> _refreshTarget({
+    required _AutoRefreshTarget target,
+    required TocRefreshCheckpoint? checkpoint,
+    required int now,
+    required HttpCancellationToken cancellationToken,
+  }) async {
+    final Book book = target.refreshSource;
+    if (checkpoint == null || !_checkpointMatchesBook(checkpoint, book)) {
+      return _fullRefresh(
+        book: book,
+        now: now,
+        cancellationToken: cancellationToken,
+      );
+    }
+    final int sinceFullRefresh = now - checkpoint.lastFullRefreshAt;
+    if (sinceFullRefresh < 0 ||
+        sinceFullRefresh >= _fullRefreshInterval.inMilliseconds) {
+      return _fullRefresh(
+        book: book,
+        now: now,
+        cancellationToken: cancellationToken,
+      );
+    }
+
+    final List<BookChapter> existingChapters = target.bookshelfBook != null
+        ? await _chapterGateway.getChapterList(book.bookUrl)
+        : await _readingHistoryGateway.getHistoryChapters(book.bookUrl);
+    final bool localSnapshotMatches =
+        existingChapters.length == checkpoint.chapterCount &&
+        existingChapters.isNotEmpty &&
+        existingChapters.last.url == checkpoint.anchorChapterUrl;
+    if (!localSnapshotMatches) {
+      return _fullRefresh(
+        book: book,
+        now: now,
+        cancellationToken: cancellationToken,
+      );
+    }
+
+    try {
+      final RefreshedBookResult incremental = await _detailService.refreshBook(
+        book: book,
+        cancellationToken: cancellationToken,
+        initialPageUrl: checkpoint.anchorPageUrl,
+        maximumPages: checkpoint.reverse ? 1 : 100,
+        previouslyVisitedPageUrls:
+            checkpoint.visitedPageUrls.toSet(),
+      );
+      if (incremental.reverse != checkpoint.reverse) {
+        throw const _IncrementalRefreshFallback('reverse_changed');
+      }
+      final List<BookChapter> merged = _mergeIncrementalChapters(
+        existingChapters: existingChapters,
+        incrementalChapters: incremental.chapters,
+      );
+      return _AutoRefreshOutcome(
+        refreshed: incremental,
+        chapters: merged,
+        fullRefresh: false,
+        fallbackUsed: false,
+        lastFullRefreshAt: checkpoint.lastFullRefreshAt,
+      );
+    } on Object catch (error) {
+      if (cancellationToken.isCancelled) {
+        rethrow;
+      }
+      final String fallbackReason = error is _IncrementalRefreshFallback
+          ? error.reason
+          : error.runtimeType.toString();
+      _logger.info(
+        tag: appStartupLogTag,
+        message: 'stage=bookshelf_history_auto_refresh_incremental_fallback '
+            'bookId=${appLogDiagnosticId(book.bookUrl)} '
+            'reason=$fallbackReason',
+      );
+      final _AutoRefreshOutcome full = await _fullRefresh(
+        book: book,
+        now: now,
+        cancellationToken: cancellationToken,
+      );
+      return full.withFallbackUsed();
+    }
+  }
+
+  /// 从目录入口执行完整刷新，并把本次时间记录为新的完整校准时间。
+  Future<_AutoRefreshOutcome> _fullRefresh({
+    required Book book,
+    required int now,
+    required HttpCancellationToken cancellationToken,
+  }) async {
+    final RefreshedBookResult refreshed = await _detailService.refreshBook(
+      book: book,
+      cancellationToken: cancellationToken,
+    );
+    return _AutoRefreshOutcome(
+      refreshed: refreshed,
+      chapters: refreshed.chapters,
+      fullRefresh: true,
+      fallbackUsed: false,
+      lastFullRefreshAt: now,
+    );
+  }
+
+  /// 用检查点页的首个重叠章节替换旧目录尾部，并重新生成连续索引。
+  List<BookChapter> _mergeIncrementalChapters({
+    required List<BookChapter> existingChapters,
+    required List<BookChapter> incrementalChapters,
+  }) {
+    if (incrementalChapters.isEmpty) {
+      throw const _IncrementalRefreshFallback('empty_incremental_page');
+    }
+    final Map<String, int> existingIndexByUrl = <String, int>{
+      for (final BookChapter chapter in existingChapters)
+        chapter.url: chapter.index,
+    };
+    final int? overlapIndex =
+        existingIndexByUrl[incrementalChapters.first.url];
+    if (overlapIndex == null) {
+      throw const _IncrementalRefreshFallback('missing_overlap');
+    }
+    final List<BookChapter> merged = <BookChapter>[];
+    final Set<String> addedUrls = <String>{};
+    for (final BookChapter chapter
+        in existingChapters.take(overlapIndex)) {
+      if (addedUrls.add(chapter.url)) {
+        merged.add(_copyChapterWithIndex(chapter, merged.length));
+      }
+    }
+    for (final BookChapter chapter in incrementalChapters) {
+      if (addedUrls.add(chapter.url)) {
+        merged.add(_copyChapterWithIndex(chapter, merged.length));
+      }
+    }
+    if (merged.length < existingChapters.length) {
+      throw const _IncrementalRefreshFallback('chapter_count_decreased');
+    }
+    return List<BookChapter>.unmodifiable(merged);
+  }
+
+  /// 复制章节并只替换合并后的连续索引。
+  BookChapter _copyChapterWithIndex(BookChapter chapter, int index) {
+    return BookChapter(
+      url: chapter.url,
+      title: chapter.title,
+      bookUrl: chapter.bookUrl,
+      index: index,
+      isVolume: chapter.isVolume,
+      baseUrl: chapter.baseUrl,
+      isVip: chapter.isVip,
+      isPay: chapter.isPay,
+      resourceUrl: chapter.resourceUrl,
+      tag: chapter.tag,
+      wordCount: chapter.wordCount,
+      start: chapter.start,
+      end: chapter.end,
+      startFragmentId: chapter.startFragmentId,
+      endFragmentId: chapter.endFragmentId,
+      variable: chapter.variable,
+      reviewImg: chapter.reviewImg,
+    );
+  }
+
   /// 判断异步结果是否仍属于当前登录用户和当前运行。
   bool _isCurrentRun({
     required int userId,
@@ -322,6 +594,53 @@ final class BookshelfHistoryAutoRefreshService {
           expectedGeneration: userGeneration,
         );
   }
+}
+
+/// 保存一次启动目录刷新采用的模式、合并目录和完整校准时间。
+final class _AutoRefreshOutcome {
+  /// 创建后台目录刷新结果。
+  const _AutoRefreshOutcome({
+    required this.refreshed,
+    required this.chapters,
+    required this.fullRefresh,
+    required this.fallbackUsed,
+    required this.lastFullRefreshAt,
+  });
+
+  /// 网络层返回的书籍摘要和分页元数据。
+  final RefreshedBookResult refreshed;
+
+  /// 已与旧快照合并并重新编号的完整目录。
+  final List<BookChapter> chapters;
+
+  /// 本次是否从目录入口执行了完整校准。
+  final bool fullRefresh;
+
+  /// 本次完整刷新是否由增量检查异常回退触发。
+  final bool fallbackUsed;
+
+  /// 最近一次完整校准成功时间。
+  final int lastFullRefreshAt;
+
+  /// 返回只把回退标记设为真的不可变副本。
+  _AutoRefreshOutcome withFallbackUsed() {
+    return _AutoRefreshOutcome(
+      refreshed: refreshed,
+      chapters: chapters,
+      fullRefresh: fullRefresh,
+      fallbackUsed: true,
+      lastFullRefreshAt: lastFullRefreshAt,
+    );
+  }
+}
+
+/// 表示增量目录无法安全合并，调用方应回退完整刷新。
+final class _IncrementalRefreshFallback implements Exception {
+  /// 创建不包含书名、URL 或规则正文的安全回退原因。
+  const _IncrementalRefreshFallback(this.reason);
+
+  /// 仅供诊断的稳定原因枚举文本。
+  final String reason;
 }
 
 /// 同一 URL 在书架和阅读历史中的独立持久化目标。
@@ -339,7 +658,17 @@ final class _AutoRefreshTarget {
   final Book? readingHistoryBook;
 
   /// 联网请求优先使用书架事实，使“禁止更新”等书架设置保持权威。
-  Book get refreshSource => bookshelfBook ?? readingHistoryBook!;
+  Book get refreshSource {
+    final Book? shelfBook = bookshelfBook;
+    if (shelfBook != null) {
+      return shelfBook;
+    }
+    final Book? historyBook = readingHistoryBook;
+    if (historyBook != null) {
+      return historyBook;
+    }
+    throw StateError('启动目录更新目标缺少书架或历史书籍快照');
+  }
 
   /// 在不改变书架目标的情况下补充阅读历史目标。
   _AutoRefreshTarget withReadingHistoryBook(Book book) {

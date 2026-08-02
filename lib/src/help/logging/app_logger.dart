@@ -26,6 +26,10 @@ const String databaseLogTag = 'LEGADO_DB';
 /// 只允许记录不可逆标识、用户作用域摘要、数量和布尔状态。
 const String localBookShelfDiagnosticLogTag = 'LOCAL_BOOK_SHELF';
 
+/// 书架与阅读历史在游客、账号作用域之间重建数据库订阅使用的统一诊断 Tag。
+/// 只允许记录不可逆作用域标识、订阅世代、快照数量和受控失败类型。
+const String bookshelfHistoryScopeLogTag = 'BOOKSHELF_HISTORY_SCOPE';
+
 /// 二维码添加书源全链路在 Android Logcat 中使用的固定 Tag。
 const String bookSourceQrLogTag = 'LEGADO_QR_SOURCE';
 

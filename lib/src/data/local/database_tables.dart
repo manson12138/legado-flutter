@@ -30,4 +30,6 @@ abstract final class DatabaseTables {
   static const String downloadBookStates = 'download_book_states';
   /// 用户正文处理与标注表，对应 Android `book_content_processes`。
   static const String bookContentProcesses = 'book_content_processes';
+  /// 用户级目录增量更新检查点；与书架和历史的并集生命周期保持一致。
+  static const String tocRefreshCheckpoints = 'toc_refresh_checkpoints';
 }

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../../domain/gateway/search_history_gateway.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
@@ -16,6 +18,7 @@ final class SearchViewModel {
     required BookSearchCoordinator coordinator,
     required SearchHistoryGateway historyGateway,
     required SearchPreferences searchPreferences,
+    required ValueListenable<int?> userScopeListenable,
     required Future<void> Function(
       String eventName, {
       Map<String, Object?> props,
@@ -24,8 +27,10 @@ final class SearchViewModel {
   }) : _coordinator = coordinator,
        _historyGateway = historyGateway,
        _searchPreferences = searchPreferences,
+       _userScopeListenable = userScopeListenable,
        _analyticsRecorder = analyticsRecorder,
        _logger = logger {
+    _userScopeListenable.addListener(_handleUserScopeChanged);
     _bookSourceSubscription = _coordinator.watchSourceAvailability().listen(
       _applySourceAvailability,
       onError: _handleSourceStreamError,
@@ -42,6 +47,8 @@ final class SearchViewModel {
   final SearchHistoryGateway _historyGateway;
   /// 搜索匹配方式偏好边界，不保存用户查询内容。
   final SearchPreferences _searchPreferences;
+  /// 当前本地用户作用域通知器，使保活搜索页能在认证恢复或账号切换后重读历史。
+  final ValueListenable<int?> _userScopeListenable;
   /// 只接收协议白名单属性的匿名事件记录边界。
   final Future<void> Function(
     String eventName, {
@@ -65,6 +72,8 @@ final class SearchViewModel {
   int _generation = 0;
   /// 可用书源异步刷新代次，用于拒绝较慢的旧快照覆盖新规则结果。
   int _sourceLoadGeneration = 0;
+  /// 搜索历史读取代次，用于拒绝游客或旧账号的较慢结果覆盖当前账号。
+  int _historyLoadGeneration = 0;
   /// 按 Android 原始“书名 + 作者”键保存增量候选。
   final Map<String, List<SearchBook>> _resultBooks = <String, List<SearchBook>>{};
 
@@ -154,6 +163,8 @@ final class SearchViewModel {
 
   /// 读取搜索历史和匹配偏好；书源由独立观察流负责首次及后续加载。
   Future<void> _initialize() async {
+    /// 本次初始化绑定的搜索历史读取代次。
+    final int historyLoadGeneration = ++_historyLoadGeneration;
     /// 【搜书诊断日志】辅助状态初始化耗时计时器。
     final Stopwatch stopwatch = Stopwatch()..start();
     _logger.info(tag: bookSearchUiLogTag, message: '搜索页面辅助状态初始化开始');
@@ -162,18 +173,30 @@ final class SearchViewModel {
       final List<String> history = await _historyGateway.load();
       /// 上次使用的结果匹配方式；不存在或无效值时保持默认模糊搜索。
       final String? savedMatchModeName = await _searchPreferences.readMatchModeName();
+      if (_stateController.isClosed) {
+        return;
+      }
+      /// 初始化期间用户作用域未改变时，历史才仍属于当前页面账号。
+      final bool historyIsCurrent =
+          historyLoadGeneration == _historyLoadGeneration;
       _emit(
         _state.copyWith(
-          history: history,
+          history: historyIsCurrent ? history : _state.history,
           matchMode: _matchModeFromName(savedMatchModeName),
         ),
       );
       _logger.info(
         tag: bookSearchUiLogTag,
         message: '搜索页面辅助状态初始化完成 '
-            'historyCount=${history.length} elapsedMs=${stopwatch.elapsedMilliseconds}',
+            'historyCount=${historyIsCurrent ? history.length : _state.history.length} '
+            'historyApplied=$historyIsCurrent '
+            'elapsedMs=${stopwatch.elapsedMilliseconds}',
       );
     } catch (error, stackTrace) {
+      if (historyLoadGeneration != _historyLoadGeneration ||
+          _stateController.isClosed) {
+        return;
+      }
       _logger.error(
         tag: bookSearchUiLogTag,
         message: '搜索页面辅助状态初始化失败 elapsedMs=${stopwatch.elapsedMilliseconds}',
@@ -182,6 +205,75 @@ final class SearchViewModel {
       );
       _emit(_state.copyWith(errorMessage: '读取搜索历史或偏好失败'));
     }
+  }
+
+  /// 用户作用域变化时清除旧账号的瞬时搜索状态，并为新作用域重新读取搜索历史。
+  void _handleUserScopeChanged() {
+    /// 新作用域搜索历史读取代次。
+    final int historyLoadGeneration = ++_historyLoadGeneration;
+    _generation += 1;
+    _cancel(manual: false);
+    _resultBooks.clear();
+    _emit(
+      _state.copyWith(
+        keyword: '',
+        committedKeyword: '',
+        history: const <String>[],
+        searching: false,
+        cancelled: false,
+        pausedForBookInfo: false,
+        results: const <BookSearchResultGroup>[],
+        failures: const <BookSearchSourceFailure>[],
+        progress: const BookSearchProgress(
+          total: 0,
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+        ),
+        clearPendingEnableAllSearchKeyword: true,
+        clearError: true,
+      ),
+    );
+    _logger.info(
+      tag: bookSearchUiLogTag,
+      message: '用户作用域变化，重新读取搜索历史 '
+          'historyLoadGeneration=$historyLoadGeneration',
+    );
+    unawaited(_reloadHistory(historyLoadGeneration));
+  }
+
+  /// 读取当前作用域的搜索历史，并拒绝账号再次变化后的旧结果。
+  Future<void> _reloadHistory(int historyLoadGeneration) async {
+    /// 当前作用域已保存的搜索历史。
+    final List<String> history;
+    try {
+      history = await _historyGateway.load();
+    } catch (error, stackTrace) {
+      if (historyLoadGeneration != _historyLoadGeneration ||
+          _stateController.isClosed) {
+        return;
+      }
+      _logger.error(
+        tag: bookSearchUiLogTag,
+        message: '用户作用域变化后读取搜索历史失败 '
+            'historyLoadGeneration=$historyLoadGeneration',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _emit(_state.copyWith(errorMessage: '读取搜索历史失败'));
+      return;
+    }
+    if (historyLoadGeneration != _historyLoadGeneration ||
+        _stateController.isClosed) {
+      return;
+    }
+    _emit(_state.copyWith(history: history, clearError: true));
+    _logger.info(
+      tag: bookSearchUiLogTag,
+      message: '用户作用域变化后搜索历史读取完成 '
+          'historyLoadGeneration=$historyLoadGeneration '
+          'historyCount=${history.length}',
+    );
   }
 
   /// 应用书源可用性观察流的新快照，并清理已经失效的临时选择条件。
@@ -423,9 +515,12 @@ final class SearchViewModel {
       ),
     );
     try {
+      /// 提交搜索时捕获的历史作用域代次，防止账号切换后发布旧账号列表。
+      final int historyLoadGeneration = _historyLoadGeneration;
       /// 写入并返回的新历史。
       final List<String> history = await _historyGateway.record(keyword);
-      if (generation == _generation) {
+      if (generation == _generation &&
+          historyLoadGeneration == _historyLoadGeneration) {
         _emit(_state.copyWith(history: history));
         /// 【搜书诊断日志】只记录历史数量，不记录搜索词原文。
         _logger.debug(
@@ -790,7 +885,13 @@ final class SearchViewModel {
 
   /// 清空持久化历史。
   Future<void> _clearHistory() async {
+    /// 清空开始时的历史作用域代次，防止账号切换后清空新账号页面列表。
+    final int historyLoadGeneration = _historyLoadGeneration;
     await _historyGateway.clear();
+    if (historyLoadGeneration != _historyLoadGeneration ||
+        _stateController.isClosed) {
+      return;
+    }
     /// 【搜书诊断日志】只记录清空动作，不输出历史内容。
     _logger.info(tag: bookSearchUiLogTag, message: '搜索历史已清空');
     _emit(_state.copyWith(history: const <String>[]));
@@ -812,7 +913,9 @@ final class SearchViewModel {
       message: '搜索页面释放 searching=${_state.searching} generation=$_generation',
     );
     _sourceLoadGeneration += 1;
+    _historyLoadGeneration += 1;
     _generation += 1;
+    _userScopeListenable.removeListener(_handleUserScopeChanged);
     _cancel(manual: false);
     unawaited(_bookSourceSubscription?.cancel());
     _bookSourceSubscription = null;

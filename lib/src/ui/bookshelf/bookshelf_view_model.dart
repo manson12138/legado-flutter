@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../../app/bookshelf_layout_preferences.dart';
 import '../../app/bookshelf_history_startup_preloader.dart';
 import '../../app/reader_transition_spec.dart';
@@ -29,6 +31,7 @@ final class BookshelfViewModel {
     required BookshelfHistoryStartupPreloader startupPreloader,
     required AppLogger logger,
     required int Function() currentUserId,
+    required ValueListenable<int?> userScopeListenable,
     int initialGroupId = BookGroup.idAll,
   }) : _bookshelfGateway = bookshelfGateway,
        _bookGroupGateway = bookGroupGateway,
@@ -40,11 +43,13 @@ final class BookshelfViewModel {
        _startupPreloader = startupPreloader,
        _logger = logger,
        _currentUserId = currentUserId,
+       _userScopeListenable = userScopeListenable,
        _state = BookshelfUiState(selectedGroupId: initialGroupId) {
+    _userScopeListenable.addListener(_handleUserScopeChanged);
     unawaited(_restoreLayout());
     _applyCompletedStartupSnapshot();
     unawaited(_applyPendingStartupSnapshot());
-    _subscribe();
+    _subscribe(_scopeSubscriptionGeneration);
   }
 
   /// 书架数据边界。
@@ -67,6 +72,8 @@ final class BookshelfViewModel {
   final AppLogger _logger;
   /// 当前游客或账号本地数据作用域，仅转换为不可逆摘要后写入诊断日志。
   final int Function() _currentUserId;
+  /// 当前游客或账号作用域通知器；变化时必须重建捕获旧 userId 的数据库流。
+  final ValueListenable<int?> _userScopeListenable;
   /// 上一次本地分组筛选日志签名，避免无状态变化的重复重建刷屏。
   String? _lastLocalFilterLogSignature;
   /// 用户是否已在异步恢复完成前切换布局，避免旧值覆盖新选择。
@@ -85,6 +92,12 @@ final class BookshelfViewModel {
   StreamSubscription<List<Book>>? _booksSubscription;
   /// 分组流订阅。
   StreamSubscription<List<BookGroup>>? _groupsSubscription;
+  /// 当前数据库订阅捕获的用户 ID，用于拒绝旧作用域继续向页面发布数据。
+  int? _subscribedUserId;
+  /// 数据库订阅世代；作用域变化后旧 Stream 的迟到事件会被丢弃。
+  int _scopeSubscriptionGeneration = 0;
+  /// 页面是否已经释放，用于阻止异步取消完成后重新建立订阅。
+  bool _disposed = false;
   /// 当前刷新运行。
   BookshelfRefreshRun? _refreshRun;
   /// 刷新世代，用于隔离取消后的旧事件。
@@ -172,22 +185,41 @@ final class BookshelfViewModel {
     }
   }
 
-  /// 订阅书架和分组数据库流。
-  void _subscribe() {
+  /// 订阅当前作用域的书架和分组数据库流。
+  void _subscribe(int generation) {
+    /// 本轮两个 Gateway Stream 共同捕获的用户 ID。
+    final int subscribedUserId = _currentUserId();
+    _subscribedUserId = subscribedUserId;
+    _logger.info(
+      tag: bookshelfHistoryScopeLogTag,
+      message: 'stage=bookshelf_subscribe '
+          'scopeId=${_scopeDiagnosticIdFor(subscribedUserId)} '
+          'generation=$generation',
+    );
     _booksSubscription = _bookshelfGateway.watchBookshelf().listen(
       (List<Book> books) {
+        if (!_isActiveScopeSubscription(generation, subscribedUserId)) {
+          return;
+        }
         _booksStreamReceived = true;
         _allBooks = List<Book>.unmodifiable(books);
         _booksReady = true;
-        _logBookSnapshot(stage: 'bookshelf_database_stream', books: books);
+        _logBookSnapshot(
+          stage: 'bookshelf_database_stream',
+          books: books,
+          scopeUserId: subscribedUserId,
+        );
         _rebuild();
       },
       onError: (Object error) {
+        if (!_isActiveScopeSubscription(generation, subscribedUserId)) {
+          return;
+        }
         _booksReady = true;
         _logger.warning(
-          tag: localBookShelfDiagnosticLogTag,
+          tag: bookshelfHistoryScopeLogTag,
           message: 'stage=bookshelf_database_stream_failed '
-              'scopeId=${_scopeDiagnosticId()} '
+              'scopeId=${_scopeDiagnosticIdFor(subscribedUserId)} '
               'failureType=${error.runtimeType}',
         );
         _emit(_state.copyWith(loading: false, errorMessage: '读取书架失败'));
@@ -195,16 +227,96 @@ final class BookshelfViewModel {
     );
     _groupsSubscription = _bookGroupGateway.watchGroups().listen(
       (List<BookGroup> groups) {
+        if (!_isActiveScopeSubscription(generation, subscribedUserId)) {
+          return;
+        }
         _groupsStreamReceived = true;
         _userGroups = List<BookGroup>.unmodifiable(groups);
         _groupsReady = true;
         _rebuild();
       },
       onError: (Object error) {
+        if (!_isActiveScopeSubscription(generation, subscribedUserId)) {
+          return;
+        }
         _groupsReady = true;
         _emit(_state.copyWith(loading: false, errorMessage: '读取书架分组失败'));
       },
     );
+  }
+
+  /// 认证恢复、登录或退出登录切换本地作用域后，立即隔离并替换旧数据库订阅。
+  void _handleUserScopeChanged() {
+    if (_disposed) {
+      return;
+    }
+    final int? nextUserId = _userScopeListenable.value;
+    if (nextUserId == null || nextUserId == _subscribedUserId) {
+      return;
+    }
+    final int? previousUserId = _subscribedUserId;
+    _scopeSubscriptionGeneration += 1;
+    final int generation = _scopeSubscriptionGeneration;
+    _logger.info(
+      tag: bookshelfHistoryScopeLogTag,
+      message: 'stage=bookshelf_scope_changed '
+          'previousScopeId=${_scopeDiagnosticIdFor(previousUserId)} '
+          'nextScopeId=${_scopeDiagnosticIdFor(nextUserId)} '
+          'generation=$generation',
+    );
+    _refreshGeneration += 1;
+    _cancelRefresh(manual: false);
+    _allBooks = const <Book>[];
+    _userGroups = const <BookGroup>[];
+    _booksReady = false;
+    _groupsReady = false;
+    _booksStreamReceived = false;
+    _groupsStreamReceived = false;
+    _lastLocalFilterLogSignature = null;
+    _emit(
+      _state.copyWith(
+        loading: true,
+        groups: const <BookshelfGroupItem>[],
+        books: const <BookshelfBookItem>[],
+        selectionMode: false,
+        selectedBookUrls: const <String>{},
+        refreshing: false,
+        refreshCancelled: false,
+        refreshProgress: const BookshelfRefreshProgress(
+          total: 0,
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+        ),
+        refreshFailures: const <BookshelfRefreshFailure>[],
+        updatingBookUrls: const <String>{},
+        clearDialog: true,
+        clearError: true,
+      ),
+    );
+    unawaited(_restartScopeSubscriptions(generation));
+  }
+
+  /// 等待旧订阅取消后，为仍然生效的作用域世代建立全新订阅与启动快照。
+  Future<void> _restartScopeSubscriptions(int generation) async {
+    await _booksSubscription?.cancel();
+    await _groupsSubscription?.cancel();
+    if (_disposed || generation != _scopeSubscriptionGeneration) {
+      return;
+    }
+    _booksSubscription = null;
+    _groupsSubscription = null;
+    _applyCompletedStartupSnapshot(generation: generation);
+    unawaited(_applyPendingStartupSnapshot(generation: generation));
+    _subscribe(generation);
+  }
+
+  /// 判断数据库回调是否仍属于当前作用域和当前订阅世代。
+  bool _isActiveScopeSubscription(int generation, int subscribedUserId) {
+    return !_disposed &&
+        generation == _scopeSubscriptionGeneration &&
+        subscribedUserId == _subscribedUserId &&
+        subscribedUserId == _userScopeListenable.value;
   }
 
   /// 根据数据快照和共享筛选排序状态生成显示模型。
@@ -486,25 +598,33 @@ final class BookshelfViewModel {
   }
 
   /// 在路由创建前已完成预加载时，同步写入两个首快照以直接解除圆形加载。
-  void _applyCompletedStartupSnapshot() {
+  void _applyCompletedStartupSnapshot({int? generation}) {
     final BookshelfHistoryStartupSnapshot? snapshot =
         _startupPreloader.snapshot;
     if (snapshot == null) {
       return;
     }
-    _applyStartupSnapshot(snapshot);
+    _applyStartupSnapshot(
+      snapshot,
+      generation: generation ?? _scopeSubscriptionGeneration,
+    );
   }
 
   /// 预加载仍在执行时等待其完成；若数据库流先到达则不回写旧快照。
-  Future<void> _applyPendingStartupSnapshot() async {
+  Future<void> _applyPendingStartupSnapshot({int? generation}) async {
+    final int expectedGeneration =
+        generation ?? _scopeSubscriptionGeneration;
     if (_startupPreloader.snapshot != null) {
       return;
     }
     try {
       final BookshelfHistoryStartupSnapshot snapshot =
           await _startupPreloader.preload();
+      if (_disposed || expectedGeneration != _scopeSubscriptionGeneration) {
+        return;
+      }
       if (!_booksStreamReceived || !_groupsStreamReceived) {
-        _applyStartupSnapshot(snapshot);
+        _applyStartupSnapshot(snapshot, generation: expectedGeneration);
       }
     } catch (_) {
       // 预加载失败时由既有数据库流继续负责错误显示和重试。
@@ -512,13 +632,22 @@ final class BookshelfViewModel {
   }
 
   /// 将未被数据库流覆盖的预加载首快照写入页面状态。
-  void _applyStartupSnapshot(BookshelfHistoryStartupSnapshot snapshot) {
+  void _applyStartupSnapshot(
+    BookshelfHistoryStartupSnapshot snapshot, {
+    required int generation,
+  }) {
+    if (_disposed ||
+        generation != _scopeSubscriptionGeneration ||
+        snapshot.userId != _userScopeListenable.value) {
+      return;
+    }
     if (!_booksStreamReceived) {
       _allBooks = snapshot.bookshelfBooks;
       _booksReady = true;
       _logBookSnapshot(
         stage: 'bookshelf_startup_snapshot',
         books: snapshot.bookshelfBooks,
+        scopeUserId: snapshot.userId,
       );
     }
     if (!_groupsStreamReceived) {
@@ -532,6 +661,7 @@ final class BookshelfViewModel {
   void _logBookSnapshot({
     required String stage,
     required List<Book> books,
+    required int scopeUserId,
   }) {
     final List<Book> localBooks = books
         .where((Book book) => book.origin == 'loc_book')
@@ -543,7 +673,7 @@ final class BookshelfViewModel {
     _logger.info(
       tag: localBookShelfDiagnosticLogTag,
       message: 'stage=$stage '
-          'scopeId=${_scopeDiagnosticId()} '
+          'scopeId=${_scopeDiagnosticIdFor(scopeUserId)} '
           'totalCount=${books.length} '
           'localCount=${localBooks.length} '
           'localIds=${localIds.join(',')} '
@@ -557,7 +687,7 @@ final class BookshelfViewModel {
         .where((Book book) => book.origin == 'loc_book')
         .length;
     final bool queryActive = _state.query.trim().isNotEmpty;
-    final String signature = '${_scopeDiagnosticId()}|$localCandidateCount|'
+    final String signature = '${_scopeDiagnosticIdFor(_subscribedUserId)}|$localCandidateCount|'
         '${visibleBooks.length}|$queryActive';
     if (_lastLocalFilterLogSignature == signature) {
       return;
@@ -566,20 +696,18 @@ final class BookshelfViewModel {
     _logger.info(
       tag: localBookShelfDiagnosticLogTag,
       message: 'stage=bookshelf_local_filter '
-          'scopeId=${_scopeDiagnosticId()} '
+          'scopeId=${_scopeDiagnosticIdFor(_subscribedUserId)} '
           'candidateCount=$localCandidateCount '
           'visibleCount=${visibleBooks.length} '
           'queryActive=$queryActive',
     );
   }
 
-  /// 将当前用户作用域转换为不可逆诊断标识，日志本身不保留账号 ID。
-  String _scopeDiagnosticId() {
-    try {
-      return appLogDiagnosticId('${_currentUserId()}');
-    } on Object {
-      return 'unavailable';
-    }
+  /// 将指定作用域转换为不可逆诊断标识，空值只表示尚未建立数据库订阅。
+  String _scopeDiagnosticIdFor(int? userId) {
+    return userId == null
+        ? 'unavailable'
+        : appLogDiagnosticId('$userId');
   }
 
   /// 在首个数据快照到达前恢复上次选定的书架布局。
@@ -744,6 +872,9 @@ final class BookshelfViewModel {
 
   /// 取消全部任务和订阅并释放流。
   void dispose() {
+    _disposed = true;
+    _scopeSubscriptionGeneration += 1;
+    _userScopeListenable.removeListener(_handleUserScopeChanged);
     _refreshGeneration += 1;
     _cancelRefresh(manual: false);
     _booksSubscription?.cancel();

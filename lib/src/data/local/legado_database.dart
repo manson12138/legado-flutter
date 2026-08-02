@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 10;
+  static const int schemaVersion = 11;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -106,6 +106,7 @@ final class LegadoDatabase {
         await _createSchemaV7(createdDatabase);
         await _createSchemaV8(createdDatabase);
         await _createSchemaV10(createdDatabase);
+        await _createSchemaV11(createdDatabase);
       },
       onUpgrade: (Database upgradedDatabase, int oldVersion, int newVersion) async {
         if (oldVersion < 2) {
@@ -163,6 +164,9 @@ final class LegadoDatabase {
         }
         if (oldVersion < 10) {
           await _createSchemaV10(upgradedDatabase);
+        }
+        if (oldVersion < 11) {
+          await _createSchemaV11(upgradedDatabase);
         }
       },
     );
@@ -595,6 +599,34 @@ final class LegadoDatabase {
     await database.execute(
       'CREATE INDEX IF NOT EXISTS index_book_source_candidates_origin '
       'ON book_source_candidates (origin)',
+    );
+  }
+
+  /// 新增用户级目录增量更新检查点，避免每次启动都从目录第一页完整遍历。
+  Future<void> _createSchemaV11(Database database) async {
+    logOperation(
+      operation: 'CREATE_SCHEMA',
+      table: 'toc_refresh_checkpoints',
+    );
+    await database.execute('''
+      CREATE TABLE IF NOT EXISTS toc_refresh_checkpoints (
+        userId INTEGER NOT NULL,
+        bookUrl TEXT NOT NULL,
+        sourceUrl TEXT NOT NULL,
+        tocUrl TEXT NOT NULL,
+        anchorPageUrl TEXT NOT NULL,
+        visitedPageUrlsJson TEXT NOT NULL DEFAULT '[]',
+        anchorChapterUrl TEXT NOT NULL,
+        reverse INTEGER NOT NULL DEFAULT 0,
+        chapterCount INTEGER NOT NULL,
+        lastSuccessfulAt INTEGER NOT NULL,
+        lastFullRefreshAt INTEGER NOT NULL,
+        PRIMARY KEY (userId, bookUrl)
+      )
+    ''');
+    await database.execute(
+      'CREATE INDEX IF NOT EXISTS index_toc_refresh_checkpoints_user_success '
+      'ON toc_refresh_checkpoints (userId, lastSuccessfulAt)',
     );
   }
 

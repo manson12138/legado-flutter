@@ -13,8 +13,9 @@
 - `LegadoDatabase` 已升至 Schema v9，`pubspec.yaml` build number 已升至 `+7`。新装与升级后的书架、分组、目录、历史和下载附属表均使用 `userId` 复合主键、复合外键及用户前缀排序索引。
 - v8 到 v9 按确认方案破坏式删除旧书架外键图后重建，不复制旧记录；书源、认证安全会话和设备级 `caches` 不在删除范围。
 - Book、BookGroup、ReadingHistory、Download DAO 的全部查询和写入都显式接收用户 ID；Repository 在每次领域操作入口捕获 `CurrentUserScope.requireUserId()`。未登录时返回只供本机使用的游客 ID `-1`，不会回退到公共空作用域。
-- `CurrentUserScope` 已加入切换代次。预加载器按用户单飞并在发布前核对用户与代次；会话变化会清空快照、重建带用户 key 的 `MaterialApp`，从而释放旧页面流订阅和内存状态。
+- `CurrentUserScope` 已加入切换代次。预加载器按用户单飞并在发布前核对用户与代次；会话变化会清空快照并重建带用户 key 的 `MaterialApp`。由于全局 Navigator 可能保留旧 Route，书架与历史 ViewModel 还会直接监听作用域变化、清空内存状态并重建数据库流，不能只依赖 Widget key 间接释放订阅。
 - 下载协调器在账号切换时取消 HTTP 与自动换源运行句柄、停止平台后台保活、重置启动单飞，并用调度代次拒绝旧任务的主要晚到回写。
+- 2026-08-02 iOS 真机日志确认：认证恢复前创建的保活书架 Route 会因全局 Navigator 保留而继续持有游客 Stream，导致账号数据已成功写入但书架与历史仍显示空。首轮修复后的二次日志又确认，DAO 原有 `async*` 在等待下一次表提交时会让 `StreamSubscription.cancel()` 长时间不完成；历史直到约 10.5 秒后的下一次历史写入才重订阅，书架则继续卡在没有新提交的分组表。书架和历史 ViewModel 现已直接监听本地用户作用域，切换时清空旧快照、取消旧订阅、以订阅世代拒绝迟到事件；`DatabaseChangeNotifier.watchQuery()` 先订阅后首查、串行合并补查并支持立即取消，三个列表 DAO 已改用该入口。统一脱敏诊断 Tag 为 `BOOKSHELF_HISTORY_SCOPE`。
 - 当前仍等待用户执行下方 A/B 账号、v8 升级和双平台验收；服务端没有书架/历史同步 API 的限制保持不变。
 
 ## 2. 用户可见行为

@@ -93,20 +93,13 @@ final class BookDao {
   }
 
   /// 观察全部书架书；订阅后立即查询一次，此后在 `books` 提交变化时重新查询。
-  Stream<List<Book>> watchAll(int userId) async* {
+  Stream<List<Book>> watchAll(int userId) {
     /// 当前观察依赖的表集合。
     final Set<String> observedTables = <String>{DatabaseTables.books};
-    /// 已消费的最近一次相关表提交版本。
-    int observedRevision = _database.changeNotifier.revisionForTables(
-      observedTables,
+    return _database.changeNotifier.watchQuery<List<Book>>(
+      tableNames: observedTables,
+      query: () => getAll(userId),
     );
-    while (true) {
-      yield await getAll(userId);
-      observedRevision = await _database.changeNotifier.waitForTableChange(
-        observedTables,
-        observedRevision,
-      );
-    }
   }
 
   /// 以主键替换策略写入书籍，对应 Android `insert(REPLACE)`。

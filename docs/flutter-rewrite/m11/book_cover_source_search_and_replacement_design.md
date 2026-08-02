@@ -30,6 +30,11 @@ Android 参考实现位于：
 
 Flutter 实现复用这套交互和持久化语义，但按照本任务要求扩展为三个有严格优先级的匹配层级。
 
+Android 的书籍信息编辑页还通过 `SelectImageContract` 选择本地图片，并由
+`BookInfoEditViewModel.coverChangeTo` 复制到应用私有 `covers` 目录。Flutter 共用封面面板现已补齐
+该入口：Android 与 iOS 都使用系统图片选择器，选择结果立即复制到应用支持目录，不长期依赖 SAF 或
+Document Picker 的外部路径权限。
+
 ## 3. 匹配与候选选择规则
 
 ### 3.1 前置过滤
@@ -164,6 +169,11 @@ Flutter 实现复用这套交互和持久化语义，但按照本任务要求扩
 
 “恢复默认封面”始终可用，因此无书源时用户仍可清除自定义封面。
 
+头部同时提供“选择本地图片”入口。选中的图片先按书籍主键与内容摘要复制到
+`Application Support/custom_book_covers`，复制成功后仍复用 `UpdateBookCustomCoverUseCase` 字段级写入；
+保存失败会删除未生效副本，后续换成网络封面、另一张本地图片或恢复默认时会删除该书旧的受管副本。
+网络地址、应用目录之外的历史路径和其他书籍文件不会被清理。
+
 ### 5.2 书架入口
 
 保持现有“长按进入选择模式”的交互，在选择模式操作栏增加封面替换按钮：
@@ -202,6 +212,7 @@ Flutter 实现复用这套交互和持久化语义，但按照本任务要求扩
 UI 层：
 
 - 新增通用封面选择 contract、ViewModel 和 bottom sheet；
+- 新增双端系统图片选择与应用私有副本服务；
 - 扩展 `BookshelfContract`、`BookshelfViewModel`、`BookshelfRoute`；
 - 扩展 `BookInfoContract`、`BookInfoViewModel`、`BookInfoRoute`；
 - 更新详情动作清单和 M07/M11 阶段记录。
@@ -230,6 +241,7 @@ UI 层：
 9. 选择候选只修改 `customCoverUrl`；选择恢复默认只清空 `customCoverUrl`。
 10. 搜索中关闭面板后不再更新已销毁页面，重新搜索不会接收上一代结果。
 11. 不新增数据库字段，不提升数据库版本和应用构建号。
+12. 无书源或搜索无结果时仍可选择本地图片；保存后重启应用封面继续可用，换成其他封面时不会误删相册原图。
 
 ## 9. 实施记录
 
@@ -237,9 +249,11 @@ UI 层：
 
 - `lib/src/model/web_book/book_cover_search_coordinator.dart` 负责三级匹配、动态升级、缓存合并和有限并发搜索；
 - `lib/src/ui/change_book_cover/` 提供共用 MVI 状态、ViewModel 和自适应底部面板；
+- `lib/src/platform/local_book_cover_service.dart` 负责双端系统图片选择、应用私有副本和受控清理；
 - `BookDao`、`BookshelfGateway`、`BookRepository` 与 `UpdateBookCustomCoverUseCase` 使用字段级 SQL 更新 `customCoverUrl`；
 - `SearchBookDao` 与 `BookCoverCandidateRepository` 复用 `searchBooks`，查询最多 200 条非空封面缓存；
 - 书架长按单选操作栏和书籍详情操作卡、菜单、封面长按均已接入共用面板；
-- 面板关闭、停止和重新搜索都会取消旧 `BookSearchRun`，并以搜索代次拒绝迟到事件。
+- 面板关闭、停止和重新搜索都会取消旧 `BookSearchRun`，并以搜索代次拒绝迟到事件；
+- 面板头部可直接选择本地图片，即使没有书源或搜索无结果也能完成换封面。
 
 依照项目约束，本轮没有运行 Flutter、Dart、构建、测试、分析、格式化或应用启动命令，功能等待用户验收。

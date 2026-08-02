@@ -103,13 +103,17 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       startupPreloader: widget.dependencies.bookshelfHistoryStartupPreloader,
       logger: widget.dependencies.logger,
       currentUserId: widget.dependencies.currentUserScope.requireUserId,
+      userScopeListenable: widget.dependencies.currentUserScope.userId,
       initialGroupId: widget.initialGroupId ?? BookGroup.idAll,
     );
     _effectSubscription = _viewModel.effects.listen(_handleEffect);
     _historyViewModel = ReadingHistoryViewModel(
-      widget.dependencies.readingHistoryGateway,
-      widget.dependencies.bookshelfLayoutPreferences,
-      widget.dependencies.bookshelfHistoryStartupPreloader,
+      gateway: widget.dependencies.readingHistoryGateway,
+      layoutPreferences: widget.dependencies.bookshelfLayoutPreferences,
+      startupPreloader: widget.dependencies.bookshelfHistoryStartupPreloader,
+      logger: widget.dependencies.logger,
+      currentUserId: widget.dependencies.currentUserScope.requireUserId,
+      userScopeListenable: widget.dependencies.currentUserScope.userId,
     );
     _historyEffectSubscription =
         _historyViewModel.effects.listen(_handleHistoryEffect);
@@ -447,6 +451,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       searchCoordinator:
           widget.dependencies.createBookCoverSearchCoordinator(),
       updateCustomCover: widget.dependencies.updateBookCustomCover,
+      localBookCoverService: widget.dependencies.localBookCoverService,
     );
     if (!mounted || updatedBook == null) {
       return;

@@ -23,14 +23,33 @@ final class BookDetailSnapshot {
 /// 表示书架刷新得到的书籍事实和完整目录。
 final class RefreshedBookResult {
   /// 创建不可变刷新结果。
-  RefreshedBookResult({required this.book, required List<BookChapter> chapters})
-    : chapters = List<BookChapter>.unmodifiable(chapters);
+  RefreshedBookResult({
+    required this.book,
+    required List<BookChapter> chapters,
+    required this.anchorPageUrl,
+    required List<String> visitedPageUrls,
+    required this.reverse,
+    required this.pageCount,
+  }) : chapters = List<BookChapter>.unmodifiable(chapters),
+       visitedPageUrls = List<String>.unmodifiable(visitedPageUrls);
 
   /// 已更新目录统计的书籍。
   final Book book;
 
   /// 完整目录。
   final List<BookChapter> chapters;
+
+  /// 下次增量更新应访问的目录分页锚点。
+  final String anchorPageUrl;
+
+  /// 本次刷新后已确认的分页地址集合。
+  final List<String> visitedPageUrls;
+
+  /// 目录规则是否按最新章节在前返回。
+  final bool reverse;
+
+  /// 本次实际访问的目录页数。
+  final int pageCount;
 }
 
 /// 编排搜索结果到详情、目录的普通书源业务链路。
@@ -119,6 +138,9 @@ final class BookDetailService {
   Future<RefreshedBookResult> refreshBook({
     required Book book,
     HttpCancellationToken? cancellationToken,
+    String? initialPageUrl,
+    int maximumPages = 100,
+    Set<String> previouslyVisitedPageUrls = const <String>{},
   }) async {
     /// 当前书籍的来源书源。
     final BookSource? source = await _sourceGateway.getByUrl(book.origin);
@@ -139,14 +161,22 @@ final class BookDetailService {
       detailBook = book;
     }
     /// 完整刷新目录。
-    final List<BookChapter> chapters = await _standardService.loadToc(
+    final LoadedTocResult loadedToc =
+        await _standardService.loadTocWithMetadata(
       source: source,
       book: detailBook,
       cancellationToken: cancellationToken,
+      initialPageUrl: initialPageUrl,
+      maxPages: maximumPages,
+      previouslyVisitedPageUrls: previouslyVisitedPageUrls,
     );
     return RefreshedBookResult(
-      book: withChapterSummary(detailBook, chapters),
-      chapters: chapters,
+      book: withChapterSummary(detailBook, loadedToc.chapters),
+      chapters: loadedToc.chapters,
+      anchorPageUrl: loadedToc.anchorPageUrl,
+      visitedPageUrls: loadedToc.visitedPageUrls,
+      reverse: loadedToc.reverse,
+      pageCount: loadedToc.pageCount,
     );
   }
 

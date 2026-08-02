@@ -1,4 +1,7 @@
-source 'https://mirrors.tuna.tsinghua.edu.cn/git/CocoaPods/Specs.git'
+# Homebrew Ruby 的 OpenSSL 证书包可能缺少 macOS 仍信任的根证书；未由外部指定时复用系统证书包。
+ENV['SSL_CERT_FILE'] ||= '/etc/ssl/cert.pem'
+
+source 'https://cdn.cocoapods.org/'
 # M10 第一批 iOS 适配固定 Deployment Target，必须与 Xcode 工程配置保持一致。
 platform :ios, '16.0'
 
