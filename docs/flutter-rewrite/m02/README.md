@@ -31,7 +31,7 @@ M1 和 M2 都不能标记为已验收；M2 当前状态为 `IN_PROGRESS / 实现
 
 ## Schema and transaction boundaries
 
-- 数据库文件：`legado_flutter.db`，当前版本 7；不读取、不迁移原 Android `legado.db`。
+- 数据库文件：`pagenest.db`，当前版本 7；不读取、不迁移原 Android `legado.db`。
 - URL 主键原样保存，不做 trim、大小写转换、重定向归一化或尾斜杠归一化。
 - 所有 `*Time`、`deadline`、`syncTime` 均为 Unix Epoch 毫秒；0 表示对应 Android 字段定义的未知、未发生或永不过期。
 - `chapters` 主键为 `(url, bookUrl)`，同书 `(bookUrl, index)` 唯一，删除书籍级联删除章节。

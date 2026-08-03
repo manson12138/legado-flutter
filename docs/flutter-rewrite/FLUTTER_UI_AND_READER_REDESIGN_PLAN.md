@@ -1,4 +1,4 @@
-# Legado Flutter UI 与文本阅读器重构方案
+# PageNest（拾页） UI 与文本阅读器重构方案
 
 > 文档状态：`IN_PROGRESS / 已开始按 Feature 实施，等待用户运行验收`  
 > 创建日期：2026-07-16  

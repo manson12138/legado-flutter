@@ -113,7 +113,7 @@ Firebase SDK，也不在 Android/iOS 原生层分别复制埋点逻辑。
 
 ### 3.3 登录后立即续传
 
-`LegadoApp._onAuthenticationSessionChanged` 在认证会话首次建立后尽力调用
+`PageNestApp._onAuthenticationSessionChanged` 在认证会话首次建立后尽力调用
 `flushPendingAnalytics()`。调用不阻塞主界面、书源初始化或下载恢复；失败继续保留队列。
 登出不上传，重新登录且授权仍开启后再续传。
 
@@ -131,7 +131,7 @@ Firebase SDK，也不在 Android/iOS 原生层分别复制埋点逻辑。
 
 | 事件 | 精确触发点 | props | 计划修改位置 |
 | --- | --- | --- | --- |
-| `app_session_started` | 正式 App 首帧后、本地安全会话读取完成一次 | `restoreState=none/restored/refresh_required` | `domain/gateway/authentication_gateway.dart`、`data/repository/authentication_repository.dart`、`app/legado_app.dart` |
+| `app_session_started` | 正式 App 首帧后、本地安全会话读取完成一次 | `restoreState=none/restored/refresh_required` | `domain/gateway/authentication_gateway.dart`、`data/repository/authentication_repository.dart`、`app/pagenest_app.dart` |
 | `app_session_restore_result` | 有持久会话时，后台刷新或权限校验形成最终结果一次 | `result=success/expired/unauthorized/network_degraded`、`refreshAttempted` | 同上 |
 | `search_submitted` | 非空关键词通过校验、执行书源集合确定且新任务正式建立 | `enabledSourceCount`、`historyUsed`；不传关键词 | `ui/search/search_view_model.dart`、`ui/search/search_route.dart` |
 | `search_completed` | 当前 generation 的任务自然结束且未被取消 | `result`、结果组数、成功/失败书源数、耗时桶 | `ui/search/search_view_model.dart` |
@@ -156,7 +156,7 @@ Firebase SDK，也不在 Android/iOS 原生层分别复制埋点逻辑。
 - 只有发现持久会话或明确过期会话时才产生一次恢复结果；
 - 后台结果通过受控监听状态返回 `success`、`expired`、`unauthorized` 或
   `network_degraded`；
-- `LegadoApp` 订阅一次并在 `dispose()` 解除，避免监听泄漏；
+- `PageNestApp` 订阅一次并在 `dispose()` 解除，避免监听泄漏；
 - 手动登录不冒充“启动会话恢复”。
 
 ### 5.2 搜索
@@ -226,7 +226,7 @@ Firebase SDK，也不在 Android/iOS 原生层分别复制埋点逻辑。
 主要修改：
 
 - `lib/src/app/analytics_recorder.dart`
-- `lib/src/app/legado_app.dart`
+- `lib/src/app/pagenest_app.dart`
 - `lib/src/app/app_dependencies.dart`
 - `lib/src/app/remote_book_source_sync_service.dart`
 - `lib/src/api/remote_app/remote_app_api.dart`

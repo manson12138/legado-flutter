@@ -56,7 +56,7 @@ Flutter 已对 `/api/v1/auth/password-key`、`/api/v1/auth/login`、`/api/v1/aut
 | `lib/src/api/http/app_dio_log_interceptor.dart` | 已完成登录/注册/公钥路径的正文摘要与字段脱敏。 |
 | `lib/src/api/remote_app/remote_app_service_config.dart` | 已增加集中 `appVersionName`；继续由 `--dart-define` 覆盖。 |
 | `lib/src/api/remote_app/remote_app_api.dart` | 已发送 bootstrap `versionName`，解码更新字段并区分登录 token/user 缺失。 |
-| `lib/src/app/app_access_coordinator.dart`、`lib/src/app/legado_app.dart` | 已透传并展示更新说明与受控下载地址。 |
+| `lib/src/app/app_access_coordinator.dart`、`lib/src/app/pagenest_app.dart` | 已透传并展示更新说明与受控下载地址。 |
 | `lib/src/app/remote_book_source_sync_service.dart` | 已拆分成功率与匿名埋点边界，并保留统一登录后刷新入口。 |
 | `lib/src/app/source_success_rate_reporter.dart` | 已实现聚合桶、权限、时间窗口、两阶段补源、敏感书源拦截和动态分批。 |
 | `lib/src/app/analytics_recorder.dart` | 已实现授权、严格白名单、UUID 幂等桶、旧队列清理、聚合及动态分批。 |

@@ -7,7 +7,7 @@
 | Flutter | 3.41.5 stable |
 | Dart | 3.11.3 |
 | Deployment Target | iOS 16.0 |
-| 默认 Bundle Identifier | `io.legado.flutter` |
+| 默认 Bundle Identifier | `com.contradiction.pagenest` |
 | 目标设备 | iPhone 15 Pro Max |
 | 目标系统 | iOS 26 |
 | Xcode 版本 | 待用户在本机记录；AI 未运行 `xcodebuild -version` |

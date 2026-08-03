@@ -91,7 +91,7 @@ final class _LogManagementRouteState extends State<LogManagementRoute> {
         ShareParams(
           files: <XFile>[XFile(file.path, mimeType: 'text/plain')],
           title: '分享日志 ${file.name}',
-          subject: 'Legado Flutter 日志 ${file.name}',
+          subject: 'PageNest（拾页） 日志 ${file.name}',
           sharePositionOrigin: shareOrigin,
         ),
       );

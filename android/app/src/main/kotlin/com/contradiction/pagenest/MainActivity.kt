@@ -1,4 +1,4 @@
-package io.legado.flutter
+package com.contradiction.pagenest
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -29,19 +29,19 @@ import javax.crypto.spec.PSource
 class MainActivity : FlutterActivity() {
 
     /** 阅读器平台通道名称，必须与 Dart ReaderPlatformService 保持一致。 */
-    private val readerPlatformChannel = "io.legado.flutter/reader_platform"
+    private val readerPlatformChannel = "com.contradiction.pagenest/reader_platform"
 
     /** Dart 日志写入 Android Logcat 使用的平台通道名称。 */
-    private val loggingPlatformChannel = "io.legado.flutter/logging"
+    private val loggingPlatformChannel = "com.contradiction.pagenest/logging"
 
     /** 离线下载后台保活平台通道名称。 */
-    private val downloadBackgroundChannel = "io.legado.flutter/download_background"
+    private val downloadBackgroundChannel = "com.contradiction.pagenest/download_background"
 
     /** 登录与注册密码加密平台通道名称。 */
-    private val passwordEncryptionChannel = "io.legado.flutter/password_encryption"
+    private val passwordEncryptionChannel = "com.contradiction.pagenest/password_encryption"
 
     /** 当前 Android 安装包版本名称和构建号查询通道名称。 */
-    private val appPackageInfoChannel = "io.legado.flutter/app_package_info"
+    private val appPackageInfoChannel = "com.contradiction.pagenest/app_package_info"
 
     /** M08.1 外部 TXT 文件关联桥；Activity 销毁时同步释放通道和文件线程。 */
     private var externalTxtOpenBridge: ExternalTxtOpenBridge? = null

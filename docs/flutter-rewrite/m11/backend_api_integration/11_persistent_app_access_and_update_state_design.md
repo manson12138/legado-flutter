@@ -43,7 +43,7 @@
 - `platform/app_package_info_service.dart`、`RemoteAppServiceConfig`、`main.dart`：通过 Android/iOS 自有宿主在启动时一次性读取实际安装包 `versionName`；失败时标记版本身份不可信，不注册监听器或持有平台资源。
 - `RemoteAppConfigurationRepository`：负责准入/升级状态的 JSON 编解码、按当前产品、实际 `versionName` 和渠道读取、成功 bootstrap 后写入和身份不匹配清理。
 - `AppAccessCoordinator`：启动时先恢复持久化状态，再进行现有单飞网络刷新；成功网络结果须先落盘再发布内存状态。生命周期轮询、Android 退出和 iOS 阻断语义保持不变。
-- `AppAccessState` 与 `LegadoApp`：增加本地恢复中状态，并在该状态下展示不可交互的短暂加载层，防止已缓存阻断被短暂绕过。
+- `AppAccessState` 与 `PageNestApp`：增加本地恢复中状态，并在该状态下展示不可交互的短暂加载层，防止已缓存阻断被短暂绕过。
 - `AppDependencies`：为协调器补充当前 App 服务配置或封装后的持久化状态入口。
 - 项目索引和既有准入实施方案：记录离线恢复规则与验收。
 

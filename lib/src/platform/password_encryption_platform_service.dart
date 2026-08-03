@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 /// 密码加密原生通道名称；Android 与 iOS 必须保持一致。
-const String passwordEncryptionPlatformChannel = 'io.legado.flutter/password_encryption';
+const String passwordEncryptionPlatformChannel = 'com.contradiction.pagenest/password_encryption';
 
 /// 将登录密码转换为服务端约定密文的受控平台能力。
 abstract interface class PasswordEncryptionService {

@@ -2,7 +2,7 @@ import 'package:flutter/services.dart';
 
 /// Android 与 iOS 宿主读取实际安装包信息时共用的平台通道名称。
 const String appPackageInfoPlatformChannel =
-    'io.legado.flutter/app_package_info';
+    'com.contradiction.pagenest/app_package_info';
 
 /// 当前 Android/iOS 安装包的实际版本身份。
 final class InstalledAppPackageInfo {

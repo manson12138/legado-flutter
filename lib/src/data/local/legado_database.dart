@@ -16,7 +16,7 @@ final class LegadoDatabase {
         changeNotifier = changeNotifier ?? DatabaseChangeNotifier();
 
   /// Flutter 独立数据库文件名，不与原 App 的 `legado.db` 共用。
-  static const String databaseName = 'legado_flutter.db';
+  static const String databaseName = 'pagenest.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
   static const int schemaVersion = 11;

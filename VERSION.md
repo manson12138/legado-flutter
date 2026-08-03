@@ -4,7 +4,7 @@
 >
 > 本文档只记录静态基线和决策规则，不代表已进行编译、签名校验或真机覆盖安装验证。
 >
-> 基线日期：2026-08-02
+> 基线日期：2026-08-03
 >
 > 当前发布节点：`1.0.0+7 / Public Beta 1`，详见 [`docs/flutter-rewrite/releases/1.0.0-build-7-public-beta-1.md`](./docs/flutter-rewrite/releases/1.0.0-build-7-public-beta-1.md)。
 
@@ -12,22 +12,22 @@
 
 | 项目 | 当前值 | 来源 |
 |---|---|---|
-| Android applicationId | `io.legado.flutter` | `android/app/build.gradle.kts` |
-| Android namespace | `io.legado.flutter` | `android/app/build.gradle.kts` |
+| Android applicationId | `com.contradiction.pagenest` | `android/app/build.gradle.kts` |
+| Android namespace | `com.contradiction.pagenest` | `android/app/build.gradle.kts` |
 | 应用显示版本 `versionName` | `1.0.1` | `pubspec.yaml` 的 `version: 1.0.1+12` |
 | Android 安装版本 `versionCode` | `12` | `pubspec.yaml` 的 `version: 1.0.1+12`，由 Gradle 使用 `flutter.versionCode` |
-| iOS Bundle Identifier | `io.legado.flutter` | `ios/Runner.xcodeproj/project.pbxproj` |
-| SQLite 文件名 | `legado_flutter.db` | `lib/src/data/local/legado_database.dart` |
+| iOS Bundle Identifier | `com.contradiction.pagenest` | `ios/Runner.xcodeproj/project.pbxproj` |
+| SQLite 文件名 | `pagenest.db` | `lib/src/data/local/legado_database.dart` |
 | SQLite Schema 版本 | `11` | `LegadoDatabase.schemaVersion`；新增用户级目录增量更新检查点，既有书架、历史与目录数据原位保留 |
 | 本地书副本目录 | 与数据库目录同级的 `local_books/` | `lib/src/model/local_book/local_book_storage.dart` |
-| 当前 Android release 签名配置 | `debug` 签名配置 | `android/app/build.gradle.kts` |
+| 当前 Android release 签名配置 | PageNest 独立发布证书；本机私钥和随机密码不进入 Git | `android/app/build.gradle.kts`、`android/pagenest-signing.properties` |
 
 ## 覆盖安装的硬性条件（Android）
 
 新 APK/AAB 要保留已安装应用的数据并完成覆盖升级，必须同时满足：
 
-- `applicationId` 仍为 `io.legado.flutter`；改包名会被 Android 视为新应用，不能覆盖原安装包。
-- 新包必须使用与已安装包相同的签名证书。当前 `release` 构建配置使用 debug 签名；若已安装包也是按此配置生成，晚间包改成新的发布签名后不能直接覆盖，通常需要卸载重装，应用私有数据会丢失。
+- `applicationId` 必须保持为 `com.contradiction.pagenest`；本次从旧 Flutter 包名切换后已是新应用，首次安装不能覆盖旧包。
+- 新包必须持续使用 `pagenest_release.jks` 中的同一张 PageNest 发布证书。替换或丢失该证书将无法覆盖已安装的 PageNest 包。
 - 新包的 `versionCode` 必须大于设备中已安装包的 `versionCode`。每次要分发并覆盖安装的 Android 构建都应递增此数字。
 - 不得删除、清空或改用其他应用沙盒中的既有持久化数据；对已有 SQLite、`local_books/`、应用支持目录文件和持久化配置的读取必须保持兼容，或提供迁移。
 
@@ -37,7 +37,7 @@
 
 ### 1. 先判定安装身份
 
-- [ ] `android/app/build.gradle.kts` 中的 `applicationId` 仍是 `io.legado.flutter`。
+- [ ] `android/app/build.gradle.kts` 中的 `applicationId` 仍是 `com.contradiction.pagenest`。
 - [ ] 本次实际签名证书与手机上已安装包一致；不要只比较 `debug` / `release` 这个配置名，应比较实际 keystore 证书。
 - [ ] 若应用身份或签名证书不同，按“不能覆盖安装、需要卸载重装”处理；先备份需要保留的数据。
 
@@ -89,4 +89,5 @@
 
 ## 当前基线的特别提醒
 
-当前 `release` 类型暂时复用了 debug 签名配置。这意味着，在切换到正式发布 keystore 之前，应先确认设备上已安装的包到底由哪张证书签名；直接切换签名通常不能保留现有应用数据完成覆盖安装。
+PageNest 首次发布前必须同时备份 `android/pagenest-signing.properties` 和
+`android/app/signing/pagenest_release.jks`。两者均不进入 Git，不应依赖当前工作机作为唯一副本。

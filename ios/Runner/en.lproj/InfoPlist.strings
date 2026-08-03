@@ -1,0 +1,3 @@
+/* English launcher and system task display name. */
+"CFBundleDisplayName" = "PageNest";
+"CFBundleName" = "PageNest";

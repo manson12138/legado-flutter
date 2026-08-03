@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 简体中文系统在启动器和系统任务中展示“拾页”。 -->
+    <string name="app_name">拾页</string>
+</resources>

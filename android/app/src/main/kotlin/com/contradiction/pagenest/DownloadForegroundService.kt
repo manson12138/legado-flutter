@@ -1,4 +1,4 @@
-package io.legado.flutter
+package com.contradiction.pagenest
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -20,13 +20,13 @@ class DownloadForegroundService : Service() {
 
     companion object {
         /** 前台通知渠道稳定标识。 */
-        private const val channelId = "legado_flutter_downloads"
+        private const val channelId = "pagenest_downloads"
 
         /** 前台通知稳定编号。 */
         private const val notificationId = 3201
 
         /** 更新通知计数的 Intent 动作。 */
-        private const val actionUpdate = "io.legado.flutter.DOWNLOAD_UPDATE"
+        private const val actionUpdate = "com.contradiction.pagenest.DOWNLOAD_UPDATE"
 
         /** 构建启动或更新下载前台服务的显式 Intent。 */
         fun updateIntent(

@@ -18,7 +18,7 @@
 
 | 功能 | Android 对照入口 | Flutter 当前实现 | 当前差距或验收门禁 | 状态 |
 |---|---|---|---|---|
-| App 主框架 | `MainActivity`、`MainNavGraph` | `lib/main.dart`、`app/legado_app.dart`、`app/app_router.dart`、`ui/home/`；手机底栏、宽屏导航、游客直达主界面、登录后按用户重建业务页 | M9/M10 尚无正式双端通过记录 | `IMPLEMENTED_PENDING_VERIFICATION` |
+| App 主框架 | `MainActivity`、`MainNavGraph` | `lib/main.dart`、`app/pagenest_app.dart`、`app/app_router.dart`、`ui/home/`；手机底栏、宽屏导航、游客直达主界面、登录后按用户重建业务页 | M9/M10 尚无正式双端通过记录 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 书源导入 | `ImportBookSourceDialog`、扫码和文件关联 | 文本/剪贴板、文件、二维码、远程 URL；游客邀请码分页导入与登录账号远程同步复用统一导入边界 | 真实冲突、二维码、远程登录样本和双端系统入口待验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 书源管理 | `BookSourceActivity` | 列表、搜索、启停、分组、编辑、删除、登录、扫码、游客/账号入口和完成后跳转搜索 | 高级字段编辑、真实分阶段调试、排序/置顶置底仍不完整 | `PARTIAL` |
 | 普通规则 | `model/analyzeRule/**`、`model/webBook/**` | JSONPath、XPath、CSS/JSoup 等价选择、正则、混合规则、`@put/@get` 与四段业务链已接入 | 固定真实样本尚未形成 Android/Flutter 字段级结论 | `BLOCKED` |

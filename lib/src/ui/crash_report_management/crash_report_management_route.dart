@@ -36,7 +36,7 @@ final class _CrashReportManagementRouteState extends State<CrashReportManagement
   /// 把副作用转为 Snackbar 或只读内容页面。
   void _effect(CrashReportManagementEffect effect) { if (!mounted) { return; } switch (effect) { case ShowCrashReportMessageEffect(message: final String message): ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(message))); case ShowCrashReportContentEffect(content: final String content): Navigator.of(context).push(MaterialPageRoute<void>(builder: (BuildContext context) => _CrashReportViewer(content: content))); case ShareCrashReportEffect(report: final report): unawaited(_share(report.path)); } }
   /// 调用系统面板分享已脱敏的单个 JSON 报告。
-  Future<void> _share(String path) async { try { await SharePlus.instance.share(ShareParams(files: <XFile>[XFile(path, mimeType: 'application/json')], title: 'Legado Flutter 崩溃日志')); } on Object { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('分享崩溃日志失败。'))); } } }
+  Future<void> _share(String path) async { try { await SharePlus.instance.share(ShareParams(files: <XFile>[XFile(path, mimeType: 'application/json')], title: 'PageNest（拾页） 崩溃日志')); } on Object { if (mounted) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('分享崩溃日志失败。'))); } } }
   /// 释放订阅和 ViewModel 资源。
   @override void dispose() { _stateSubscription.cancel(); _effectSubscription.cancel(); _viewModel.dispose(); super.dispose(); }
   /// 将状态和意图传入纯 UI。

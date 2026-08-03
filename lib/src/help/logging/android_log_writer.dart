@@ -12,7 +12,7 @@ final class AndroidLogWriter {
 
   /// 与 Android MainActivity 注册名称一致的平台通道。
   static const MethodChannel _channel = MethodChannel(
-    'io.legado.flutter/logging',
+    'com.contradiction.pagenest/logging',
   );
 
   /// 将已经分段的单条日志交给 Android 原生输出。

@@ -200,7 +200,7 @@ Future，也不引入 Timer、Stream 或额外 isolate。
 复用并扩展现有 `AppNavigationObserver`：
 
 - 使其同时提供稳定 `RouteObserver` 能力；
-- 在 `LegadoApp` State 生命周期内只创建一次，避免每次 build 替换观察器；
+- 在 `PageNestApp` State 生命周期内只创建一次，避免每次 build 替换观察器；
 - 由 `AppRouter`、`WelcomeRoute` 把同一实例传给独立和内嵌两种 `SearchRoute`；
 - `SearchRoute` 只在“本次确实因打开书籍详情而暂停”时等待 `didPopNext` 恢复；
 - 普通对话框、验证码、书源登录和其他路由不会误触发详情暂停；
@@ -254,7 +254,7 @@ arguments.selectedBook.toBook(createdAt: 当前毫秒)
 | `lib/src/ui/search/search_view_model.dart` | 点击结果前暂停活动运行，返回后恢复；完成时清理运行句柄；保持运行代次和进度。 |
 | `lib/src/ui/search/search_route.dart` | 订阅稳定路由观察器，在搜索路由真正重新可见时继续搜索，并处理导航失败。 |
 | `lib/src/app/app_navigation_observer.dart` | 在保留现有导航日志的同时提供 RouteAware 订阅能力。 |
-| `lib/src/app/legado_app.dart` | 在 State 生命周期内持有唯一导航观察器。 |
+| `lib/src/app/pagenest_app.dart` | 在 State 生命周期内持有唯一导航观察器。 |
 | `lib/src/app/app_router.dart` | 把导航观察器传到独立搜索页和主框架。 |
 | `lib/src/ui/home/welcome_route.dart` | 把同一导航观察器传给内嵌搜索页。 |
 | `lib/src/ui/book_info/book_info_contract.dart` | 让初始状态明确携带搜索快照及其未完成语义。 |

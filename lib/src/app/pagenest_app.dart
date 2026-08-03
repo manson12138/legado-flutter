@@ -24,9 +24,9 @@ import '../api/remote_app/remote_app_service_config.dart';
 import '../platform/external_local_book_open_service.dart';
 
 /// 在 Flutter 首帧后创建完整业务组合根，避免原生启动页等待数据库、网络和阅读器对象装配。
-final class LegadoBootstrapApp extends StatefulWidget {
+final class PageNestBootstrapApp extends StatefulWidget {
   /// 创建仅持有启动期基础设施的轻量应用壳。
-  const LegadoBootstrapApp({
+  const PageNestBootstrapApp({
     required this.logger,
     required this.logManager,
     required this.crashReportManager,
@@ -47,11 +47,11 @@ final class LegadoBootstrapApp extends StatefulWidget {
   final RemoteAppServiceConfig remoteAppConfig;
 
   @override
-  State<LegadoBootstrapApp> createState() => _LegadoBootstrapAppState();
+  State<PageNestBootstrapApp> createState() => _PageNestBootstrapAppState();
 }
 
 /// 管理完整依赖容器的延后创建与失败降级界面。
-final class _LegadoBootstrapAppState extends State<LegadoBootstrapApp> {
+final class _PageNestBootstrapAppState extends State<PageNestBootstrapApp> {
   /// 创建完成后提供给正式应用组合根的完整依赖。
   AppDependencies? _dependencies;
 
@@ -113,10 +113,10 @@ final class _LegadoBootstrapAppState extends State<LegadoBootstrapApp> {
   Widget build(BuildContext context) {
     final AppDependencies? dependencies = _dependencies;
     if (dependencies != null) {
-      return LegadoApp(dependencies: dependencies);
+      return PageNestApp(dependencies: dependencies);
     }
     return MaterialApp(
-      title: 'Legado Flutter',
+      title: 'PageNest（拾页）',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
@@ -153,20 +153,20 @@ enum _AppStartupPhase {
 }
 
 /// Flutter 应用组合根，统一连接依赖、主题、路由和全局错误边界。
-final class LegadoApp extends StatefulWidget {
+final class PageNestApp extends StatefulWidget {
   /// 创建应用组合根。
-  const LegadoApp({required this.dependencies, super.key});
+  const PageNestApp({required this.dependencies, super.key});
 
   /// 启动阶段组装完成的应用级依赖。
   final AppDependencies dependencies;
 
   /// 创建保存应用主题模式的组合根状态。
   @override
-  State<LegadoApp> createState() => _LegadoAppState();
+  State<PageNestApp> createState() => _PageNestAppState();
 }
 
 /// 保存当前会话主题模式，并把修改能力向“我的”页面传递。
-final class _LegadoAppState extends State<LegadoApp>
+final class _PageNestAppState extends State<PageNestApp>
     with WidgetsBindingObserver {
   /// 写死的管理员账号；该账号进入主界面后不执行 App 准入或版本检查。
   static const String _administratorUsername = 'admin';
@@ -300,7 +300,7 @@ final class _LegadoAppState extends State<LegadoApp>
         return MaterialApp(
           key: ValueKey<String>('local-user-scope-$userId'),
           navigatorKey: _navigatorKey,
-          title: 'Legado Flutter',
+          title: 'PageNest（拾页）',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),

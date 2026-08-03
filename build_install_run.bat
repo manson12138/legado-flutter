@@ -10,7 +10,7 @@ set "APK_PATH=build\app\outputs\flutter-apk\app-release.apk"
 set "APP_BUILD_SECRETS=%SCRIPT_DIR%app_build_secrets.json"
 
 rem Android application package name.
-set "PACKAGE_NAME=io.legado.flutter"
+set "PACKAGE_NAME=com.contradiction.pagenest"
 
 rem Relative launcher Activity class name.
 set "MAIN_ACTIVITY=.MainActivity"
@@ -62,7 +62,7 @@ for /f "tokens=1,2 delims=+" %%X in ("%PUBSPEC_VERSION%") do (
 rem Build a yyyy-MM-dd-HH-mm timestamp without depending on the system locale's date format.
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd-HH-mm'"`) do set "BUILD_TIMESTAMP=%%T"
 
-set "ARCHIVE_PATH=build\app\outputs\flutter-apk\legado-release-%VERSION_NAME%-%VERSION_CODE%-%BUILD_TIMESTAMP%.apk"
+set "ARCHIVE_PATH=build\app\outputs\flutter-apk\pagenest-release-%VERSION_NAME%-%VERSION_CODE%-%BUILD_TIMESTAMP%.apk"
 move /y "%APK_PATH%" "%ARCHIVE_PATH%" >nul
 echo Renamed to: %ARCHIVE_PATH%
 

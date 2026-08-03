@@ -73,7 +73,7 @@ final class AboutScreen extends StatelessWidget {
           ),
           const SizedBox(height: SpacingToken.medium),
           const Center(
-            child: Text('Legado Flutter', style: TextStyle(fontSize: 20)),
+            child: Text('PageNest（拾页）', style: TextStyle(fontSize: 20)),
           ),
           const SizedBox(height: SpacingToken.xSmall),
           Center(

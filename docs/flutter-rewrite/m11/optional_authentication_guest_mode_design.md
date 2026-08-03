@@ -120,7 +120,7 @@ App 冷启动
 | 文件 | 主要改动 |
 |---|---|
 | `lib/src/app/current_user_scope.dart` | 增加游客保留 ID；未登录时返回游客作用域，账号切换仍递增代次 |
-| `lib/src/app/legado_app.dart` | 根门只负责启动会话恢复，不再用认证页覆盖业务树；按游客或账号作用域启动本地后台服务 |
+| `lib/src/app/pagenest_app.dart` | 根门只负责启动会话恢复，不再用认证页覆盖业务树；按游客或账号作用域启动本地后台服务 |
 | `lib/src/app/bookshelf_history_startup_preloader.dart` | 沿用当前作用域，不再把未登录视为非法调用 |
 | `lib/src/app/bookshelf_history_auto_refresh_service.dart` | 游客作用域下也可更新本地书架和历史目录 |
 | `lib/src/model/reader/download_coordinator.dart` | 继续按作用域隔离，游客与账号切换时取消旧运行 |

@@ -1,6 +1,6 @@
 # M00 Project Decisions and Baseline Facts
 
-Last updated: 2026-07-13
+Last updated: 2026-08-03
 
 ## Frozen Baseline
 
@@ -11,9 +11,9 @@ Last updated: 2026-07-13
 | Git commit | `307f2a45f6d7ccef146562d4c60081aafcb887a8` | `git rev-parse HEAD` | User confirms long-term baseline | IN_PROGRESS | 2026-07-13 |
 | Rewrite output location | Same Git repository as Android project | Confirmed in rewrite plan | User | DONE | 2026-07-13 |
 | Flutter project directory | `flutter_app` | User confirmed before M1 | User | DONE | 2026-07-13 |
-| Flutter display name | `Legado Flutter` | User confirmed before M1 | User | DONE | 2026-07-13 |
-| Flutter Android applicationId | `io.legado.flutter` | User confirmed before M1 | User | DONE | 2026-07-13 |
-| Flutter iOS bundle identifier | `io.legado.flutter` | User confirmed before M1 | User | DONE | 2026-07-13 |
+| Flutter display name | Chinese `拾页` / English `PageNest` | User replaced the complete product identity | User | DONE | 2026-08-03 |
+| Flutter Android applicationId | `com.contradiction.pagenest` | User replaced the old Flutter package identity | User | DONE | 2026-08-03 |
+| Flutter iOS bundle identifier | `com.contradiction.pagenest` | User replaced the old Flutter bundle identity | User | DONE | 2026-08-03 |
 | Android-first order | Android A2 first, then iOS A2 | Confirmed in rewrite plan | User | DONE | 2026-07-13 |
 | Old app data migration | Do not read or migrate old private database | Confirmed in rewrite plan | User | DONE | 2026-07-13 |
 | First-wave scope | Source, search, detail, shelf, text reader, progress restore | Confirmed in rewrite plan | User | DONE | 2026-07-13 |
@@ -61,8 +61,9 @@ Last updated: 2026-07-13
 | Decision | Confirmed Value | Decision Note | Owner | Status | Updated |
 |---|---|---|---|---|---|
 | Flutter directory | `flutter_app` | Confirmed as the repository-local project path. | User | DONE | 2026-07-13 |
-| App display name | `Legado Flutter` | Confirmed for Android and iOS launcher metadata. | User | DONE | 2026-07-13 |
-| Android applicationId | `io.legado.flutter` | Confirmed and distinct from `io.legato.kazusa`. | User | DONE | 2026-07-13 |
-| iOS bundle identifier | `io.legado.flutter` | Confirmed for the Runner signing target. | User | DONE | 2026-07-13 |
-| App icon | Reuse current icon | Confirmed; M1 converts existing launcher artwork for both hosts. | User | DONE | 2026-07-13 |
+| App display name | Chinese `拾页` / English `PageNest` | Replaces all prior launcher branding on both hosts. | User | DONE | 2026-08-03 |
+| Android applicationId | `com.contradiction.pagenest` | New install identity, distinct from both prior Flutter and Android packages. | User | DONE | 2026-08-03 |
+| iOS bundle identifier | `com.contradiction.pagenest` | New Runner and RunnerTests signing identity. | User | DONE | 2026-08-03 |
+| App icon | Original PageNest open-page and starlight artwork | One opaque master generates every Android and iOS launcher size. | User | DONE | 2026-08-03 |
+| Android signing | New local-only `pagenest` release key | Private key and random passwords are ignored by Git and require offline backup. | User | DONE | 2026-08-03 |
 | JS compatibility samples | User-provided sanitized source JSON set | M4 cannot claim compatibility without real samples. | User | BLOCKED | 2026-07-13 |

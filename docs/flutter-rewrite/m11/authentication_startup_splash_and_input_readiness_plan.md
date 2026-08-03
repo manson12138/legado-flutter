@@ -35,7 +35,7 @@
 ## 3. 设计
 
 ```text
-main.dart / LegadoApp
+main.dart / PageNestApp
   -> 启动页（居中应用图标，表单不可见）
   -> 恢复认证会话
   -> 挂载认证门的内嵌 Navigator
@@ -47,7 +47,7 @@ main.dart / LegadoApp
 
 ### 3.1 启动状态
 
-在 `LegadoApp` 引入仅限 UI 层的不可变启动状态，至少区分：`booting`、`restoringAuthentication`、`preparingAuthenticationInput`、`ready`。启动页在前三种状态显示；只有 `ready` 时才允许认证页渲染可操作的 `TextFormField`。
+在 `PageNestApp` 引入仅限 UI 层的不可变启动状态，至少区分：`booting`、`restoringAuthentication`、`preparingAuthenticationInput`、`ready`。启动页在前三种状态显示；只有 `ready` 时才允许认证页渲染可操作的 `TextFormField`。
 
 认证会话恢复失败保持当前受控的未登录降级行为：启动页退出后显示登录表单，不因网络错误无限阻塞。
 
@@ -72,7 +72,7 @@ main.dart / LegadoApp
 
 | 文件 | 改动职责 |
 |---|---|
-| `lib/src/app/legado_app.dart` | 启动状态、居中图标启动页、认证恢复与输入就绪时序 |
+| `lib/src/app/pagenest_app.dart` | 启动状态、居中图标启动页、认证恢复与输入就绪时序 |
 | `lib/src/ui/authentication/authentication_route.dart` | 接收输入就绪状态，在未就绪时禁用输入与提交；保留焦点、键盘和日志边界 |
 | `lib/src/help/logging/app_logger.dart` | 仅在现有 tag 无法表达阶段时补充固定日志标识；本方案优先复用 `LEGADO_STARTUP` / `LEGADO_AUTH` |
 | `docs/flutter-rewrite/AI_PROJECT_INDEX.md` | 记录实施文件与本方案入口 |

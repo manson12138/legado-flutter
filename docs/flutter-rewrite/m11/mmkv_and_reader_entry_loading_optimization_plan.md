@@ -89,13 +89,13 @@ SQLite 查询改为进程内值加 MMKV；其余设备级偏好统一走同一�
 官方 MMKV 要求访问实例前先完成 `MMKV.initialize()`。结合当前首帧后创建完整组合根的架构，目标链路为：
 
 ```text
-runApp(LegadoBootstrapApp)
+runApp(PageNestBootstrapApp)
   -> Flutter 轻量首帧
   -> 单飞 await MMKV.initialize()
   -> 创建单进程 legado.preferences 实例
   -> 创建 AppPreferencesStore
   -> 创建正式 AppDependencies
-  -> 进入 LegadoApp
+  -> 进入 PageNestApp
 ```
 
 约束：
@@ -474,7 +474,7 @@ loading 移除、书籍恢复/错误壳、MMKV 显示配置启动后预加载、
 
 - `pubspec.yaml`
 - `pubspec.lock`（由用户执行依赖解析后更新）
-- `lib/src/app/legado_app.dart`
+- `lib/src/app/pagenest_app.dart`
 - `lib/src/app/app_dependencies.dart`
 - `lib/src/app/app_route.dart`
 - `lib/src/app/app_router.dart`

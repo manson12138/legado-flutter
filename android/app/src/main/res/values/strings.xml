@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 非中文系统在启动器和系统任务中展示 PageNest 英文品牌名。 -->
+    <string name="app_name">PageNest</string>
+</resources>

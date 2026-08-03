@@ -113,7 +113,7 @@ runApp(轻量 Bootstrap)
   -> await MMKV.initialize()
   -> 创建 legado.preferences 单进程实例
   -> 创建 AppDependencies 并注入 AppPreferencesStore
-  -> 进入正式 LegadoApp
+  -> 进入正式 PageNestApp
 ```
 
 这不会阻塞原生启动页或 Flutter 第一帧，但会成为“轻量 Bootstrap 到正式应用组合根”的本地初始化条件。
@@ -239,7 +239,7 @@ MMKV。
 
 - `pubspec.yaml`
 - `pubspec.lock`（由用户安装依赖时生成或更新）
-- `lib/src/app/legado_app.dart`
+- `lib/src/app/pagenest_app.dart`
 - `lib/src/app/app_dependencies.dart`
 - 新的偏好接口、MMKV 实现、内存降级实现和阅读配置 Store
 - `lib/src/data/repository/reader_repository.dart`

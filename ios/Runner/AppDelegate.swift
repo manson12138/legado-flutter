@@ -107,7 +107,7 @@ import UIKit
     }
     /// 与 Dart ReaderPlatformService 共用的 MethodChannel。
     let channel = FlutterMethodChannel(
-      name: "io.legado.flutter/reader_platform",
+      name: "com.contradiction.pagenest/reader_platform",
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in
@@ -200,7 +200,7 @@ import UIKit
     }
     /// 与 Dart AppPackageInfoService 共用的平台通道。
     let channel = FlutterMethodChannel(
-      name: "io.legado.flutter/app_package_info",
+      name: "com.contradiction.pagenest/app_package_info",
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { call, result in
@@ -233,7 +233,7 @@ import UIKit
     }
     /// 与 Dart PasswordEncryptionService 共用的方法通道。
     let channel = FlutterMethodChannel(
-      name: "io.legado.flutter/password_encryption",
+      name: "com.contradiction.pagenest/password_encryption",
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in
@@ -371,7 +371,7 @@ import UIKit
     }
     /// 与 Dart DownloadBackgroundService 共用的平台通道。
     let channel = FlutterMethodChannel(
-      name: "io.legado.flutter/download_background",
+      name: "com.contradiction.pagenest/download_background",
       binaryMessenger: registrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in

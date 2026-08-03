@@ -3,7 +3,7 @@ import java.util.Properties
 
 /// 固定发布签名的本机私有配置，不得提交 keystore 或密码文件。
 val releaseSigningProperties = Properties()
-val releaseSigningPropertiesFile = rootProject.file("key.properties")
+val releaseSigningPropertiesFile = rootProject.file("pagenest-signing.properties")
 
 if (!releaseSigningPropertiesFile.isFile) {
     throw GradleException("缺少 Android 发布签名配置：${releaseSigningPropertiesFile.absolutePath}")
@@ -19,7 +19,7 @@ plugins {
 }
 
 android {
-    namespace = "io.legado.flutter"
+    namespace = "com.contradiction.pagenest"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -33,8 +33,8 @@ android {
     }
 
     defaultConfig {
-        // Flutter 新应用使用独立标识，与原应用 io.legato.kazusa 并存。
-        applicationId = "io.legado.flutter"
+        // PageNest 使用全新独立标识，与旧 Flutter 包和原 Android 应用并存。
+        applicationId = "com.contradiction.pagenest"
         // 与原 Android 项目保持一致的最低系统版本。
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
@@ -49,7 +49,7 @@ android {
 
     signingConfigs {
         create("release") {
-            /// keystore 路径及密码均来自未纳入 Git 的 android/key.properties。
+            /// keystore 路径及密码均来自未纳入 Git 的 android/pagenest-signing.properties。
             keyAlias = releaseSigningProperties.getProperty("keyAlias")
             keyPassword = releaseSigningProperties.getProperty("keyPassword")
             storeFile = releaseSigningProperties.getProperty("storeFile")?.let(::file)
@@ -64,7 +64,7 @@ android {
         }
 
         release {
-            // M1 暂用模板调试签名；发布签名必须由用户在后续交付阶段配置。
+            // debug/release 共用 PageNest 新发布证书，保证本机覆盖安装的签名身份稳定。
             signingConfig = signingConfigs.getByName("release")
         }
     }

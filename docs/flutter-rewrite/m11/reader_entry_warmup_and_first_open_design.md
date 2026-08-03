@@ -296,7 +296,7 @@ P0 不需要数据库 Schema 或 `pubspec.yaml` 版本变更。
 - `lib/src/app/app_dependencies.dart`
 - `lib/src/app/app_route.dart`
 - `lib/src/app/app_router.dart`
-- `lib/src/app/legado_app.dart`
+- `lib/src/app/pagenest_app.dart`
 - 新的应用级显示配置 Store 与处理后正文缓存文件
 - `lib/src/ui/bookshelf/bookshelf_route.dart`
 - `lib/src/ui/book_info/book_info_route.dart`

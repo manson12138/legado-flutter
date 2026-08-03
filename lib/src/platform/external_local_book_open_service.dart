@@ -59,7 +59,7 @@ final class DefaultExternalLocalBookOpenService
 
   /// 与 Android 宿主共用的稳定通道。
   static const MethodChannel _channel = MethodChannel(
-    'io.legado.flutter/external_txt_open',
+    'com.contradiction.pagenest/external_txt_open',
   );
 
   /// 把热启动通知广播给应用组合根，不承载文件内容。

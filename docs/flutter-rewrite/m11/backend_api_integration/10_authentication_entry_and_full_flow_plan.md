@@ -25,7 +25,7 @@
 | 区域 | 当前行为 | 问题 | 改造 |
 | --- | --- | --- | --- |
 | `AuthenticationRoute` | 从设置页进入，展示账号操作 | 未登录仍可停留在主界面 | 改为由应用级认证门承载，同时保留设置内账号入口供已登录用户查看和退出 |
-| `LegadoApp` | 启动和前台恢复调用 `restoreSession()` | 没有根据会话状态阻止子页面 | 在 AppAccess 覆盖层内增加认证门，等待恢复时显示启动状态，未登录时全屏认证 UI |
+| `PageNestApp` | 启动和前台恢复调用 `restoreSession()` | 没有根据会话状态阻止子页面 | 在 AppAccess 覆盖层内增加认证门，等待恢复时显示启动状态，未登录时全屏认证 UI |
 | `AuthenticationGateway` | 已提供会话监听、登录/注册、权限读取及安全会话恢复 | UI 状态与启动门未统一 | 认证门和认证页共同订阅同一会话状态，不复制 token 或网络逻辑 |
 | API/数据层 | 已有 RSA 密码加密及双 Token 持久化设计 | 不得被 UI 重写或旁路 | 继续由 Repository/API 处理公钥、重试、刷新与安全存储 |
 
@@ -63,7 +63,7 @@
 
 | 层 | 文件 | 改动 |
 | --- | --- | --- |
-| 应用壳 | `app/legado_app.dart` | 在既有准入/升级覆盖层中组合认证门；确保强制升级和准入拒绝优先于认证 UI |
+| 应用壳 | `app/pagenest_app.dart` | 在既有准入/升级覆盖层中组合认证门；确保强制升级和准入拒绝优先于认证 UI |
 | UI 状态 | `ui/authentication/authentication_view_model.dart` | 统一登录、注册、提交中、受控反馈与表单模式状态，不新增独立 contract 文件 |
 | ViewModel | `ui/authentication/authentication_view_model.dart` | 统一登录/注册/退出/权限刷新 Intent；只调用认证网关，不触碰 HTTP、RSA 或安全存储 |
 | 页面 | `ui/authentication/authentication_route.dart` | 重写为全屏可滚动认证容器，处理焦点、键盘、表单控制器和生命周期 |

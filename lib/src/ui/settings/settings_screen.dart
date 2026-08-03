@@ -209,7 +209,7 @@ final class SettingsScreen extends StatelessWidget {
                     icon: Icons.info_outline,
                     title: '关于',
                     subtitle:
-                        'Legado Flutter $appVersionName+$appVersionCode',
+                        'PageNest（拾页） $appVersionName+$appVersionCode',
                     onTap: onOpenAbout,
                   ),
                 ],

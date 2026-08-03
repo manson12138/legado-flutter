@@ -9,9 +9,9 @@
 | Flutter 固定版本 | `3.41.5` | `flutter_app/.fvmrc` | 待用户命令确认 |
 | Dart SDK 约束 | `3.11.3` | `flutter_app/pubspec.yaml` | 待用户命令确认 |
 | Flutter App 版本 | `1.0.0+1` | `flutter_app/pubspec.yaml` | 已记录 |
-| Flutter applicationId | `io.legado.flutter` | Android Gradle 配置 | 已记录 |
+| Flutter applicationId | `com.contradiction.pagenest` | Android Gradle 配置 | 已记录 |
 | 原 Android applicationId | `io.legato.kazusa` | 原 App Gradle 配置 | 已记录 |
-| Flutter 数据库 | `legado_flutter.db` v2 | `LegadoDatabase` | 已记录 |
+| Flutter 数据库 | `pagenest.db` v2 | `LegadoDatabase` | 已记录 |
 | 安装类型 | 未知 | 用户填写 | 未开始 |
 
 ## 用户填写的真机环境

@@ -23,7 +23,7 @@ final class MethodChannelDownloadBackgroundService
 
   /// 与 Android 前台服务和 iOS 有限后台任务共用的通道。
   static const MethodChannel _channel = MethodChannel(
-    'io.legado.flutter/download_background',
+    'com.contradiction.pagenest/download_background',
   );
 
   /// 把可公开的任务计数发送给平台，不传书名、书源 URL 或正文。

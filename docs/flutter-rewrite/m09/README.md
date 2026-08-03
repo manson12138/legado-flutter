@@ -4,8 +4,8 @@
 
 ## 本次已完成的验收准备
 
-- 静态确认 Flutter Android `applicationId = io.legado.flutter`，原 Android `applicationId = io.legato.kazusa`，两者标识不同，具备共存前提；实际同时安装仍需用户真机确认。
-- 静态确认 Flutter 固定版本为 `3.41.5`、Dart 约束为 `3.11.3`、App 版本为 `1.0.0+1`、独立数据库为 `legado_flutter.db` v2。
+- 静态确认 Flutter Android `applicationId = com.contradiction.pagenest`，原 Android `applicationId = io.legato.kazusa`，两者标识不同，具备共存前提；实际同时安装仍需用户真机确认。
+- 静态确认 Flutter 固定版本为 `3.41.5`、Dart 约束为 `3.11.3`、App 版本为 `1.0.0+1`、独立数据库为 `pagenest.db` v2。
 - 修复主 Android Manifest 缺少 `INTERNET` 权限的问题，使 debug、profile 和 release 合并结果都具备联网声明。
 - 新增 Android `network_security_config.xml`：兼容仍使用 HTTP 的 Legado 书源；正式构建只信任系统证书，调试构建可额外信任用户证书用于用户自行抓包。
 - 建立环境与命令结果、核心/异常路径、缺陷回归和 M10 差异交接四份验收表。

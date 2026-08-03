@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'src/app/app_error_boundary.dart';
-import 'src/app/legado_app.dart';
+import 'src/app/pagenest_app.dart';
 import 'src/help/logging/file_app_logger.dart';
 import 'src/help/logging/app_logger.dart';
 import 'src/help/logging/console_app_logger.dart';
@@ -55,7 +55,7 @@ void main() {
       deferredLogService.info(tag: appStartupLogTag, message: 'stage=run_app');
       /// 完整业务依赖在 Flutter 第一帧后由启动壳创建，避免原生启动页等待同步对象装配。
       runApp(
-        LegadoBootstrapApp(
+        PageNestBootstrapApp(
           logger: deferredLogService,
           logManager: deferredLogService,
           crashReportManager: crashReportManager,

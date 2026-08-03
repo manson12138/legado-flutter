@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# PageNest Android 发布签名只保留在开发者本机，禁止提交密码或私钥。
+/android/pagenest-signing.properties
+/android/app/signing/*.jks
+/android/app/signing/*.keystore

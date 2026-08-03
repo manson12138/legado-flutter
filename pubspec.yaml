@@ -1,5 +1,5 @@
-name: legado_flutter
-description: "Legado Android 与 iOS 共用的 Flutter 重写工程。"
+name: pagenest
+description: "PageNest（拾页）Android 与 iOS 共用的 Flutter 阅读应用。"
 publish_to: 'none'
 version: 1.0.1+12
 

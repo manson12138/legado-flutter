@@ -42,4 +42,4 @@ M00 scope:
 | Room schema version | Root AGENTS mentions version 85; `AppDatabase.kt` and schema directory show latest version 94. | Use version 94 as current migration baseline. | Codex | DONE | 2026-07-13 |
 | Step index link in parent plan | Parent plan says `steps/MIGRATION_STEPS_INDEX.md` from its own directory, but actual path is `steps/MIGRATION_STEPS_INDEX.md`. | Use actual existing path under `docs/flutter-rewrite/steps/`. | Codex | DONE | 2026-07-13 |
 | Module name spelling | Root tree has `baselineProfile`, Gradle includes project `:baselineprofile` mapped to `baselineProfile`. | Record both spelling forms when mapping Gradle modules. | Codex | DONE | 2026-07-13 |
-| Application package naming | Kotlin namespace is `io.legado.app`; Android applicationId is `io.legato.kazusa`. | Flutter app uses confirmed independent id `io.legado.flutter`. | User | DONE | 2026-07-13 |
+| Application package naming | Kotlin namespace is `io.legado.app`; Android applicationId is `io.legato.kazusa`. | Flutter app uses confirmed independent id `com.contradiction.pagenest`. | User | DONE | 2026-07-13 |

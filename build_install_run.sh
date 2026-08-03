@@ -14,7 +14,7 @@ readonly APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
 readonly APP_BUILD_SECRETS="app_build_secrets.json"
 
 # Flutter Android 应用包名。
-readonly PACKAGE_NAME="io.legado.flutter"
+readonly PACKAGE_NAME="com.contradiction.pagenest"
 
 # Android 应用启动 Activity 的相对类名。
 readonly MAIN_ACTIVITY=".MainActivity"
@@ -44,7 +44,7 @@ readonly BUILD_TIMESTAMP="$(date '+%Y-%m-%d-%H-%M')"
 readonly PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | head -1 | sed 's/^version:[[:space:]]*//')"
 readonly VERSION_NAME="${PUBSPEC_VERSION%%+*}"
 readonly VERSION_CODE="${PUBSPEC_VERSION##*+}"
-readonly ARCHIVE_PATH="build/app/outputs/flutter-apk/legado-release-${VERSION_NAME}-${VERSION_CODE}-${BUILD_TIMESTAMP}.apk"
+readonly ARCHIVE_PATH="build/app/outputs/flutter-apk/pagenest-release-${VERSION_NAME}-${VERSION_CODE}-${BUILD_TIMESTAMP}.apk"
 mv "${APK_PATH}" "${ARCHIVE_PATH}"
 printf '已重命名为：%s\n' "${ARCHIVE_PATH}"
 

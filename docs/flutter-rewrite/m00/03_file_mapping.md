@@ -8,7 +8,7 @@ Status values are restricted to `NOT_STARTED`, `MAPPING`, `IN_PROGRESS`, `ANDROI
 
 | Android Path | Android Type | Flutter Path | Flutter Type | Implementation | Behavior Difference | Owner | Status | Updated |
 |---|---|---|---|---|---|---|---|---|
-| `app/src/main/java/io/legado/app/App.kt` | `App` composition root | `flutter_app/lib/main.dart`, `flutter_app/lib/src/app/legado_app.dart` | startup and `LegadoApp` | Dart | New app has an independent lifecycle and data space. | Codex | IN_PROGRESS | 2026-07-13 |
+| `app/src/main/java/io/legado/app/App.kt` | `App` composition root | `flutter_app/lib/main.dart`, `flutter_app/lib/src/app/pagenest_app.dart` | startup and `PageNestApp` | Dart | New app has an independent lifecycle and data space. | Codex | IN_PROGRESS | 2026-07-13 |
 | `app/src/main/java/io/legado/app/di/appModule.kt` | Koin module | `flutter_app/lib/src/app/app_dependencies.dart` | `AppDependencies` | Dart | M1 uses explicit constructor injection because only one shared dependency exists. | Codex | IN_PROGRESS | 2026-07-13 |
 | `app/src/main/java/io/legado/app/ui/main/MainNavKey.kt` | Navigation 3 keys | `flutter_app/lib/src/app/app_route.dart` | `AppRoute` | Dart | M1 uses SDK route names; typed business routes are introduced only with real features. | Codex | IN_PROGRESS | 2026-07-13 |
 | `app/src/main/java/io/legado/app/ui/main/MainNavGraph.kt` | Navigation 3 graph | `flutter_app/lib/src/app/app_router.dart` | `AppRouter` | Dart | Route callbacks and constructor injection replace Activity navigation wiring. | Codex | IN_PROGRESS | 2026-07-13 |

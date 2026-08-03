@@ -8,7 +8,7 @@
 
 当用户在浏览器、下载管理器、文件管理器或其他 App 中对一个 TXT 文件选择“打开”或“打开方式”时：
 
-1. Android 的候选应用列表中出现 `Legado Flutter`。
+1. Android 的候选应用列表中出现 `拾页` 或 `PageNest`。
 2. 用户选择本 App 后，无论 App 是冷启动还是已在前台，都能接收该 TXT。
 3. App 打开现有“导入本地书”页面，并把该 TXT 作为已选候选文件展示。
 4. 用户确认导入后，继续复用现有 `LocalBookImportCoordinator`、`LocalBookStorage` 和 `TxtLocalBookParser`，不在 Kotlin 中复制解析、书架或阅读业务。
@@ -92,7 +92,7 @@ Android 的文件提供方并不总能同时提供可靠 MIME 和可见文件名
 - 冷启动：Dart 通道就绪后主动消费原生保存的初始请求。
 - 热启动：`MainActivity.onNewIntent` 通知同一通道，Dart 再消费新请求。
 - 启动遮罩和游客/账号作用域尚未准备好时，入口服务只保留一个受控待处理请求；业务 Navigator 可用后再导航。
-- `LegadoApp` 提供生命周期稳定的 `GlobalKey<NavigatorState>`，不依赖页面 `BuildContext`。
+- `PageNestApp` 提供生命周期稳定的 `GlobalKey<NavigatorState>`，不依赖页面 `BuildContext`。
 - 导航到 `AppRoute.localBookImport` 时通过类型化路由参数传入候选文件和临时文件所有权。
 
 同一个 Intent 只能消费一次。快速重复收到相同 URI 时按本次会话去重，避免重复压入多个导入页；不同文件按到达顺序处理，不无界积压。
@@ -119,7 +119,7 @@ Android 的文件提供方并不总能同时提供可靠 MIME 和可见文件名
 | `lib/src/platform/external_local_book_open_service.dart` | 新增类型化 Dart 平台入口、事件和临时文件释放边界 |
 | `lib/src/app/app_route.dart` | 新增本地书导入类型化路由参数 |
 | `lib/src/app/app_router.dart` | 把外部 TXT 候选注入导入路由 |
-| `lib/src/app/legado_app.dart` | 增加稳定 Navigator key，协调冷/热启动外部请求 |
+| `lib/src/app/pagenest_app.dart` | 增加稳定 Navigator key，协调冷/热启动外部请求 |
 | `lib/src/ui/local_book_import/local_book_import_route.dart` | 接收初始候选并保证临时副本释放 |
 | `docs/flutter-rewrite/m08_1/README.md` | 记录外部 TXT 关联实现状态和未验证边界 |
 | `docs/flutter-rewrite/m00/03_file_mapping.md` | 补充 Android 文件关联到 Flutter 宿主/Dart 的映射 |
@@ -146,7 +146,7 @@ token，`LocalBookImportRoute` 使用既有 `LocalBooksPickedIntent` 注入候�
 
 代码写入后由用户执行，不由 Codex 运行：
 
-1. 冷启动：在浏览器或文件管理器下载一个 UTF-8 `.txt`，点“打开方式”，确认列表出现 `Legado Flutter`。
+1. 冷启动：在浏览器或文件管理器下载一个 UTF-8 `.txt`，点“打开方式”，确认列表出现 `拾页` 或 `PageNest`。
 2. 选择本 App，确认进入本地书导入页，且该文件已显示并默认选中。
 3. 点击导入，确认成功加入当前游客或登录账号的书架，并能正常阅读。
 4. 把 App 留在前台，再从其他 App 打开另一个 TXT，确认热启动也进入新的导入确认页。

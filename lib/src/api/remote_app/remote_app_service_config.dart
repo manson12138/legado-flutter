@@ -22,8 +22,8 @@ final class RemoteAppServiceConfig {
   factory RemoteAppServiceConfig.fromEnvironment() => RemoteAppServiceConfig(
     baseUri: Uri.parse(const String.fromEnvironment('REMOTE_APP_BASE_URL', defaultValue: 'http://47.109.99.126')),
     productId: const int.fromEnvironment('REMOTE_APP_PRODUCT_ID', defaultValue: 1),
-    appVersionName: const String.fromEnvironment('LEGADO_APP_VERSION_NAME', defaultValue: '1.0.1'),
-    appVersionCode: const int.fromEnvironment('LEGADO_APP_VERSION_CODE', defaultValue: 10),
+    appVersionName: const String.fromEnvironment('PAGENEST_APP_VERSION_NAME', defaultValue: '1.0.1'),
+    appVersionCode: const int.fromEnvironment('PAGENEST_APP_VERSION_CODE', defaultValue: 10),
     channel: const String.fromEnvironment('REMOTE_APP_CHANNEL', defaultValue: 'official'),
     hmacSecret: const String.fromEnvironment('REMOTE_APP_HMAC_SECRET', defaultValue: 'dev-app-signature-change-me'),
     passwordKeyInvalidBusinessCodes: _parseBusinessCodes(

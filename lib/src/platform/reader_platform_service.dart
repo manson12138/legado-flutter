@@ -38,7 +38,7 @@ final class MethodChannelReaderPlatformService implements ReaderPlatformService 
   const MethodChannelReaderPlatformService();
 
   /// Android MainActivity 与 iOS AppDelegate 共用的通道名称。
-  static const MethodChannel _channel = MethodChannel('io.legado.flutter/reader_platform');
+  static const MethodChannel _channel = MethodChannel('com.contradiction.pagenest/reader_platform');
 
   /// 按配置设置系统栏沉浸模式和屏幕常亮；平台桥缺失时仍保留 Flutter 系统栏控制。
   @override

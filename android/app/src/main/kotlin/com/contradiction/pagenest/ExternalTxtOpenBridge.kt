@@ -1,4 +1,4 @@
-package io.legado.flutter
+package com.contradiction.pagenest
 
 import android.app.Activity
 import android.content.Intent
@@ -41,7 +41,7 @@ internal class ExternalTxtOpenBridge(
         private const val STALE_FILE_AGE_MILLIS = 24L * 60L * 60L * 1000L
 
         /** 原生与 Dart 共用的平台通道名称。 */
-        private const val CHANNEL_NAME = "io.legado.flutter/external_txt_open"
+        private const val CHANNEL_NAME = "com.contradiction.pagenest/external_txt_open"
 
         /** 外部 TXT 临时副本专用目录名。 */
         private const val CACHE_DIRECTORY_NAME = "external_txt_open"

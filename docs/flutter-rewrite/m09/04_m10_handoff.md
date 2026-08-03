@@ -11,6 +11,6 @@
 | HTTP 书源 | Android Network Security Config 允许兼容 HTTP | iOS ATS 默认限制 HTTP | 仅 WebContent/local networking 例外；外部普通 HTTP 默认失败并提示，固定域例外需用户确认 | M10 已决策，待真机 |
 | 阅读常亮 | Window `FLAG_KEEP_SCREEN_ON` | `isIdleTimerDisabled` | 进入前状态保存、后台与退出恢复 | 代码均已接入，待双端验证 |
 | 系统栏/安全区 | Android edge-to-edge/预测返回 | iOS safe area/home indicator | 返回手势、底部菜单、键盘和旋转 | 待双端验证 |
-| 应用共存 | `io.legado.flutter` 与 `io.legato.kazusa` | 独立 Bundle ID | 数据目录、钥匙串组和文件容器不能交叉 | Android 待真机，iOS 待 M10 |
+| 应用共存 | `com.contradiction.pagenest` 与 `io.legato.kazusa` | 独立 Bundle ID | 数据目录、钥匙串组和文件容器不能交叉 | Android 待真机，iOS 待 M10 |
 
 M10 入口仍要求：M09 无 P0/P1、用户明确确认 Android A2，并且 JavaScript 核心方案存在 iOS 实现路径。

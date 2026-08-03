@@ -69,14 +69,14 @@
 | `lib/src/api/remote_app/remote_app_api.dart` | 已解码登录/刷新中的 Token 生命周期字段；新增 Bearer `POST /auth/refresh`。 |
 | `lib/src/domain/gateway/authentication_gateway.dart` | 已增加启动/前台恢复入口，UI 不暴露 Token。 |
 | `lib/src/data/repository/authentication_repository.dart` | 已实现登录后持久化、启动恢复、刷新策略、401 清理与并发保护。 |
-| `lib/src/app/app_dependencies.dart`、`lib/src/app/legado_app.dart` | 已创建安全存储并在首帧后、前台恢复时触发非阻塞会话恢复。 |
+| `lib/src/app/app_dependencies.dart`、`lib/src/app/pagenest_app.dart` | 已创建安全存储并在首帧后、前台恢复时触发非阻塞会话恢复。 |
 | `lib/src/ui/settings/settings_route.dart` | 已订阅认证会话，修复登录后仍显示“本地读者”。 |
 | `docs/flutter-rewrite/AI_PROJECT_INDEX.md` 与 M11 认证文档 | 已登记安全存储、恢复调用链、验收和当前状态。 |
 
 本设计不修改数据库 Schema，不需要修改 `LegadoDatabase.schemaVersion` 或 `pubspec.yaml` 的应用 build number。
 
 > 后续交接：本认证设计本身当时不改 Schema；用户书架隔离专项现已把数据库升到 v9 和构建号
-> `+7`。认证会话 `ValueListenable` 变化后，`LegadoApp` 会先失效旧用户预加载与下载调度，
+> `+7`。认证会话 `ValueListenable` 变化后，`PageNestApp` 会先失效旧用户预加载与下载调度，
 > 再把 `account.id` 写入不含 Token 的 `CurrentUserScope`，并以用户 key 重建业务导航树。
 > 书架、目录、分组、历史、进度和下载 Repository 只通过该作用域取得用户 ID；安全存储中的
 > Token 仍不会进入 SQLite 或 UI。详见

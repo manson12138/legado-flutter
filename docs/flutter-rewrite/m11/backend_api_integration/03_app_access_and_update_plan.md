@@ -58,7 +58,7 @@ WidgetsBinding 生命周期
 
 - `AppAccessCoordinator` 持有 `ValueNotifier<AppAccessState>`，负责解析受控领域状态，释放计时器和生命周期观察器。
 - `RemoteAppApi` 负责校验 bootstrap 的 `access` 和 `update` 字段，不将动态 Map 传入 Widget。
-- `LegadoApp` 只订阅状态并覆盖阻断层/弹窗；不在 `build()` 发网络请求。
+- `PageNestApp` 只订阅状态并覆盖阻断层/弹窗；不在 `build()` 发网络请求。
 - Android 退出动作置于窄平台桥，必须由用户点击“退出应用”触发；不得在网络回调中强杀进程。
 
 ## 6. 用户验收

@@ -1,6 +1,6 @@
 # M00 Acceptance Spec
 
-Last updated: 2026-07-13
+Last updated: 2026-08-03
 
 ## Stage Acceptance Rules
 
@@ -33,10 +33,11 @@ Last updated: 2026-07-13
 | Requirement | Current Value | Owner | Status | Updated |
 |---|---|---|---|---|
 | Flutter directory confirmed | `flutter_app` | User | DONE | 2026-07-13 |
-| Display name confirmed | `Legado Flutter` | User | DONE | 2026-07-13 |
-| Android applicationId confirmed | `io.legado.flutter` | User | DONE | 2026-07-13 |
-| iOS bundle identifier confirmed | `io.legado.flutter` | User | DONE | 2026-07-13 |
-| Icon decision confirmed | Reuse current icon | User | DONE | 2026-07-13 |
+| Display name confirmed | Chinese `拾页` / English `PageNest` | User | DONE | 2026-08-03 |
+| Android applicationId confirmed | `com.contradiction.pagenest` | User | DONE | 2026-08-03 |
+| iOS bundle identifier confirmed | `com.contradiction.pagenest` | User | DONE | 2026-08-03 |
+| Icon decision confirmed | Original PageNest open-page and starlight icon | User | DONE | 2026-08-03 |
+| Android signing confirmed | New local-only `pagenest` release key | User | DONE | 2026-08-03 |
 | JS samples plan confirmed | Sanitized source JSON set | User | BLOCKED | 2026-07-13 |
 | M00 docs accepted | User replied “全部确认” before M1 execution. | User | DONE | 2026-07-13 |
 

@@ -1,4 +1,4 @@
-# Legado Flutter 1:1 重写规则与执行方案
+# PageNest（拾页） 1:1 重写规则与执行方案
 
 > 文档定位：本文件首先是提供给 AI 编码代理阅读和执行的强制规则，其次才是提供给开发者阅读的迁移方案。
 >
@@ -770,9 +770,9 @@ SettingItem
 
 ```text
 目录：flutter_app
-显示名称：Legado Flutter
-Android applicationId：io.legado.flutter
-iOS Bundle Identifier：io.legado.flutter
+显示名称：PageNest（拾页）
+Android applicationId：com.contradiction.pagenest
+iOS Bundle Identifier：com.contradiction.pagenest
 Android minSdk：26
 iOS Deployment Target：16.0
 ```
@@ -1020,9 +1020,9 @@ flutter build ios --no-codesign
 创建 Flutter 工程前仍需最终确认：
 
 1. Flutter 子目录是否使用 `flutter_app`。
-2. 应用显示名称是否使用 `Legado Flutter`。
-3. Android applicationId 是否使用 `io.legado.flutter`。
-4. iOS Bundle Identifier 是否使用 `io.legado.flutter`。
+2. 应用显示名称是否使用 `PageNest（拾页）`。
+3. Android applicationId 是否使用 `com.contradiction.pagenest`。
+4. iOS Bundle Identifier 是否使用 `com.contradiction.pagenest`。
 5. 新应用图标是复用当前图标还是先使用占位图标。
 6. 用于 JavaScript 兼容验收的常用书源样本如何提供。
 

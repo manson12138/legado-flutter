@@ -26,7 +26,7 @@ final class ExternalTxtOpenBridge {
 
   /// 串行保存待处理 URL，并执行复制与清理，避免并发大文件放大磁盘压力。
   private let fileQueue = DispatchQueue(
-    label: "io.legado.flutter.external_txt_open.file"
+    label: "com.contradiction.pagenest.external_txt_open.file"
   )
 
   /// 尚未被 Dart 消费的外部文件 URL，仅在 `fileQueue` 中访问。
@@ -37,7 +37,7 @@ final class ExternalTxtOpenBridge {
   /// - Parameter binaryMessenger: 当前 Flutter 引擎的消息总线。
   init(binaryMessenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(
-      name: "io.legado.flutter/external_txt_open",
+      name: "com.contradiction.pagenest/external_txt_open",
       binaryMessenger: binaryMessenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
