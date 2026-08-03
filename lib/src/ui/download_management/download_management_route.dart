@@ -634,7 +634,7 @@ final class _DownloadManagementScreenState
       AppRoute.bookInfo,
       arguments: BookInfoRouteArguments(
         group: BookSearchResultGroup(
-          key: '${book.name.length}:${book.name}${book.author}',
+          key: bookSearchResultGroupKey(searchBook),
           books: <SearchBook>[searchBook],
         ),
         selectedBook: searchBook,

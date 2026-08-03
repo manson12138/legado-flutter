@@ -1,3 +1,5 @@
+import '../../constant/book_source_type.dart';
+
 /// 表示可持久化书源，对应 Android `data.entities.BookSource`。
 ///
 /// M2 将各规则对象保存为原始 JSON 文本，M3 再转换为强类型规则；这样数据库对象不会
@@ -8,7 +10,7 @@ final class BookSource {
     required this.bookSourceUrl,
     required this.bookSourceName,
     this.bookSourceGroup,
-    this.bookSourceType = 0,
+    this.bookSourceType = BookSourceType.text,
     this.bookUrlPattern,
     this.customOrder = 0,
     this.enabled = true,

@@ -1,5 +1,6 @@
 import '../../domain/model/book_source.dart';
 import '../../domain/model/book_source_import_result.dart';
+import '../../constant/book_source_type.dart';
 
 /// 书源列表当前筛选范围。
 enum BookSourceFilter {
@@ -17,6 +18,15 @@ enum BookSourceFilter {
 
   /// 只展示包含 JavaScript 的书源。
   javaScript,
+}
+
+/// 书源管理页的书籍或漫画内容分类。
+enum BookSourceContentCategory {
+  /// 文本、音频和文件等非漫画书源。
+  books,
+
+  /// 图片或漫画书源。
+  manga,
 }
 
 /// 书源编辑器使用的不可变草稿。
@@ -221,6 +231,7 @@ final class BookSourceManagementUiState {
     List<BookSource> sources = const <BookSource>[],
     this.query = '',
     this.filter = BookSourceFilter.all,
+    this.contentCategory = BookSourceContentCategory.books,
     this.selectedGroup,
     Set<String> selectedUrls = const <String>{},
     this.dialog,
@@ -242,6 +253,13 @@ final class BookSourceManagementUiState {
 
   /// 当前筛选范围。
   final BookSourceFilter filter;
+  /// 当前书籍或漫画书源分类。
+  final BookSourceContentCategory contentCategory;
+
+  /// 只有导入过漫画书源时才需要显示内容分类栏。
+  bool get hasMangaSources => sources.any(
+    (BookSource source) => source.bookSourceType == BookSourceType.image,
+  );
 
   /// 当前书源分组筛选；null 表示“总书源”。
   final String? selectedGroup;
@@ -260,6 +278,10 @@ final class BookSourceManagementUiState {
     /// 小写搜索词。
     final String normalizedQuery = query.trim().toLowerCase();
     return sources.where((BookSource source) {
+      final bool matchesContentCategory = !hasMangaSources ||
+          (contentCategory == BookSourceContentCategory.manga
+              ? source.bookSourceType == BookSourceType.image
+              : source.bookSourceType != BookSourceType.image);
       /// 当前书源是否符合类型筛选。
       final bool matchesFilter = switch (filter) {
         BookSourceFilter.all => true,
@@ -273,8 +295,8 @@ final class BookSourceManagementUiState {
               .split(',')
               .map((String value) => value.trim())
               .contains(selectedGroup);
-      if (!matchesFilter || !matchesGroup || normalizedQuery.isEmpty) {
-        return matchesFilter && matchesGroup;
+      if (!matchesContentCategory || !matchesFilter || !matchesGroup || normalizedQuery.isEmpty) {
+        return matchesContentCategory && matchesFilter && matchesGroup;
       }
       return source.bookSourceName.toLowerCase().contains(normalizedQuery) ||
           source.bookSourceUrl.toLowerCase().contains(normalizedQuery) ||
@@ -328,6 +350,7 @@ final class BookSourceManagementUiState {
     List<BookSource>? sources,
     String? query,
     BookSourceFilter? filter,
+    BookSourceContentCategory? contentCategory,
     String? selectedGroup,
     bool clearSelectedGroup = false,
     Set<String>? selectedUrls,
@@ -342,6 +365,7 @@ final class BookSourceManagementUiState {
       sources: sources ?? this.sources,
       query: query ?? this.query,
       filter: filter ?? this.filter,
+      contentCategory: contentCategory ?? this.contentCategory,
       selectedGroup: clearSelectedGroup ? null : selectedGroup ?? this.selectedGroup,
       selectedUrls: selectedUrls ?? this.selectedUrls,
       dialog: clearDialog ? null : dialog ?? this.dialog,
@@ -372,6 +396,16 @@ final class ChangeBookSourceFilterIntent extends BookSourceManagementIntent {
 
   /// 新筛选范围。
   final BookSourceFilter filter;
+}
+
+/// 切换书源管理页的书籍或漫画分类。
+final class ChangeBookSourceContentCategoryIntent
+    extends BookSourceManagementIntent {
+  /// 创建内容分类 Intent。
+  const ChangeBookSourceContentCategoryIntent(this.category);
+
+  /// 目标分类。
+  final BookSourceContentCategory category;
 }
 
 /// 切换书源列表分组；null 表示总书源。

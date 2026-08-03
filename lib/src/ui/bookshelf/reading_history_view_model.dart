@@ -104,8 +104,8 @@ final class ReadingHistoryViewModel {
       case SelectAllReadingHistoryBooksIntent():
         _emit(
           _state.copyWith(
-            selectionMode: _allBooks.isNotEmpty,
-            selectedBookUrls: _allBooks
+            selectionMode: _state.books.isNotEmpty,
+            selectedBookUrls: _state.books
                 .map((Book book) => book.bookUrl)
                 .toSet(),
           ),
@@ -126,6 +126,17 @@ final class ReadingHistoryViewModel {
                 : ReadingHistoryLayoutMode.list;
         _emit(_state.copyWith(layoutMode: layoutMode));
         unawaited(_saveLayout(layoutMode));
+      case SelectReadingHistoryContentCategoryIntent(
+        category: final ReadingHistoryContentCategory category,
+      ):
+        _emit(
+          _state.copyWith(
+            selectedCategory: category,
+            selectionMode: false,
+            selectedBookUrls: const <String>{},
+          ),
+        );
+        _rebuildVisibleBooks();
       case RefreshReadingHistoryIntent():
         unawaited(_refresh());
     }
@@ -170,9 +181,11 @@ final class ReadingHistoryViewModel {
           return;
         }
         _historyStreamReceived = true;
-        _allBooks = List<Book>.unmodifiable(books);
+        _allBooks = List<Book>.unmodifiable(
+          books.where((Book book) => book.origin != 'loc_book'),
+        );
         /// 数据库变化后仍然存在的历史 URL，用于剔除已删除选择。
-        final Set<String> existingUrls = books
+        final Set<String> existingUrls = _allBooks
             .map((Book book) => book.bookUrl)
             .toSet();
         /// 当前选择与最新历史快照的交集。
@@ -184,17 +197,14 @@ final class ReadingHistoryViewModel {
               'scopeId=${_scopeDiagnosticId(subscribedUserId)} '
               'generation=$generation totalCount=${books.length}',
         );
-        _emit(
-          _state.copyWith(
-            loading: false,
-            refreshing: false,
-            books: _allBooks,
-            selectionMode:
-                _state.selectionMode && selectedUrls.isNotEmpty,
-            selectedBookUrls: selectedUrls,
-            clearError: true,
-          ),
-        );
+        _emit(_state.copyWith(
+          loading: false,
+          refreshing: false,
+          selectionMode: _state.selectionMode && selectedUrls.isNotEmpty,
+          selectedBookUrls: selectedUrls,
+          clearError: true,
+        ));
+        _rebuildVisibleBooks();
       },
       onError: (Object error) {
         if (!_isActiveScopeSubscription(generation, subscribedUserId)) {
@@ -315,19 +325,39 @@ final class ReadingHistoryViewModel {
         snapshot.userId != _userScopeListenable.value) {
       return;
     }
-    _allBooks = snapshot.readingHistoryBooks;
+    _allBooks = snapshot.readingHistoryBooks
+        .where((Book book) => book.origin != 'loc_book')
+        .toList(growable: false);
     _logger.info(
       tag: bookshelfHistoryScopeLogTag,
       message: 'stage=history_startup_snapshot '
           'scopeId=${_scopeDiagnosticId(snapshot.userId)} '
           'generation=$generation totalCount=${_allBooks.length}',
     );
+    _emit(_state.copyWith(
+      loading: false,
+      refreshing: false,
+      clearError: true,
+    ));
+    _rebuildVisibleBooks();
+  }
+
+  /// 从排除本地书后的历史快照生成当前书籍或漫画分类。
+  void _rebuildVisibleBooks() {
+    final bool hasManga = _allBooks.any((Book book) => book.isImage);
+    final ReadingHistoryContentCategory category = hasManga
+        ? _state.selectedCategory
+        : ReadingHistoryContentCategory.books;
+    final List<Book> visibleBooks = _allBooks.where((Book book) {
+      return category == ReadingHistoryContentCategory.manga
+          ? book.isImage
+          : !book.isImage;
+    }).toList(growable: false);
     _emit(
       _state.copyWith(
-        loading: false,
-        refreshing: false,
-        books: _allBooks,
-        clearError: true,
+        selectedCategory: category,
+        hasManga: hasManga,
+        books: visibleBooks,
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:html/dom.dart' as dom;
@@ -7,6 +8,7 @@ import 'package:html/parser.dart' as html_parser;
 import '../../api/http/http_contract.dart';
 import '../../api/js/js_engine.dart';
 import '../../api/js/script_context.dart';
+import '../../constant/book_source_type.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_source.dart';
@@ -394,7 +396,7 @@ final class StandardBookSourceParser {
           originName: source.bookSourceName,
           name: name,
           author: author,
-          type: source.bookSourceType,
+          type: bookTypeFromSourceType(source.bookSourceType),
           kind: _nullable(kinds.join(','), maxLength: 1000),
           coverUrl: rawCoverUrl.isEmpty ? null : finalUri.resolve(rawCoverUrl).toString(),
           intro: _nullable(_plainText(intro), maxLength: 5000),
@@ -684,7 +686,6 @@ final class StandardBookSourceParser {
   ) async {
     /// 强类型正文规则。
     final ContentSourceRule rule = const BookSourceRuleDecoder().decodeContent(source);
-    _rejectNonEmptyJavaScript(rule.imageDecode, '正文 imageDecode');
     _rejectNonEmptyJavaScript(rule.payAction, '正文 payAction');
     /// 同时观察 HTTP 取消状态的 JavaScript 取消令牌。
     final JsCancellationToken? jsCancellationToken = _jsCancellationToken(cancellationToken);
@@ -878,7 +879,7 @@ final class StandardBookSourceParser {
           originName: source.bookSourceName,
           name: name,
           author: author,
-          type: source.bookSourceType,
+          type: bookTypeFromSourceType(source.bookSourceType),
           kind: _nullable(kinds.join(','), maxLength: 1000),
           coverUrl: rawCoverUrl.isEmpty ? null : finalUri.resolve(rawCoverUrl).toString(),
           intro: _nullable(
@@ -1089,7 +1090,6 @@ final class StandardBookSourceParser {
   ) {
     /// 强类型正文规则。
     final ContentSourceRule rule = const BookSourceRuleDecoder().decodeContent(source);
-    _rejectNonEmptyJavaScript(rule.imageDecode, '正文 imageDecode');
     _rejectNonEmptyJavaScript(rule.payAction, '正文 payAction');
     /// 普通规则引擎。
     const StandardRuleEngine engine = StandardRuleEngine();
@@ -1293,27 +1293,43 @@ final class StandardBookSourceParser {
       'data-url',
       'data-lazy-src',
     ];
-    /// 首个非空图片地址文本。
-    String source = '';
+    /// 首个可安全解析的绝对 HTTP(S) 图片地址。
+    Uri? uri;
+    /// 与图片地址对应且保留 Header 等 JSON 选项的绝对请求规则。
+    String requestUrl = '';
     for (final String attribute in sourceAttributes) {
+      /// 当前标准或懒加载属性中的不可信地址文本。
       final String candidate = image.attributes[attribute]?.trim() ?? '';
-      if (candidate.isNotEmpty) {
-        source = candidate;
-        break;
+      if (candidate.isEmpty || candidate.length > 16 * 1024) {
+        continue;
+      }
+      try {
+        /// 图片 URL 与其 JSON 请求选项的分隔位置。
+        final RegExpMatch? optionStart = RegExp(r'\s*,\s*(?=\{)').firstMatch(candidate);
+        /// 不包含请求选项的图片地址正文。
+        final String urlText = (optionStart == null
+                ? candidate
+                : candidate.substring(0, optionStart.start))
+            .trim();
+        /// 基于正文最终响应地址解析的当前绝对图片候选。
+        final Uri resolved = baseUri.resolve(urlText);
+        if (resolved.host.isNotEmpty &&
+            <String>{'http', 'https'}.contains(resolved.scheme.toLowerCase())) {
+          uri = resolved;
+          /// 只保留可安全进入正文缓存的防盗链类 Header 选项。
+          final String options = optionStart == null
+              ? ''
+              : _safeCachedImageRequestOptions(candidate.substring(optionStart.end));
+          requestUrl = '${resolved.toString()}$options';
+          break;
+        }
+      } on FormatException {
+        continue;
       }
     }
     /// 图片加载失败时可展示的替代文本。
     final String altText = image.attributes['alt']?.trim() ?? '';
-    if (source.isEmpty || source.startsWith('data:')) {
-      if (altText.isNotEmpty) {
-        output.write(altText);
-      }
-      return;
-    }
-    /// 基于正文响应地址解析的绝对图片地址。
-    final Uri uri = baseUri.resolve(source);
-    if (uri.host.isEmpty ||
-        !<String>{'http', 'https'}.contains(uri.scheme.toLowerCase())) {
+    if (uri == null) {
       if (altText.isNotEmpty) {
         output.write(altText);
       }
@@ -1326,9 +1342,82 @@ final class StandardBookSourceParser {
           uri: uri,
           altText: altText,
           referer: baseUri,
+          requestUrl: requestUrl,
         ),
       )
       ..write('\n');
+  }
+
+  /// 从图片 URL 选项中保留可重放规则和非凭据 Header，避免 Token/Cookie 进入正文缓存。
+  static String _safeCachedImageRequestOptions(String optionJson) {
+    try {
+      /// 不可信图片 URL JSON 选项。
+      final Object? decoded = jsonDecode(optionJson);
+      if (decoded is! Map<String, Object?>) {
+        return '';
+      }
+      /// 可以安全持久化并在图片请求时重新执行的 URL 选项；请求 Body 不进入普通缓存。
+      const Set<String> replayableOptionNames = <String>{
+        'method',
+        'charset',
+        'retry',
+        'js',
+        'bodyJs',
+        'webView',
+        'webJs',
+        'webViewDelayTime',
+      };
+      /// 最终允许进入正文缓存的图片请求选项。
+      final Map<String, Object?> safeOptions = <String, Object?>{};
+      for (final String name in replayableOptionNames) {
+        /// 当前可重放选项的原始值。
+        final Object? value = decoded[name];
+        if (value == null || value is String || value is num || value is bool) {
+          if (value != null) {
+            safeOptions[name] = value;
+          }
+        }
+      }
+      /// 图片地址选项中的 Header 原值。
+      Object? headersValue = decoded['headers'];
+      if (headersValue is String) {
+        try {
+          headersValue = jsonDecode(headersValue);
+        } on FormatException {
+          headersValue = null;
+        }
+      }
+      /// 允许写入普通正文缓存的非凭据 Header 名。
+      const Set<String> allowedHeaderNames = <String>{
+        'accept',
+        'accept-language',
+        'origin',
+        'referer',
+        'user-agent',
+      };
+      /// 经过白名单收敛的图片 Header。
+      final Map<String, String> safeHeaders = <String, String>{};
+      if (headersValue is Map) {
+        for (final MapEntry<Object?, Object?> entry in headersValue.entries) {
+          /// 当前 Header 名。
+          final String name = entry.key?.toString().trim() ?? '';
+          /// 当前 Header 值。
+          final String value = entry.value?.toString().trim() ?? '';
+          if (allowedHeaderNames.contains(name.toLowerCase()) && value.isNotEmpty) {
+            safeHeaders[name] = value;
+          }
+        }
+      }
+      if (safeHeaders.isNotEmpty) {
+        safeOptions['headers'] = safeHeaders;
+      }
+      if (safeOptions.isEmpty) {
+        return '';
+      }
+      return ',${jsonEncode(safeOptions)}';
+    } on FormatException {
+      return '';
+    }
   }
 
   /// 将空文本转为 `null`，并限制 Android 对齐字段长度。

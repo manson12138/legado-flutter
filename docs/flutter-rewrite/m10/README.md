@@ -14,7 +14,9 @@
 - 二维码继续使用 `mobile_scanner`；iOS 权限拒绝页明确提示系统设置与剪贴板替代路径。
 - 阅读器在旋转/尺寸变化后按稳定字符锚点恢复；前后台重新应用系统栏和常亮设置。
 - iOS 宿主进入后台时临时关闭常亮，恢复前台时按 Dart 最近设置恢复，退出阅读器或终止时恢复原系统值。
-- iOS Deployment Target 在 Podfile 与 Xcode 工程统一为 16.0；声明相机、本地网络用途，并仅为 WebView 与本地网络配置 ATS 例外，没有全局 `NSAllowsArbitraryLoads`。
+- iOS Deployment Target 在 Podfile、Xcode 工程及 `post_install` 生成的全部 Pod Target 中统一为 16.0；
+  `flutter_open_chinese_convert 0.9.0` 被其 `legacy/**/*` 错分到 Compile Sources 的隐私清单会在 Pod 生成后移动到
+  Resources；声明相机、本地网络用途，并仅为 WebView 与本地网络配置 ATS 例外，没有全局 `NSAllowsArbitraryLoads`。
 
 ## 当前不能宣称
 
@@ -24,6 +26,8 @@
 4. WKWebView 登录、HttpOnly Cookie、第三方 Cookie、验证码和网页进程回收尚无真机结果。
 5. Document Picker 与外部 TXT 打开的安全作用域、iCloud/第三方文件提供者协调读取和临时副本释放需要通过真机场景观察；Dart 代码已确保不保存外部路径。
 6. 普通 HTTP 外部书源仍受 iOS ATS 约束；当前没有全局放开，HTTPS 是首批默认支持路径。
+7. 用户回传的 Xcode 摘要仍只有通用 `PhaseScriptExecution` 非零结论，没有失败脚本的展开日志；Skia QoS、
+   `file_picker`/`share_plus`/MMKV 弃用提示属于第三方警告，不能仅凭该摘要认定为本次构建失败根因。
 
 ## 新增依赖说明
 

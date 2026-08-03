@@ -72,6 +72,7 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
   Future<HttpResponse> execute(
     HttpRequest request, {
     HttpCancellationToken? cancellationToken,
+    HttpReceiveProgress? onReceiveProgress,
   }) async {
     /// 实际使用的取消令牌。
     final DioHttpCancellationToken token = cancellationToken is DioHttpCancellationToken
@@ -85,7 +86,11 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
         throw const UnifiedHttpException(HttpFailureKind.cancelled, '请求已取消');
       }
       try {
-        return await _executeAttempt(request, token);
+        return await _executeAttempt(
+          request,
+          token,
+          onReceiveProgress: onReceiveProgress,
+        );
       } on UnifiedHttpException catch (error) {
         if (!_shouldRetry(error) || attempt == _maximumAttemptCount) {
           rethrow;
@@ -102,8 +107,9 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
   /// 执行单次 HTTP 尝试；Cookie、超时和响应转换均在每次尝试中独立完成。
   Future<HttpResponse> _executeAttempt(
     HttpRequest request,
-    DioHttpCancellationToken token,
-  ) async {
+    DioHttpCancellationToken token, {
+    required HttpReceiveProgress? onReceiveProgress,
+  }) async {
     /// 本次尝试独占的 Dio 取消令牌；单次总超时不会取消后续重试。
     final CancelToken attemptToken = CancelToken();
     /// 请求结束后移除外部取消监听，避免长生命周期令牌保留已结束请求。
@@ -148,6 +154,11 @@ final class DioUnifiedHttpClient implements UnifiedHttpClient {
             data: requestData,
             options: options,
             cancelToken: attemptToken,
+            onReceiveProgress: onReceiveProgress == null
+                ? null
+                : (int received, int total) {
+                    onReceiveProgress(received, total < 0 ? null : total);
+                  },
           )
           .timeout(
             request.totalTimeout,

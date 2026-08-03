@@ -1,3 +1,4 @@
+import '../../constant/book_type.dart';
 import '../../help/error/app_error.dart';
 import '../../help/error/app_result.dart';
 import '../gateway/bookshelf_gateway.dart';
@@ -129,6 +130,9 @@ final class ChangeBookSourceUseCase {
     }
     if (newBook.bookUrl == oldBook.bookUrl && newBook.origin == oldBook.origin) {
       return validationFailure<ChangeBookSourceResult>('请选择与当前书籍不同的来源');
+    }
+    if (!BookType.hasCompatibleContentType(oldBook.type, newBook.type)) {
+      return validationFailure<ChangeBookSourceResult>('目标来源与当前书籍类型不兼容，不能执行覆盖换源');
     }
     if (chapters.isEmpty) {
       return validationFailure<ChangeBookSourceResult>('目标来源目录为空，不能执行换源');

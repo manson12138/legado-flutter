@@ -32,9 +32,9 @@ final class ResolveBookShelfStateUseCase {
         }
     }
 
-    /// 同名查询结果，仅在精确 URL 未命中后执行。
+    /// 同名同内容类型查询结果，仅在精确 URL 未命中后执行。
     final AppResult<Book?> conflictResult = await guardUseCase<Book?>(
-      () => _gateway.getShelfBookNameConflict(book.name),
+      () => _gateway.getShelfBookNameConflict(book.name, book.type),
     );
     return switch (conflictResult) {
       AppFailure<Book?>(error: final error) =>

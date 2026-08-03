@@ -1,3 +1,4 @@
+import '../../constant/book_type.dart';
 import 'book.dart';
 
 /// 表示一次搜索得到并暂存的候选书，对应 Android `data.entities.SearchBook`。
@@ -11,7 +12,7 @@ final class SearchBook {
     required this.originName,
     required this.name,
     required this.author,
-    this.type = 0,
+    this.type = BookType.text,
     this.kind,
     this.coverUrl,
     this.intro,
@@ -36,6 +37,9 @@ final class SearchBook {
   final String originName;
   /// Android `BookType` 位掩码。
   final int type;
+
+  /// 当前搜索候选是否包含 Android `BookType.image` 图片位。
+  bool get isImage => BookType.contains(type, BookType.image);
   /// 书名。
   final String name;
   /// 作者名。

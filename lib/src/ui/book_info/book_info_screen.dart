@@ -872,11 +872,7 @@ final class _BookInfoPrimaryActions extends StatelessWidget {
                                 : state.inBookshelf
                                     ? '书籍信息加载完成后可替换书源'
                                     : '加入书架后可替换书源',
-                onTap: canReplaceBookSource
-                    ? () => onIntent(
-                          const OpenBookInfoFullSourceChangeIntent(),
-                        )
-                    : canChooseExistingSource
+                onTap: canReplaceBookSource || canChooseExistingSource
                         ? () => _showSourceChoices(
                               context,
                               state,
@@ -1146,7 +1142,23 @@ Future<void> _showSourceChoices(
       return SafeArea(
         child: ListView(
           shrinkWrap: true,
-          children: state.group.books.map((SearchBook book) {
+          children: <Widget>[
+            ListTile(
+              leading: const Icon(Icons.manage_search_outlined),
+              title: const Text('重新搜索整书换源'),
+              subtitle: Text(
+                state.inBookshelf
+                    ? '从当前全部启用书源重新搜索'
+                    : '加入书架后可执行原子整书换源',
+              ),
+              onTap: () {
+                Navigator.of(context).pop();
+                onIntent(const OpenBookInfoFullSourceChangeIntent());
+              },
+            ),
+            if (!state.inBookshelf) const Divider(height: 1),
+            if (!state.inBookshelf)
+              ...state.group.books.map((SearchBook book) {
             /// 当前来源是否为已选来源。
             final bool checked = book.origin == state.selectedBook.origin && book.bookUrl == state.selectedBook.bookUrl;
             return ListTile(
@@ -1155,7 +1167,8 @@ Future<void> _showSourceChoices(
               subtitle: Text(book.latestChapterTitle?.trim().isNotEmpty == true ? book.latestChapterTitle ?? '' : book.bookUrl),
               onTap: () => Navigator.of(context).pop(book),
             );
-          }).toList(growable: false),
+          }),
+          ],
         ),
       );
     },

@@ -19,6 +19,8 @@ final class SearchUiState {
     List<BookSource> sources = const <BookSource>[],
     Set<String> selectedSourceUrls = const <String>{},
     this.useAllSources = true,
+    this.booksTypeSelected = true,
+    this.mangaTypeSelected = true,
     this.selectedSourceGroup,
     this.sourceQuery = '',
     this.onlySuccessfulSources = false,
@@ -64,6 +66,10 @@ final class SearchUiState {
 
   /// 是否选择当前全部可用书源；false 时仅使用 [selectedSourceUrls]。
   final bool useAllSources;
+  /// 书籍快捷按钮是否保持选中；自定义书源范围后固定取消选中。
+  final bool booksTypeSelected;
+  /// 漫画快捷按钮是否保持选中；自定义书源范围后固定取消选中。
+  final bool mangaTypeSelected;
 
   /// 本次搜索限定的书源分组；null 表示全部书源。
   final String? selectedSourceGroup;
@@ -107,6 +113,8 @@ final class SearchUiState {
     List<BookSource>? sources,
     Set<String>? selectedSourceUrls,
     bool? useAllSources,
+    bool? booksTypeSelected,
+    bool? mangaTypeSelected,
     String? selectedSourceGroup,
     bool clearSelectedSourceGroup = false,
     String? sourceQuery,
@@ -132,6 +140,8 @@ final class SearchUiState {
       sources: sources ?? this.sources,
        selectedSourceUrls: selectedSourceUrls ?? this.selectedSourceUrls,
        useAllSources: useAllSources ?? this.useAllSources,
+       booksTypeSelected: booksTypeSelected ?? this.booksTypeSelected,
+       mangaTypeSelected: mangaTypeSelected ?? this.mangaTypeSelected,
        selectedSourceGroup: clearSelectedSourceGroup
            ? null
            : selectedSourceGroup ?? this.selectedSourceGroup,
@@ -197,6 +207,15 @@ final class ToggleSearchSourceIntent extends SearchIntent {
   const ToggleSearchSourceIntent(this.sourceUrl);
   /// 书源 URL。
   final String sourceUrl;
+}
+
+/// 切换书籍或漫画全部书源的快捷范围。
+final class ToggleSearchSourceTypeIntent extends SearchIntent {
+  /// 创建类型快捷筛选 Intent。
+  const ToggleSearchSourceTypeIntent({required this.manga});
+
+  /// true 表示漫画书源，false 表示普通书籍书源。
+  final bool manga;
 }
 
 /// 选择或清空全部书源筛选。

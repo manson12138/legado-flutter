@@ -49,6 +49,5 @@ flutter:
     enable-swift-package-manager: false
   uses-material-design: true
   assets:
-    - assets/default_data/book_sources.json
     - assets/default_data/adult_keywords.txt
     - assets/default_data/adult_domains.txt

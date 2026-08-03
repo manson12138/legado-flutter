@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../constant/book_source_type.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/book_source_import_result.dart';
 
@@ -88,7 +89,12 @@ final class BookSourceImportDecoder {
       bookSourceUrl: _requiredString(json, 'bookSourceUrl', location),
       bookSourceName: _requiredString(json, 'bookSourceName', location),
       bookSourceGroup: _nullableString(json, 'bookSourceGroup', location),
-      bookSourceType: _intValue(json, 'bookSourceType', 0, location),
+      bookSourceType: _intValue(
+        json,
+        'bookSourceType',
+        BookSourceType.text,
+        location,
+      ),
       bookUrlPattern: _nullableString(json, 'bookUrlPattern', location),
       customOrder: _intValue(json, 'customOrder', 0, location),
       /// 文字书源保持既有默认启用；视频、音乐、漫画等非文字书源在
@@ -96,7 +102,13 @@ final class BookSourceImportDecoder {
       enabled: _boolValue(
         json,
         'enabled',
-        _intValue(json, 'bookSourceType', 0, location) == 0,
+        _intValue(
+              json,
+              'bookSourceType',
+              BookSourceType.text,
+              location,
+            ) ==
+            BookSourceType.text,
         location,
       ),
       enabledExplore: _boolValue(json, 'enabledExplore', true, location),

@@ -9,6 +9,15 @@ enum ReadingHistoryLayoutMode {
   grid,
 }
 
+/// 阅读历史按内容形态切换的分类。
+enum ReadingHistoryContentCategory {
+  /// 普通书籍。
+  books,
+
+  /// 图片或漫画书籍。
+  manga,
+}
+
 /// 阅读历史页面当前需要展示的业务对话框。
 sealed class ReadingHistoryDialog {
   /// 限制历史对话框类型。
@@ -32,6 +41,8 @@ final class ReadingHistoryUiState {
     this.loading = true,
     this.refreshing = false,
     this.layoutMode = ReadingHistoryLayoutMode.grid,
+    this.selectedCategory = ReadingHistoryContentCategory.books,
+    this.hasManga = false,
     List<Book> books = const <Book>[],
     this.selectionMode = false,
     Set<String> selectedBookUrls = const <String>{},
@@ -46,6 +57,10 @@ final class ReadingHistoryUiState {
   final bool refreshing;
   /// 当前列表或网格显示模式。
   final ReadingHistoryLayoutMode layoutMode;
+  /// 当前书籍或漫画分类。
+  final ReadingHistoryContentCategory selectedCategory;
+  /// 历史中是否存在漫画；不存在时隐藏分类栏。
+  final bool hasManga;
   /// 按最近阅读时间倒序排列的书籍快照。
   final List<Book> books;
   /// 是否处于历史长按多选模式。
@@ -62,6 +77,8 @@ final class ReadingHistoryUiState {
     bool? loading,
     bool? refreshing,
     ReadingHistoryLayoutMode? layoutMode,
+    ReadingHistoryContentCategory? selectedCategory,
+    bool? hasManga,
     List<Book>? books,
     bool? selectionMode,
     Set<String>? selectedBookUrls,
@@ -74,6 +91,8 @@ final class ReadingHistoryUiState {
       loading: loading ?? this.loading,
       refreshing: refreshing ?? this.refreshing,
       layoutMode: layoutMode ?? this.layoutMode,
+      selectedCategory: selectedCategory ?? this.selectedCategory,
+      hasManga: hasManga ?? this.hasManga,
       books: books ?? this.books,
       selectionMode: selectionMode ?? this.selectionMode,
       selectedBookUrls: selectedBookUrls ?? this.selectedBookUrls,
@@ -147,6 +166,16 @@ final class DismissReadingHistoryDialogIntent extends ReadingHistoryIntent {
 final class ToggleReadingHistoryLayoutIntent extends ReadingHistoryIntent {
   /// 创建历史布局切换 Intent。
   const ToggleReadingHistoryLayoutIntent();
+}
+
+/// 切换历史书籍或漫画分类。
+final class SelectReadingHistoryContentCategoryIntent
+    extends ReadingHistoryIntent {
+  /// 创建历史分类 Intent。
+  const SelectReadingHistoryContentCategoryIntent(this.category);
+
+  /// 目标分类。
+  final ReadingHistoryContentCategory category;
 }
 
 /// 重新建立历史快照观察，以获取当前数据库的最新结果。

@@ -1,3 +1,4 @@
+import '../../constant/book_type.dart';
 import 'read_config.dart';
 
 /// 表示书架中的持久化书籍，对应 Android `data.entities.Book`。
@@ -20,7 +21,7 @@ final class Book {
     this.customIntro,
     this.remark,
     this.charset,
-    this.type = 0,
+    this.type = BookType.text,
     this.group = 0,
     this.latestChapterTitle,
     this.latestChapterTime = 0,
@@ -70,6 +71,9 @@ final class Book {
   final String? charset;
   /// Android `BookType` 位掩码；数值语义在规则阶段继续对齐。
   final int type;
+
+  /// 当前书籍是否包含 Android `BookType.image` 图片位。
+  bool get isImage => BookType.contains(type, BookType.image);
   /// 用户分组位掩码；0 表示没有用户分组。
   final int group;
   /// 最新章节标题。
@@ -86,7 +90,7 @@ final class Book {
   final String? durChapterTitle;
   /// 当前阅读章节的从零开始索引。
   final int durChapterIndex;
-  /// 当前章节首个可见字符的位置。
+  /// 当前章节内位置；文本书表示字符偏移，图片书表示图片索引。
   final int durChapterPos;
   /// 最近打开正文的时间，Unix Epoch 毫秒；0 表示从未阅读。
   final int durChapterTime;

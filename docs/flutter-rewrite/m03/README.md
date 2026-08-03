@@ -10,7 +10,7 @@
 - 原始响应字节、最终重定向 URL、统一 Header 与 Cookie 处理。
 - 规则指定字符集、Content-Type、HTML/XML 声明、UTF-8/GBK 回退。
 - gzip、deflate 与 `application/zip` 首个文件解压。
-- JSONPath、XPath、CSS、Regex、字符串替换与 `&&`、`||`、`%%` 常用组合。
+- JSONPath、XPath、CSS、Regex、字符串替换与 `&&`、`||`、`%%` 常用组合；JSONPath 对齐 Android `AnalyzeByJSonPath.innerRule`，支持在普通文本或 URL 中用平衡花括号嵌入 `{$...}` 并按当前 JSON 节点求值。
 - 搜索、详情、分页目录、分页正文解析入口。
 - 四段 DOM/JSON/Regex 解析整体运行在后台 isolate。
 - JavaScript、WebView、自定义 DNS 等未实现能力会明确失败。
@@ -23,9 +23,8 @@
 - JSoup 与 Dart HTML 选择器所有边角语法的无条件等价声明。
 - 跨书源并发限流；M3 仅提供取消与单书源分页编排。
 
-上述项目分别进入 M4 或后续业务阶段。普通 URL 中只兼容无需求值的 `{{key}}`、`{{page}}` 两个内建变量，其余内嵌表达式会进入“不支持”错误。
+上述项目分别进入 M4 或后续业务阶段。普通 URL 除 `{{key}}`、`{{page}}` 两个内建变量外，也支持 Android JSONPath 字符串模板 `{$...}`；需要执行 JavaScript 的其他内嵌表达式继续进入 M4 兼容链路。
 
 ## 用户验证前门禁
 
 用户需先执行依赖获取和静态检查，再运行固定样本与至少一套真实普通书源的四段链路。结果未确认前，M3 保持 `IN_PROGRESS`。
-

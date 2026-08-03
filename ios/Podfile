@@ -43,5 +43,28 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # 所有第三方 Pod 与 Runner 统一使用 iOS 16，避免旧 Podspec 的 iOS 9 声明被新版 Xcode 警告。
+    target.build_configurations.each do |configuration|
+      configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+    end
+
+    # 该插件把隐私清单包含在 legacy/**/* 源文件通配符中，需要从编译源移动到资源阶段。
+    next unless target.name == 'flutter_open_chinese_convert'
+
+    # 当前错误归类下被放进 Compile Sources 的隐私清单构建项。
+    privacy_manifest_build_files = target.source_build_phase.files.select do |build_file|
+      # 构建项关联文件的相对路径；缺失引用时按空字符串处理。
+      source_path = build_file.file_ref&.path.to_s
+      File.basename(source_path) == 'PrivacyInfo.xcprivacy'
+    end
+    privacy_manifest_build_files.each do |build_file|
+      # 同一个文件引用先退出编译源，再作为 Pod 资源随产物打包。
+      file_reference = build_file.file_ref
+      next if file_reference.nil?
+
+      target.source_build_phase.remove_build_file(build_file)
+      target.resources_build_phase.add_file_reference(file_reference, true)
+    end
   end
 end

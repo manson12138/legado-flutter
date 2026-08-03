@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../../constant/book_type.dart';
 import '../../domain/model/book.dart';
 import '../local/database_tables.dart';
 import '../local/entity_maps.dart';
@@ -62,12 +63,13 @@ final class BookDao {
     return rows.isEmpty ? null : bookFromMap(rows.first);
   }
 
-  /// 按书名精确查询当前用户最近阅读的一条书架记录。
+  /// 按书名和主要内容类型查询当前用户最近阅读的一条书架记录。
   ///
   /// Flutter 数据库只保存真实书架书，因此不需要 Android DAO 中的 `isNotShelf` 过滤条件。
   Future<Book?> getShelfBookNameConflict(
     int userId,
-    String name, {
+    String name,
+    int type, {
     DatabaseExecutor? executor,
   }) async {
     /// 当前查询使用的数据库或事务执行器。
@@ -78,18 +80,26 @@ final class BookDao {
       table: DatabaseTables.books,
       where:
           'userId = ? AND name = ? '
-          'orderBy=durChapterTime DESC, bookUrl ASC limit=1',
+          'compatiblePrimaryContentType orderBy=durChapterTime DESC, bookUrl ASC',
       argumentCount: 2,
     );
-    /// 最多包含一行的同名查询结果。
+    /// 按阅读时间排序的全部同名书籍；主要类型需要按 Android 位掩码优先级判断。
     final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.books,
       where: 'userId = ? AND name = ?',
       whereArgs: <Object?>[userId, name],
       orderBy: 'durChapterTime DESC, bookUrl ASC',
-      limit: 1,
     );
-    return rows.isEmpty ? null : bookFromMap(rows.first);
+    /// 当前待加入书籍决定阅读形态的主要内容类型。
+    final int incomingPrimaryType = BookType.primaryContentType(type);
+    for (final Map<String, Object?> row in rows) {
+      /// 已存在的同名书籍。
+      final Book existingBook = bookFromMap(row);
+      if (BookType.primaryContentType(existingBook.type) == incomingPrimaryType) {
+        return existingBook;
+      }
+    }
+    return null;
   }
 
   /// 观察全部书架书；订阅后立即查询一次，此后在 `books` 提交变化时重新查询。

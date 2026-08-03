@@ -52,12 +52,12 @@ final class BookRepository
     );
   }
 
-  /// 按精确书名查询当前用户最近阅读的一条冲突书籍。
+  /// 按精确书名和主要内容类型查询当前用户最近阅读的一条冲突书籍。
   @override
-  Future<Book?> getShelfBookNameConflict(String name) {
+  Future<Book?> getShelfBookNameConflict(String name, int type) {
     final int userId = _requireUserId();
     return guardDataOperation<Book?>(
-      () => _bookDao.getShelfBookNameConflict(userId, name),
+      () => _bookDao.getShelfBookNameConflict(userId, name, type),
     );
   }
 

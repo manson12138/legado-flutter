@@ -10,6 +10,7 @@ final class BookInfoShelfConflictDialog {
   BookInfoShelfConflictDialog({
     required this.existingBook,
     required this.incomingBook,
+    required this.canReplace,
     required List<BookChapter> incomingChapters,
     this.pendingChapterIndex,
   }) : incomingChapters = List<BookChapter>.unmodifiable(incomingChapters);
@@ -19,6 +20,9 @@ final class BookInfoShelfConflictDialog {
 
   /// 用户正在尝试加入的新书源书籍。
   final Book incomingBook;
+
+  /// 两本同名书的主要内容类型是否兼容并允许执行覆盖换源。
+  final bool canReplace;
 
   /// 新书源已经加载完成的完整目录。
   final List<BookChapter> incomingChapters;

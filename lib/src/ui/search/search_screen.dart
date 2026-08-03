@@ -420,14 +420,76 @@ final class _SearchSourceControls extends StatelessWidget {
           (!state.onlySuccessfulSources || source.sourceScore > 0) &&
           (state.useAllSources || state.selectedSourceUrls.contains(source.bookSourceUrl));
     }).length;
-    return ListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
-      leading: const Icon(Icons.filter_alt_outlined),
-      title: Text('搜索书源（$selectedCount/${state.sources.length}）'),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => _openSourceSelectionSheet(context),
+    return Column(
+      children: <Widget>[
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+          leading: const Icon(Icons.filter_alt_outlined),
+          title: Text('搜索书源（$selectedCount/${state.sources.length}）'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _openSourceSelectionSheet(context),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: SpacingToken.medium),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: _SearchSourceTypeButton(
+                  label: '书籍',
+                  selected: state.booksTypeSelected,
+                  onPressed: () => onIntent(
+                    const ToggleSearchSourceTypeIntent(manga: false),
+                  ),
+                ),
+              ),
+              const SizedBox(width: SpacingToken.small),
+              Expanded(
+                child: _SearchSourceTypeButton(
+                  label: '漫画',
+                  selected: state.mangaTypeSelected,
+                  onPressed: () => onIntent(
+                    const ToggleSearchSourceTypeIntent(manga: true),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
+  }
+}
+
+/// 搜索页书籍或漫画的一键书源范围按钮。
+final class _SearchSourceTypeButton extends StatelessWidget {
+  /// 创建等宽类型按钮。
+  const _SearchSourceTypeButton({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  /// 类型名称。
+  final String label;
+  /// 当前是否选中整个类型。
+  final bool selected;
+  /// 切换整类书源回调。
+  final VoidCallback onPressed;
+
+  /// 构建可明确显示选中和取消状态的按钮。
+  @override
+  Widget build(BuildContext context) {
+    return selected
+        ? FilledButton.tonalIcon(
+            onPressed: onPressed,
+            icon: const Icon(Icons.check, size: 18),
+            label: Text(label),
+          )
+        : OutlinedButton(
+            onPressed: onPressed,
+            child: Text(label),
+          );
   }
 }
 
@@ -1197,6 +1259,16 @@ final class _SearchResultCover extends StatefulWidget {
 final class _SearchResultCoverState extends State<_SearchResultCover> {
   /// 当前正在尝试的候选下标。
   int _index = 0;
+  /// 当前 cell 已固定使用的封面地址；同组新增来源不会替换它。
+  String? _fixedCoverUrl;
+
+  /// 初始化当前结果组首次可用的固定封面地址。
+  @override
+  void initState() {
+    super.initState();
+    final List<String> candidates = _candidateUrls();
+    _fixedCoverUrl = candidates.isEmpty ? null : candidates.first;
+  }
 
   /// 候选组切换（例如重新提交搜索）时重置尝试进度。
   @override
@@ -1204,6 +1276,15 @@ final class _SearchResultCoverState extends State<_SearchResultCover> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.group.key != widget.group.key) {
       _index = 0;
+      final List<String> candidates = _candidateUrls();
+      _fixedCoverUrl = candidates.isEmpty ? null : candidates.first;
+    } else if (_fixedCoverUrl == null) {
+      /// 旧 cell 从未显示过封面时，允许首次出现的新增来源补上封面。
+      final List<String> candidates = _candidateUrls();
+      if (candidates.isNotEmpty) {
+        _index = 0;
+        _fixedCoverUrl = candidates.first;
+      }
     }
   }
 
@@ -1234,7 +1315,8 @@ final class _SearchResultCoverState extends State<_SearchResultCover> {
     final String bookAuthor = widget.group.primary.author;
     /// 无障碍封面说明。
     final String semanticLabel = '$bookName封面';
-    if (_index >= candidates.length) {
+    final String? fixedCoverUrl = _fixedCoverUrl;
+    if (fixedCoverUrl == null || _index >= candidates.length) {
       return BookCover(
         coverUrl: null,
         semanticLabel: semanticLabel,
@@ -1245,8 +1327,8 @@ final class _SearchResultCoverState extends State<_SearchResultCover> {
     /// 本次尝试的候选下标，供 onExhausted 回调核对是否仍然有效。
     final int attemptIndex = _index;
     return BookCover(
-      key: ValueKey<String>(candidates[attemptIndex]),
-      coverUrl: candidates[attemptIndex],
+      key: ValueKey<String>(fixedCoverUrl),
+      coverUrl: fixedCoverUrl,
       semanticLabel: semanticLabel,
       bookName: bookName,
       bookAuthor: bookAuthor,
@@ -1254,7 +1336,13 @@ final class _SearchResultCoverState extends State<_SearchResultCover> {
         if (!mounted || _index != attemptIndex) {
           return;
         }
-        setState(() => _index = attemptIndex + 1);
+        final int nextIndex = attemptIndex + 1;
+        setState(() {
+          _index = nextIndex;
+          _fixedCoverUrl = nextIndex < candidates.length
+              ? candidates[nextIndex]
+              : null;
+        });
       },
     );
   }

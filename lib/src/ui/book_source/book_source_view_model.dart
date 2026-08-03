@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../domain/gateway/book_source_gateway.dart';
+import '../../constant/book_source_type.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/book_source_import_result.dart';
 import '../../domain/usecase/import_book_sources_use_case.dart';
@@ -89,6 +90,10 @@ final class BookSourceManagementViewModel {
         _emit(_state.copyWith(query: query));
       case ChangeBookSourceFilterIntent(filter: final BookSourceFilter filter):
         _emit(_state.copyWith(filter: filter));
+      case ChangeBookSourceContentCategoryIntent(
+        category: final BookSourceContentCategory category,
+      ):
+        _emit(_state.copyWith(contentCategory: category));
       case ChangeBookSourceGroupFilterIntent(group: final String? group):
         _emit(_state.copyWith(selectedGroup: group, clearSelectedGroup: group == null));
       case ToggleBookSourceSelectionIntent(sourceUrl: final String sourceUrl):
@@ -184,10 +189,18 @@ final class BookSourceManagementViewModel {
         final Set<String> existingUrls = sources
             .map((BookSource source) => source.bookSourceUrl)
             .toSet();
+        /// 漫画书源全部消失时恢复书籍分类，避免以后导入漫画后意外停留旧分类。
+        final bool hasMangaSources = sources.any(
+          (BookSource source) =>
+              source.bookSourceType == BookSourceType.image,
+        );
         _emit(
           _state.copyWith(
             loading: false,
             sources: sources,
+            contentCategory: hasMangaSources
+                ? _state.contentCategory
+                : BookSourceContentCategory.books,
             selectedUrls: _state.selectedUrls.intersection(existingUrls),
             clearError: true,
           ),

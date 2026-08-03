@@ -58,20 +58,79 @@ final class ReadingHistoryScreen extends StatelessWidget {
     if (state.errorMessage != null && state.books.isEmpty) {
       return Center(child: Text(state.errorMessage ?? '阅读历史加载失败'));
     }
-    if (state.books.isEmpty) {
+    if (state.books.isEmpty && !state.hasManga) {
       return const Center(child: Text('还没有阅读历史'));
     }
-    return Stack(
+    return Column(
       children: <Widget>[
-        state.layoutMode == ReadingHistoryLayoutMode.list
-            ? _HistoryList(state: state, onIntent: onIntent)
-            : _HistoryGrid(state: state, onIntent: onIntent),
-        if (state.refreshing)
-          const Align(
-            alignment: Alignment.topCenter,
-            child: LinearProgressIndicator(),
+        if (state.hasManga)
+          _HistoryContentCategories(state: state, onIntent: onIntent),
+        Expanded(
+          child: Stack(
+            children: <Widget>[
+              if (state.books.isEmpty)
+                const Center(child: Text('当前分类还没有阅读历史'))
+              else if (state.layoutMode == ReadingHistoryLayoutMode.list)
+                _HistoryList(state: state, onIntent: onIntent)
+              else
+                _HistoryGrid(state: state, onIntent: onIntent),
+              if (state.refreshing)
+                const Align(
+                  alignment: Alignment.topCenter,
+                  child: LinearProgressIndicator(),
+                ),
+            ],
           ),
+        ),
       ],
+    );
+  }
+}
+
+/// 历史中确实存在漫画时展示两个等宽分类。
+final class _HistoryContentCategories extends StatelessWidget {
+  /// 创建历史分类栏。
+  const _HistoryContentCategories({required this.state, required this.onIntent});
+
+  /// 当前分类状态。
+  final ReadingHistoryUiState state;
+  /// 历史 Intent 入口。
+  final ValueChanged<ReadingHistoryIntent> onIntent;
+
+  /// 构建书籍和漫画两个等宽按钮。
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SpacingToken.medium,
+        SpacingToken.small,
+        SpacingToken.medium,
+        0,
+      ),
+      child: Row(
+        children: ReadingHistoryContentCategory.values.map(
+          (ReadingHistoryContentCategory category) => Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(right: SpacingToken.small),
+              child: ChoiceChip(
+                selected: state.selectedCategory == category,
+                label: Center(
+                  child: Text(
+                    category == ReadingHistoryContentCategory.books
+                        ? '书籍'
+                        : '漫画',
+                  ),
+                ),
+                onSelected: (bool selected) {
+                  if (selected) {
+                    onIntent(SelectReadingHistoryContentCategoryIntent(category));
+                  }
+                },
+              ),
+            ),
+          ),
+        ).toList(growable: false),
+      ),
     );
   }
 }

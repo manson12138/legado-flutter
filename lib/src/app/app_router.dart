@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../domain/model/book.dart';
 import '../ui/components/app_state_views.dart';
 import '../ui/home/welcome_route.dart';
 import '../ui/book_source/book_source_route.dart';
@@ -13,6 +14,7 @@ import '../ui/reader/book_reader_route.dart';
 import '../ui/reader/reader_page_route.dart';
 import '../ui/local_book_import/local_book_import_route.dart';
 import '../ui/log_management/log_management_route.dart';
+import '../ui/manga_reader/manga_reader_route.dart';
 import '../ui/crash_report_management/crash_report_management_route.dart';
 import '../ui/about/about_route.dart';
 import '../ui/settings/settings_route.dart';
@@ -309,6 +311,51 @@ final class AppRouter {
           settings: settings,
           builder: (BuildContext context) {
             return const AppFatalErrorView(message: '阅读入口缺少有效书籍 URL。');
+          },
+        );
+      case AppRoute.mangaReader:
+        /// 漫画路由只接受非空书籍 URL；携带快照时还必须确认图片类型位。
+        final Object? mangaArguments = settings.arguments;
+        /// 归一化后的漫画阅读参数。
+        final MangaReaderRouteArguments? normalizedMangaArguments =
+            switch (mangaArguments) {
+          MangaReaderRouteArguments arguments
+              when arguments.bookUrl.isNotEmpty => arguments,
+          _ => null,
+        };
+        if (normalizedMangaArguments != null) {
+          /// 入口已携带的书籍快照，用于阻止文本书误入漫画路由。
+          final Book? initialBook = normalizedMangaArguments.initialBook;
+          if (initialBook != null && !initialBook.isImage) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (BuildContext context) {
+                return const AppFatalErrorView(message: '当前书籍不是图片类型，无法进入漫画阅读器。');
+              },
+            );
+          }
+          return MaterialPageRoute<void>(
+            settings: settings,
+            builder: (BuildContext context) {
+              return MangaReaderRoute(
+                dependencies: dependencies,
+                bookUrl: normalizedMangaArguments.bookUrl,
+                initialBook: normalizedMangaArguments.initialBook,
+                initialChapterIndex:
+                    normalizedMangaArguments.initialChapterIndex,
+                initialMessage: normalizedMangaArguments.initialMessage,
+                initialIsInBookshelf:
+                    normalizedMangaArguments.initialIsInBookshelf,
+                initialChapters: normalizedMangaArguments.initialChapters,
+                entry: normalizedMangaArguments.entry,
+              );
+            },
+          );
+        }
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (BuildContext context) {
+            return const AppFatalErrorView(message: '漫画阅读入口缺少有效书籍参数。');
           },
         );
       default:

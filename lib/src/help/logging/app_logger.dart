@@ -67,9 +67,6 @@ const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
 /// 游客 URL/邀请码书源导入的统一诊断 Tag；不记录输入、凭证、地址或书源正文。
 const String guestBookSourceImportLogTag = 'GUEST_BOOK_SOURCE_IMPORT';
 
-/// 内置书源启动导入流程的统一诊断 Tag；仅记录阶段、数量、耗时和错误类型。
-const String defaultBookSourceBootstrapLogTag = 'DEFAULT_BOOK_SOURCE_BOOTSTRAP';
-
 /// 【FLUTTER_JS_COMPAT_LOG】JavaScript 兼容诊断日志统一标识，问题解决后可按此标识完整移除。
 const String javaScriptCompatibilityDebugLogMarker = 'FLUTTER_JS_COMPAT_LOG';
 

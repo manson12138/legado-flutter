@@ -1,3 +1,4 @@
+import '../../constant/book_type.dart';
 import 'book.dart';
 import 'book_chapter.dart';
 
@@ -42,4 +43,12 @@ final class BookShelfConflict extends AddBookToBookshelfResult {
 
   /// 已获取且属于新书源书籍的完整目录。
   final List<BookChapter> incomingChapters;
+
+  /// 两本同名书是否具有相同主要内容类型并允许执行覆盖换源。
+  bool get canReplace {
+    return BookType.hasCompatibleContentType(
+      existingBook.type,
+      incomingBook.type,
+    );
+  }
 }

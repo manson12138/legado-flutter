@@ -195,7 +195,7 @@ final class DownloadCoordinator {
   /// 当前是否允许领取登录用户的下载任务。
   bool _userSessionActive = false;
 
-  /// 在内置书源导入等启动数据库任务完成后恢复残留下载并开始调度。
+  /// 在当前用户作用域就绪后恢复残留下载并开始调度。
   ///
   /// 调用方可重复调用；同一进程中始终复用首次恢复任务，避免和启动事务竞争 SQLite 连接。
   Future<void> start() {

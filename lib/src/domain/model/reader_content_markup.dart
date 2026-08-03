@@ -21,12 +21,15 @@ abstract final class ReaderContentMarkup {
     required Uri uri,
     required String altText,
     required Uri referer,
+    String? requestUrl,
   }) {
     /// 图片资源的最小 JSON 载荷。
     final String payload = jsonEncode(<String, String>{
       'url': uri.toString(),
       'alt': altText.trim(),
       'referer': referer.toString(),
+      if (requestUrl != null && requestUrl.trim().isNotEmpty)
+        'requestUrl': requestUrl.trim(),
     });
     /// 不含补位符的 URL-safe Base64，避免标记引入换行或 HTML 字符。
     final String encoded = base64Url.encode(utf8.encode(payload)).replaceAll('=', '');
@@ -75,9 +78,15 @@ abstract final class ReaderContentMarkup {
       final Uri? referer = decoded['referer'] is String
           ? Uri.tryParse(decoded['referer'] as String)
           : null;
+      /// 可保留图片 Header 选项的绝对请求规则；旧缓存缺失时回退图片地址。
+      final String requestUrl = decoded['requestUrl'] is String &&
+              (decoded['requestUrl'] as String).trim().isNotEmpty
+          ? (decoded['requestUrl'] as String).trim()
+          : uri.toString();
       return ReaderMarkedImage(
         uri: uri,
         altText: altText,
+        requestUrl: requestUrl,
         referer: referer != null &&
                 referer.host.isNotEmpty &&
                 <String>{'http', 'https'}.contains(referer.scheme.toLowerCase())
@@ -114,6 +123,7 @@ final class ReaderMarkedImage {
   const ReaderMarkedImage({
     required this.uri,
     required this.altText,
+    required this.requestUrl,
     required this.referer,
   });
 
@@ -122,6 +132,9 @@ final class ReaderMarkedImage {
 
   /// 图片加载失败时使用的替代文本。
   final String altText;
+
+  /// 可保留 Android URL Header 选项的图片请求规则。
+  final String requestUrl;
 
   /// 图片防盗链请求可使用的正文页面 Referer。
   final String referer;

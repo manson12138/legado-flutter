@@ -1,13 +1,24 @@
+import '../../constant/book_type.dart';
 import 'book_source.dart';
 import 'search_book.dart';
 
-/// 表示同一“书名 + 作者”下由多个书源返回的候选结果组。
+/// 为搜索结果构造“书名 + 作者 + 主要内容类型”稳定分组键。
+///
+/// Android 搜索原本按书名作者聚合；Flutter 漫画接入后增加内容类型，防止同名文本、
+/// 漫画、音频或文件候选进入同一详情来源组。
+String bookSearchResultGroupKey(SearchBook book) {
+  /// 当前候选决定阅读器形态的主要内容类型。
+  final int contentType = BookType.primaryContentType(book.type);
+  return '${book.name.length}:${book.name}${book.author}:$contentType';
+}
+
+/// 表示同一“书名 + 作者 + 主要内容类型”下由多个书源返回的候选结果组。
 final class BookSearchResultGroup {
   /// 创建不可变候选组，并保留最先返回结果作为默认展示项。
   BookSearchResultGroup({required this.key, required List<SearchBook> books})
     : books = List<SearchBook>.unmodifiable(books);
 
-  /// Android 搜索结果兼容键，严格由原始书名和作者组成。
+  /// 搜索结果兼容键，由原始书名、作者和主要内容类型组成。
   final String key;
 
   /// 按书源完成先后保存的候选结果，第一项为默认详情来源。
@@ -99,4 +110,3 @@ final class BookSearchProgressEvent extends BookSearchEvent {
   /// 最新进度快照。
   final BookSearchProgress progress;
 }
-

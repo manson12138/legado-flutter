@@ -9,8 +9,10 @@ abstract interface class BookshelfGateway {
   /// 按未经规范化的书籍 URL 查询书架书。
   Future<Book?> getBook(String bookUrl);
 
-  /// 按书名精确查询当前用户最近阅读的一条书架记录。
-  Future<Book?> getShelfBookNameConflict(String name);
+  /// 按书名和主要内容类型查询当前用户最近阅读的一条书架冲突记录。
+  ///
+  /// 图片漫画、文字书、音频和文件属于不同内容类型，同名时可以同时加入书架。
+  Future<Book?> getShelfBookNameConflict(String name, int type);
 
   /// 在一个事务中写入书籍及可选完整目录。
   Future<void> addBook(Book book, List<BookChapter> chapters);

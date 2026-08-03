@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../app/app_dependencies.dart';
 import '../../app/app_route.dart';
 import '../../app/reader_transition_spec.dart';
+import '../../constant/book_type.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
@@ -132,6 +133,20 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         chapters: final List<BookChapter> chapters,
         chapterIndex: final int chapterIndex,
       ):
+        if (book.isImage) {
+          /// 图片书详情直接进入独立漫画阅读边界，并携带当前完整目录和指定章节。
+          final MangaReaderRouteArguments mangaArguments =
+              MangaReaderRouteArguments(
+            bookUrl: book.bookUrl,
+            initialChapterIndex: chapterIndex,
+            initialBook: book,
+            initialChapters: chapters,
+            transitionSpec: ReaderTransitionSpec.detail(),
+            entry: 'detail',
+          );
+          unawaited(_openMangaReader(mangaArguments));
+          return;
+        }
         /// 本次阅读所需的完整路由参数；详情入口标识使路由器采用普通 Material 转场，
         /// 阅读器来源详情页会把参数返回给原阅读路由。
         final ReaderRouteArguments readerArguments = ReaderRouteArguments(
@@ -173,6 +188,22 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
     try {
       await Navigator.of(context).pushNamed<void>(
         AppRoute.reader,
+        arguments: arguments,
+      );
+    } finally {
+      _openingReader = false;
+    }
+  }
+
+  /// 单飞打开漫画阅读器，避免详情按钮快速点击创建重复路由。
+  Future<void> _openMangaReader(MangaReaderRouteArguments arguments) async {
+    if (_openingReader || !mounted) {
+      return;
+    }
+    _openingReader = true;
+    try {
+      await Navigator.of(context).pushNamed<void>(
+        AppRoute.mangaReader,
         arguments: arguments,
       );
     } finally {
@@ -267,7 +298,7 @@ final class _BookInfoRouteState extends State<BookInfoRoute> {
         AppRoute.bookInfo,
         arguments: BookInfoRouteArguments(
           group: BookSearchResultGroup(
-            key: '${book.name.length}:${book.name}${book.author}',
+            key: bookSearchResultGroupKey(searchBook),
             books: <SearchBook>[searchBook],
           ),
           selectedBook: searchBook,
@@ -364,6 +395,12 @@ final class _BookInfoShelfConflictDialog extends StatelessWidget {
     final String incomingAuthor = conflict.incomingBook.author.isEmpty
         ? '未知作者'
         : conflict.incomingBook.author;
+    /// 同名书籍主要内容类型是否兼容，只有兼容时才能覆盖换源。
+    final bool canReplace = conflict.canReplace;
+    /// 现有书籍的内容类型显示文本。
+    final String existingType = _bookContentTypeLabel(conflict.existingBook);
+    /// 待加入书籍的内容类型显示文本。
+    final String incomingType = _bookContentTypeLabel(conflict.incomingBook);
     return AlertDialog(
       icon: const Icon(Icons.library_add_check_outlined),
       title: const Text('书架中已有同名书籍'),
@@ -379,26 +416,43 @@ final class _BookInfoShelfConflictDialog extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              '书架现有：$existingAuthor · $existingSource'
+              '书架现有：$existingType · $existingAuthor · $existingSource'
               '（${conflict.existingBook.totalChapterNum} 章）',
             ),
             const SizedBox(height: 8),
             Text(
-              '本次添加：$incomingAuthor · $incomingSource'
+              '本次添加：$incomingType · $incomingAuthor · $incomingSource'
               '（${conflict.incomingChapters.length} 章）',
             ),
             const SizedBox(height: 16),
-            const Text(
-              '选择覆盖后会把两者视为同一本书，新书源和目录成为当前来源；'
-              '阅读进度、分组、排序、备注、封面和单书阅读设置会合并保留。',
+            Text(
+              canReplace
+                  ? '选择覆盖后会把两者视为同一本书，新书源和目录成为当前来源；'
+                        '阅读进度、分组、排序、备注、封面和单书阅读设置会合并保留。'
+                  : '两本书名称相同但内容类型不同，不能互相覆盖；可将本次结果作为独立书籍加入书架。',
             ),
           ],
         ),
       ),
       actions: <Widget>[
-        TextButton(onPressed: onAddAsNew, child: const Text('再次添加')),
-        FilledButton(onPressed: onReplace, child: const Text('覆盖')),
+        TextButton(
+          onPressed: onAddAsNew,
+          child: Text(canReplace ? '再次添加' : '作为新书添加'),
+        ),
+        if (canReplace)
+          FilledButton(onPressed: onReplace, child: const Text('覆盖')),
       ],
     );
   }
+}
+
+/// 返回同名书架冲突对话框使用的主要内容类型名称。
+String _bookContentTypeLabel(Book book) {
+  return switch (BookType.primaryContentType(book.type)) {
+    BookType.image => '漫画',
+    BookType.audio => '音频',
+    BookType.webFile => '文件',
+    BookType.video => '视频',
+    _ => '文本',
+  };
 }

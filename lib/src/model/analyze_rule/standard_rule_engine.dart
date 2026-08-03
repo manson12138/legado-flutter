@@ -178,7 +178,10 @@ final class StandardRuleEngine {
     if (rule.startsWith('@Json:')) {
       return _jsonPath(rule.substring(6), input);
     }
-    if (rule.startsWith(r'$.') || rule.startsWith(r'$[') || _isJsonInput(input)) {
+    if (rule.startsWith(r'$.') ||
+        rule.startsWith(r'$[') ||
+        rule.contains(r'{$.') ||
+        _isJsonInput(input)) {
       return _jsonPath(rule, input);
     }
     if (rule.startsWith('@XPath:')) {
@@ -200,6 +203,95 @@ final class StandardRuleEngine {
   List<Object?> _jsonPath(String rule, Object? input) {
     /// JSON 根对象。
     final Object? root = input is String ? jsonDecode(input) : input;
+    /// Android `AnalyzeByJSonPath.innerRule("{$.")` 同款的字符串内嵌 JSONPath 结果。
+    final String? embeddedResult = _resolveEmbeddedJsonPath(rule, root);
+    if (embeddedResult != null) {
+      return embeddedResult.isEmpty ? const <Object?>[] : <Object?>[embeddedResult];
+    }
+    return _readJsonPathValues(rule, root);
+  }
+
+  /// 对齐 Android `AnalyzeByJSonPath`，替换普通文本中的全部 `{$...}` JSONPath。
+  String? _resolveEmbeddedJsonPath(String rule, Object? root) {
+    if (!rule.contains(r'{$.')) {
+      return null;
+    }
+    /// 已完成替换的字符串缓冲区。
+    final StringBuffer output = StringBuffer();
+    /// 尚未写入缓冲区的原规则起点。
+    int cursor = 0;
+    while (cursor < rule.length) {
+      /// 下一段内嵌 JSONPath 的左花括号位置。
+      final int start = rule.indexOf(r'{$.', cursor);
+      if (start < 0) {
+        output.write(rule.substring(cursor));
+        break;
+      }
+      /// 与左花括号配对且不位于字符串中的右花括号位置。
+      final int? end = _balancedClosingBrace(rule, start);
+      if (end == null) {
+        return null;
+      }
+      /// 保留当前占位表达式之前的普通文本。
+      output.write(rule.substring(cursor, start));
+      /// 去掉外层花括号后交给 JSONPath 引擎的规则。
+      final String embeddedRule = rule.substring(start + 1, end);
+      /// 当前 JSON 节点上的占位表达式结果。
+      final List<Object?> values = _readJsonPathValues(embeddedRule, root);
+      if (values.isEmpty) {
+        return '';
+      }
+      output.write(values.map(_stringValue).join('\n'));
+      cursor = end + 1;
+    }
+    return output.toString();
+  }
+
+  /// 查找内嵌 JSONPath 的平衡右花括号，忽略引号内的花括号。
+  int? _balancedClosingBrace(String value, int start) {
+    /// 当前未闭合花括号层级。
+    int depth = 0;
+    /// 当前字符串引号；空值表示不在字符串中。
+    String? quote;
+    /// 上一个字符是否为转义符。
+    bool escaped = false;
+    for (int index = start; index < value.length; index += 1) {
+      /// 当前扫描字符。
+      final String character = value[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote != null) {
+        if (character == quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character == '"' || character == "'") {
+        quote = character;
+        continue;
+      }
+      if (character == '{') {
+        depth += 1;
+        continue;
+      }
+      if (character == '}') {
+        depth -= 1;
+        if (depth == 0) {
+          return index;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 在指定 JSON 根节点上读取单条 JSONPath，并保留列表顺序。
+  List<Object?> _readJsonPathValues(String rule, Object? root) {
     /// 符合 RFC 9535 的 JSONPath。
     /// 去除空白的原始路径。
     final String trimmed = rule.trim();

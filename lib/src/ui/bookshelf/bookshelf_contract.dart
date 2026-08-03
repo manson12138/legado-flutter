@@ -11,6 +11,15 @@ enum BookshelfLayoutMode {
   grid,
 }
 
+/// 书架、历史和本地页共用的内容形态分类。
+enum BookshelfContentCategory {
+  /// 普通文本及其他非漫画书籍。
+  books,
+
+  /// 图片或漫画书籍。
+  manga,
+}
+
 /// Android 兼容书架排序字段。
 enum BookshelfSortMode {
   /// 最近阅读时间。
@@ -88,8 +97,13 @@ final class BookshelfUiState {
     this.sortMode = BookshelfSortMode.recentRead,
     this.descending = true,
     this.selectedGroupId = BookGroup.idAll,
+    this.selectedCategory = BookshelfContentCategory.books,
+    this.selectedLocalCategory = BookshelfContentCategory.books,
+    this.hasManga = false,
+    this.localHasManga = false,
     List<BookshelfGroupItem> groups = const <BookshelfGroupItem>[],
     List<BookshelfBookItem> books = const <BookshelfBookItem>[],
+    List<BookshelfBookItem> localBooks = const <BookshelfBookItem>[],
     this.query = '',
     this.selectionMode = false,
     Set<String> selectedBookUrls = const <String>{},
@@ -102,6 +116,7 @@ final class BookshelfUiState {
     this.errorMessage,
   }) : groups = List<BookshelfGroupItem>.unmodifiable(groups),
        books = List<BookshelfBookItem>.unmodifiable(books),
+       localBooks = List<BookshelfBookItem>.unmodifiable(localBooks),
        selectedBookUrls = Set<String>.unmodifiable(selectedBookUrls),
        refreshFailures = List<BookshelfRefreshFailure>.unmodifiable(refreshFailures),
        updatingBookUrls = Set<String>.unmodifiable(updatingBookUrls);
@@ -116,10 +131,20 @@ final class BookshelfUiState {
   final bool descending;
   /// 当前分组 ID。
   final int selectedGroupId;
+  /// 书架页当前内容分类。
+  final BookshelfContentCategory selectedCategory;
+  /// 本地页当前内容分类。
+  final BookshelfContentCategory selectedLocalCategory;
+  /// 书架页是否存在漫画；不存在时不展示分类栏。
+  final bool hasManga;
+  /// 本地页是否存在漫画；不存在时不展示分类栏。
+  final bool localHasManga;
   /// 可见系统和用户分组。
   final List<BookshelfGroupItem> groups;
   /// 已筛选并排序的书籍。
   final List<BookshelfBookItem> books;
+  /// 只在本地页展示、不会进入书架页的本地书籍。
+  final List<BookshelfBookItem> localBooks;
   /// 当前搜索词。
   final String query;
   /// 是否处于长按选择模式。
@@ -148,8 +173,13 @@ final class BookshelfUiState {
     BookshelfSortMode? sortMode,
     bool? descending,
     int? selectedGroupId,
+    BookshelfContentCategory? selectedCategory,
+    BookshelfContentCategory? selectedLocalCategory,
+    bool? hasManga,
+    bool? localHasManga,
     List<BookshelfGroupItem>? groups,
     List<BookshelfBookItem>? books,
+    List<BookshelfBookItem>? localBooks,
     String? query,
     bool? selectionMode,
     Set<String>? selectedBookUrls,
@@ -169,8 +199,14 @@ final class BookshelfUiState {
       sortMode: sortMode ?? this.sortMode,
       descending: descending ?? this.descending,
       selectedGroupId: selectedGroupId ?? this.selectedGroupId,
+      selectedCategory: selectedCategory ?? this.selectedCategory,
+      selectedLocalCategory:
+          selectedLocalCategory ?? this.selectedLocalCategory,
+      hasManga: hasManga ?? this.hasManga,
+      localHasManga: localHasManga ?? this.localHasManga,
       groups: groups ?? this.groups,
       books: books ?? this.books,
+      localBooks: localBooks ?? this.localBooks,
       query: query ?? this.query,
       selectionMode: selectionMode ?? this.selectionMode,
       selectedBookUrls: selectedBookUrls ?? this.selectedBookUrls,
@@ -213,6 +249,20 @@ final class SelectBookshelfGroupIntent extends BookshelfIntent {
   final int groupId;
 }
 
+/// 切换书架或本地页的书籍/漫画分类。
+final class SelectBookshelfContentCategoryIntent extends BookshelfIntent {
+  /// 创建内容分类切换 Intent。
+  const SelectBookshelfContentCategoryIntent({
+    required this.category,
+    required this.local,
+  });
+
+  /// 目标内容分类。
+  final BookshelfContentCategory category;
+  /// 是否作用于本地页；false 表示书架页。
+  final bool local;
+}
+
 /// 修改排序字段。
 final class ChangeBookshelfSortIntent extends BookshelfIntent {
   /// 创建排序 Intent。
@@ -252,7 +302,11 @@ final class LongPressBookshelfBookIntent extends BookshelfIntent {
 /// 全选当前可见书籍。
 final class SelectAllBookshelfBooksIntent extends BookshelfIntent {
   /// 创建全选 Intent。
-  const SelectAllBookshelfBooksIntent();
+  SelectAllBookshelfBooksIntent(Iterable<String> bookUrls)
+    : bookUrls = Set<String>.unmodifiable(bookUrls);
+
+  /// 当前页面实际可见的稳定书籍 URL。
+  final Set<String> bookUrls;
 }
 
 /// 退出选择模式。

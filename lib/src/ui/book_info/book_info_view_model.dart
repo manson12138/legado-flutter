@@ -125,6 +125,8 @@ final class BookInfoViewModel {
   final Set<String> _autoFallbackAttemptedCandidates = <String>{};
   /// 是否正在为当前搜索结果组执行目录失败后的自动回退。
   bool _autoFallbackActive = false;
+  /// 用户主动点选书源后保持当前选择，即使目录失败也不再自动跳到下一来源。
+  bool _manualSourceSelectionActive = false;
   /// 是否正在为目录进入阅读器执行持久化，防止重复点击产生并发写入。
   bool _openingReader = false;
   /// 同一路由生命周期只报告一次详情真正可见。
@@ -142,11 +144,11 @@ final class BookInfoViewModel {
     switch (intent) {
       case RetryBookInfoIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户重试详情');
-        _resetAutoSourceFallback();
+        _resetAutoSourceFallback(preserveManualSelection: true);
         _loadDetails();
       case RetryBookTocIntent():
         _logger.info(tag: bookTocLogTag, message: '用户重试目录');
-        _resetAutoSourceFallback();
+        _resetAutoSourceFallback(preserveManualSelection: true);
         _loadToc(runPreUpdateJavaScript: true);
       case AddBookToShelfIntent():
         _logger.info(tag: bookDetailLogTag, message: '用户点击加入书架');
@@ -195,7 +197,7 @@ final class BookInfoViewModel {
     switch (action) {
       case BookInfoMenuAction.refresh:
         _logger.info(tag: bookDetailLogTag, message: '用户从菜单刷新详情');
-        _resetAutoSourceFallback();
+        _resetAutoSourceFallback(preserveManualSelection: true);
         _loadDetails(runPreUpdateJavaScript: true);
       case BookInfoMenuAction.share:
         _shareCurrentBook();
@@ -662,6 +664,7 @@ final class BookInfoViewModel {
           case BookShelfConflict(
             existingBook: final Book existingBook,
             incomingBook: final Book incomingBook,
+            canReplace: final bool canReplace,
             incomingChapters: final List<BookChapter> incomingChapters,
           ):
             _emit(
@@ -670,6 +673,7 @@ final class BookInfoViewModel {
                 shelfConflict: BookInfoShelfConflictDialog(
                   existingBook: existingBook,
                   incomingBook: incomingBook,
+                  canReplace: canReplace,
                   incomingChapters: incomingChapters,
                   pendingChapterIndex: pendingChapterIndex,
                 ),
@@ -685,6 +689,12 @@ final class BookInfoViewModel {
     /// 当前待确认冲突；已被关闭时忽略迟到操作。
     final BookInfoShelfConflictDialog? conflict = _state.shelfConflict;
     if (conflict == null || _state.addingToShelf) {
+      return;
+    }
+    if (!conflict.canReplace) {
+      _effectController.add(
+        const ShowBookInfoMessageEffect('同名书籍类型不同，只能作为独立书籍添加'),
+      );
       return;
     }
     _emit(_state.copyWith(addingToShelf: true, clearShelfConflict: true));
@@ -799,6 +809,7 @@ final class BookInfoViewModel {
       return;
     }
     _resetAutoSourceFallback();
+    _manualSourceSelectionActive = true;
     /// 【搜书诊断日志】记录详情换源前后的不可逆标识。
     _logger.info(
       tag: bookDetailLogTag,
@@ -812,7 +823,7 @@ final class BookInfoViewModel {
 
   /// 在未加入书架时按搜索候选顺序串行切换到下一个尚未尝试的来源。
   bool _tryAutoFallback() {
-    if (_state.inBookshelf) {
+    if (_state.inBookshelf || _manualSourceSelectionActive) {
       return false;
     }
     SearchBook? next;
@@ -843,9 +854,12 @@ final class BookInfoViewModel {
   }
 
   /// 重新开始用户主动请求时清空失败记录，使当前来源及同组候选可再次参与回退。
-  void _resetAutoSourceFallback() {
+  void _resetAutoSourceFallback({bool preserveManualSelection = false}) {
     _autoFallbackAttemptedCandidates.clear();
     _autoFallbackActive = false;
+    if (!preserveManualSelection) {
+      _manualSourceSelectionActive = false;
+    }
   }
 
   /// 生成同组候选的稳定唯一标识，书源和详情 URL 都相同才视为同一候选。

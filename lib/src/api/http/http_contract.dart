@@ -214,11 +214,15 @@ abstract interface class HttpCancellationToken {
   void cancel([String reason = '用户取消请求']);
 }
 
+/// 二进制响应下载进度；总字节数未知时 [total] 为 null。
+typedef HttpReceiveProgress = void Function(int received, int? total);
+
 /// 统一 HTTP 客户端接口。
 abstract interface class UnifiedHttpClient {
   /// 执行请求并返回原始响应。
   Future<HttpResponse> execute(
     HttpRequest request, {
     HttpCancellationToken? cancellationToken,
+    HttpReceiveProgress? onReceiveProgress,
   });
 }

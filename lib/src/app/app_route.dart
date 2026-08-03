@@ -47,8 +47,19 @@ abstract final class AppRoute {
   /// M08 阅读器预留入口；M07 只定义稳定导航参数。
   static const String reader = '/reader';
 
+  /// M11 网络漫画专用阅读入口。
+  static const String mangaReader = '/manga-reader';
+
   /// M11 网络书整书换源页面。
   static const String changeBookSource = '/books/change-source';
+
+  /// 根据书籍主要内容类型返回统一阅读入口。
+  ///
+  /// 图片书籍进入漫画阅读器；其余当前支持类型继续进入既有阅读入口，PDF 仍由
+  /// `BookReaderRoute` 内部按本地格式分流。
+  static String readingRouteFor(Book book) {
+    return book.isImage ? mangaReader : reader;
+  }
 }
 
 /// 整书换源路由参数，只传递仍需从数据库重新确认的旧书主键。
@@ -120,5 +131,44 @@ final class ReaderRouteArguments {
   final ReaderTransitionSpec? transitionSpec;
 
   /// 匿名埋点允许的阅读入口：bookshelf、detail 或 history。
+  final String entry;
+}
+
+/// 漫画阅读器路由参数，支持详情指定章节和书架/历史恢复已有进度。
+final class MangaReaderRouteArguments {
+  /// 创建漫画阅读路由参数。
+  MangaReaderRouteArguments({
+    required this.bookUrl,
+    this.initialChapterIndex,
+    this.initialMessage,
+    this.initialBook,
+    this.initialIsInBookshelf,
+    List<BookChapter> initialChapters = const <BookChapter>[],
+    this.transitionSpec,
+    this.entry = 'bookshelf',
+  }) : initialChapters = List<BookChapter>.unmodifiable(initialChapters);
+
+  /// 漫画书籍稳定 URL。
+  final String bookUrl;
+
+  /// 详情目录指定的初始章节；为空时使用书籍已有进度。
+  final int? initialChapterIndex;
+
+  /// 新漫画路由首帧展示的一次性提示，例如整书换源结果。
+  final String? initialMessage;
+
+  /// 详情、书架或历史入口持有的图片书籍快照。
+  final Book? initialBook;
+
+  /// 入口已经确认的书架成员事实；历史入口允许为空。
+  final bool? initialIsInBookshelf;
+
+  /// 尚未加入书架时由详情页传入的完整目录快照。
+  final List<BookChapter> initialChapters;
+
+  /// 本次进入使用的一次性封面转场参数，后续漫画转场可选择消费。
+  final ReaderTransitionSpec? transitionSpec;
+
+  /// 匿名入口枚举：`bookshelf`、`detail` 或 `history`。
   final String entry;
 }

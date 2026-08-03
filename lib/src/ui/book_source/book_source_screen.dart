@@ -243,6 +243,39 @@ final class BookSourceManagementScreen extends StatelessWidget {
                 }).toList(growable: false),
               ),
             ),
+            if (state.hasMangaSources)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: SpacingToken.medium,
+                  vertical: SpacingToken.xSmall,
+                ),
+                child: Row(
+                  children: BookSourceContentCategory.values.map(
+                    (BookSourceContentCategory category) => Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: SpacingToken.small),
+                        child: ChoiceChip(
+                          selected: state.contentCategory == category,
+                          label: Center(
+                            child: Text(
+                              category == BookSourceContentCategory.books
+                                  ? '书籍'
+                                  : '漫画',
+                            ),
+                          ),
+                          onSelected: (bool selected) {
+                            if (selected) {
+                              onIntent(
+                                ChangeBookSourceContentCategoryIntent(category),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ).toList(growable: false),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 SpacingToken.medium,

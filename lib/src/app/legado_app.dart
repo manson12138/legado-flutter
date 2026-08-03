@@ -455,7 +455,7 @@ final class _LegadoAppState extends State<LegadoApp>
     }
   }
 
-  /// 串行导入内置书源并恢复下载队列，避免两项工作并发占用同一 SQLite 连接。
+  /// 恢复当前用户的下载队列，然后启动书架与历史目录后台更新。
   Future<void> _initializeMainBackgroundServices({
     required int userId,
     required int userGeneration,
@@ -464,60 +464,41 @@ final class _LegadoAppState extends State<LegadoApp>
       tag: appStartupLogTag,
       message: 'stage=main_background_services_started',
     );
-    try {
+    if (widget.dependencies.currentUserScope.matches(
+      expectedUserId: userId,
+      expectedGeneration: userGeneration,
+    )) {
       widget.dependencies.logger.info(
         tag: appStartupLogTag,
-        message: 'stage=default_book_source_import_started',
+        message: 'stage=download_restore_started',
       );
-      await widget.dependencies.defaultBookSourceBootstrapper.importIfEmpty();
-      widget.dependencies.logger.info(
-        tag: appStartupLogTag,
-        message: 'stage=default_book_source_import_ready',
-      );
-    } on Object catch (error) {
-      widget.dependencies.logger.error(
-        tag: appStartupLogTag,
-        message: 'stage=default_book_source_import_failed',
-        error: error,
-      );
-      rethrow;
-    } finally {
-      if (widget.dependencies.currentUserScope.matches(
-        expectedUserId: userId,
-        expectedGeneration: userGeneration,
-      )) {
+      try {
+        await widget.dependencies.downloadCoordinator.start();
         widget.dependencies.logger.info(
           tag: appStartupLogTag,
-          message: 'stage=download_restore_started',
+          message: 'stage=download_restore_ready',
         );
-        try {
-          await widget.dependencies.downloadCoordinator.start();
-          widget.dependencies.logger.info(
-            tag: appStartupLogTag,
-            message: 'stage=download_restore_ready',
+      } on Object catch (error) {
+        widget.dependencies.logger.error(
+          tag: appStartupLogTag,
+          message: 'stage=download_restore_failed',
+          error: error,
+        );
+        rethrow;
+      } finally {
+        if (widget.dependencies.currentUserScope.matches(
+          expectedUserId: userId,
+          expectedGeneration: userGeneration,
+        )) {
+          unawaited(
+            widget.dependencies.bookshelfHistoryAutoRefreshService.start(),
           );
-        } on Object catch (error) {
-          widget.dependencies.logger.error(
-            tag: appStartupLogTag,
-            message: 'stage=download_restore_failed',
-            error: error,
-          );
-          rethrow;
-        } finally {
-          if (widget.dependencies.currentUserScope.matches(
-            expectedUserId: userId,
-            expectedGeneration: userGeneration,
-          )) {
-            unawaited(
-              widget.dependencies.bookshelfHistoryAutoRefreshService.start(),
-            );
-          }
         }
-        widget.dependencies.logger.info(
-          tag: appStartupLogTag,
-          message: 'stage=main_background_services_ready',
-        );
       }
+      widget.dependencies.logger.info(
+        tag: appStartupLogTag,
+        message: 'stage=main_background_services_ready',
+      );
     }
   }
 

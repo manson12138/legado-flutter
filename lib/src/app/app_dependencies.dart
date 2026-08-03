@@ -33,6 +33,7 @@ import '../data/dao/download_task_dao.dart';
 import '../data/dao/reading_history_dao.dart';
 import '../data/dao/search_book_dao.dart';
 import '../data/dao/toc_refresh_checkpoint_dao.dart';
+import '../data/cache/manga_image_cache.dart';
 import '../data/local/database_tables.dart';
 import '../data/local/legado_database.dart';
 import '../data/local/preferences/app_preferences_store.dart';
@@ -44,6 +45,7 @@ import '../data/repository/book_group_repository.dart';
 import '../data/repository/book_cover_candidate_repository.dart';
 import '../data/repository/book_source_repository.dart';
 import '../data/repository/download_repository.dart';
+import '../data/repository/manga_image_repository.dart';
 import '../data/repository/search_history_repository.dart';
 import '../data/repository/reader_repository.dart';
 import '../data/repository/reading_history_repository.dart';
@@ -60,6 +62,7 @@ import '../domain/gateway/book_group_gateway.dart';
 import '../domain/gateway/book_source_gateway.dart';
 import '../domain/gateway/chapter_gateway.dart';
 import '../domain/gateway/cover_cache_gateway.dart';
+import '../domain/gateway/manga_image_gateway.dart';
 import '../domain/gateway/reading_progress_gateway.dart';
 import '../domain/gateway/reading_history_gateway.dart';
 import '../domain/gateway/reader_cache_gateway.dart';
@@ -107,7 +110,6 @@ import '../model/local_book/txt_local_book_parser.dart';
 import '../model/local_book/pdf_local_book_parser.dart';
 import '../model/local_book/umd_local_book_parser.dart';
 import '../ui/components/cover_url_cache.dart';
-import 'default_book_source_bootstrapper.dart';
 import 'remote_app_bootstrapper.dart';
 import 'app_access_coordinator.dart';
 import 'bookshelf_layout_preferences.dart';
@@ -148,12 +150,12 @@ final class AppDependencies {
     required this.readerProcessedContentStartupPreloader,
     required this.readerIntroPreferences,
     required this.readerMenuPreferences,
+    required this.mangaImageGateway,
     required this.coverCacheGateway,
     required this.searchHistoryGateway,
     required this.searchPreferences,
     required this.cookieManager,
     required this.scriptInteractionBroker,
-    required this.defaultBookSourceBootstrapper,
     required this.remoteAppBootstrapper,
     required this.appAccessCoordinator,
     required this.remoteAppConfigurationRepository,
@@ -403,6 +405,16 @@ final class AppDependencies {
       webViewScriptBridge,
       logger,
     );
+    /// 漫画图片共用网络 Cookie、完整 URL/Header 脚本、图片解密和应用私有缓存边界。
+    final MangaImageGateway mangaImageGateway = MangaImageRepository(
+      httpClient: httpClient,
+      urlResolver: const SourceUrlResolver(),
+      cache: const MangaImageCache(),
+      currentUserId: currentUserScope.requireUserId,
+      cancellationTokenFactory: DioHttpCancellationToken.new,
+      javaScriptService: javaScriptService,
+      cacheDao: cacheDao,
+    );
     /// M06 搜索历史 Repository，通过缓存表保持独立数据边界。
     final SearchHistoryRepository searchHistoryRepository =
         SearchHistoryRepository(
@@ -522,7 +534,7 @@ final class AppDependencies {
     /// 批量删除历史成员和级联目录快照，不影响同书的书架记录。
     final DeleteReadingHistoryUseCase deleteReadingHistory =
         DeleteReadingHistoryUseCase(readingHistoryRepository);
-    /// 默认书源准备完成后在后台更新书架与历史目录，不阻塞启动首屏。
+    /// 下载队列恢复后在后台更新书架与历史目录，不阻塞启动首屏。
     final BookshelfHistoryAutoRefreshService
         bookshelfHistoryAutoRefreshService =
         BookshelfHistoryAutoRefreshService(
@@ -536,7 +548,7 @@ final class AppDependencies {
       cancellationTokenFactory: DioHttpCancellationToken.new,
       logger: logger,
     );
-    /// 书源 JSON 导入 UseCase，供管理页面和启动内置书源导入共同复用。
+    /// 书源 JSON 导入 UseCase，供管理页面和远程导入共同复用。
     final ImportBookSourcesUseCase importBookSources =
         ImportBookSourcesUseCase(bookSourceRepository);
     /// 服务器同步每页成功后立即复用该导入事务，并以相同 URL 覆盖策略续传。
@@ -612,17 +624,12 @@ final class AppDependencies {
           readerProcessedContentStartupPreloader,
       readerIntroPreferences: readerIntroPreferences,
       readerMenuPreferences: readerMenuPreferences,
+      mangaImageGateway: mangaImageGateway,
       coverCacheGateway: readerRepository,
       searchHistoryGateway: searchHistoryRepository,
       searchPreferences: SearchPreferences(preferencesStore, cacheDao),
       cookieManager: cookieManager,
       scriptInteractionBroker: scriptInteractionBroker,
-      defaultBookSourceBootstrapper: DefaultBookSourceBootstrapper(
-        sourceGateway: bookSourceRepository,
-        importBookSources: importBookSources,
-        assetBundle: rootBundle,
-        logger: logger,
-      ),
       remoteAppBootstrapper: remoteAppBootstrapper,
       appAccessCoordinator: appAccessCoordinator,
       remoteAppConfigurationRepository: remoteAppConfigurationRepository,
@@ -733,6 +740,9 @@ final class AppDependencies {
   /// 设备安装周期内只自动展示一次的阅读器工具栏偏好。
   final ReaderMenuPreferences readerMenuPreferences;
 
+  /// 漫画阅读器唯一允许使用的图片网络获取和应用私有缓存边界。
+  final MangaImageGateway mangaImageGateway;
+
   /// 跨页面“已知可显示封面地址”缓存边界，供 [CoverUrlCache] 持久化。
   final CoverCacheGateway coverCacheGateway;
 
@@ -747,9 +757,6 @@ final class AppDependencies {
 
   /// 书源脚本申请登录或验证码交互时使用的应用级单消费者串行队列。
   final LegadoScriptInteractionBroker scriptInteractionBroker;
-
-  /// 启动期按需导入 Flutter assets 内置书源的业务协调器。
-  final DefaultBookSourceBootstrapper defaultBookSourceBootstrapper;
 
   /// 启动后异步同步服务端配置的协调器。
   final RemoteAppBootstrapper remoteAppBootstrapper;

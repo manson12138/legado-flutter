@@ -66,9 +66,9 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   /// 阅读历史 Effect 订阅。
   late final StreamSubscription<ReadingHistoryEffect>
       _historyEffectSubscription;
-  /// 书架和历史双页控制器。
+  /// 书架、历史和本地三页控制器。
   late final PageController _pageController;
-  /// 固定顶部页签使用的当前横滑进度，范围为书架 0 到历史 1。
+  /// 固定顶部页签使用的当前横滑进度，范围为书架 0 到本地 2。
   double _pageProgress = 0;
   /// 当前已展示的业务对话框。
   BookshelfDialog? _shownDialog;
@@ -108,7 +108,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     );
     _historyEffectSubscription =
         _historyViewModel.effects.listen(_handleHistoryEffect);
-    _pageController = PageController();
+    /// 独立路由若由“本地书籍”入口打开，首帧直接落在第三页。
+    final bool startsOnLocal =
+        (widget.initialGroupId ?? BookGroup.idAll) == BookGroup.idLocal;
+    _pageProgress = startsOnLocal ? 2.0 : 0.0;
+    _pageController = PageController(initialPage: startsOnLocal ? 2 : 0);
     _pageController.addListener(_handlePageScroll);
     widget.visibilityListenable?.addListener(_handleVisibilityChanged);
     widget.requestedGroupIdListenable?.addListener(
@@ -124,8 +128,12 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
     if (requestedGroupId == null) {
       return;
     }
-    _viewModel.onIntent(SelectBookshelfGroupIntent(requestedGroupId));
-    _selectPage(0);
+    if (requestedGroupId == BookGroup.idLocal) {
+      _selectPage(2);
+    } else {
+      _viewModel.onIntent(SelectBookshelfGroupIntent(requestedGroupId));
+      _selectPage(0);
+    }
   }
 
   /// 一级目的地隐藏时清空批量选择，避免回到书架继续误操作。
@@ -144,15 +152,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
 
   /// 切换书架或历史页，并在书架不可见时退出选择模式。
   void _selectPage(int index) {
-    final int targetIndex = index.clamp(0, 1).toInt();
-    if (targetIndex != 0) {
-      _viewModel.onIntent(const ExitBookshelfSelectionIntent());
-    }
-    if (targetIndex != 1) {
-      _historyViewModel.onIntent(
-        const ExitReadingHistorySelectionIntent(),
-      );
-    }
+    final int targetIndex = index.clamp(0, 2).toInt();
+    _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    _historyViewModel.onIntent(
+      const ExitReadingHistorySelectionIntent(),
+    );
     if (_pageController.hasClients) {
       _pageController.animateToPage(
         targetIndex,
@@ -164,14 +168,10 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
 
   /// 处理横向翻页完成，离开书架页时取消选择模式。
   void _handlePageChanged(int index) {
-    if (index != 0) {
-      _viewModel.onIntent(const ExitBookshelfSelectionIntent());
-    }
-    if (index != 1) {
-      _historyViewModel.onIntent(
-        const ExitReadingHistorySelectionIntent(),
-      );
-    }
+    _viewModel.onIntent(const ExitBookshelfSelectionIntent());
+    _historyViewModel.onIntent(
+      const ExitReadingHistorySelectionIntent(),
+    );
   }
 
   /// 在内容页横滑期间仅更新固定顶部页签的轻量动画状态。
@@ -184,20 +184,21 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
       return;
     }
     setState(() {
-      _pageProgress = page.clamp(0.0, 1.0).toDouble();
+      _pageProgress = page.clamp(0.0, 2.0).toDouble();
     });
   }
 
   /// 处理固定顶部三项操作，并根据当前书架或历史页决定可执行行为。
   void _handleTopAction(int actionIndex) {
     final bool onBookshelf = _pageProgress < 0.5;
+    final bool onLocal = _pageProgress >= 1.5;
     if (actionIndex == 0) {
       _viewModel.onIntent(const OpenBookshelfLocalBookImportIntent());
       return;
     }
     switch (actionIndex) {
       case 1:
-        if (onBookshelf) {
+        if (onBookshelf || onLocal) {
           _viewModel.onIntent(const ToggleBookshelfLayoutIntent());
         } else {
           _historyViewModel.onIntent(const ToggleReadingHistoryLayoutIntent());
@@ -222,11 +223,12 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
   ) {
     /// 当前横滑位置主要展示的是否为书架页。
     final bool onBookshelf = _pageProgress < 0.5;
+    final bool onLocal = _pageProgress >= 1.5;
     /// 当前主要页面是否正在使用封面网格布局。
-    final bool currentGridLayout = onBookshelf
+    final bool currentGridLayout = onBookshelf || onLocal
         ? state.layoutMode == BookshelfLayoutMode.grid
         : historyState.layoutMode == ReadingHistoryLayoutMode.grid;
-    if (onBookshelf && state.selectionMode) {
+    if ((onBookshelf || onLocal) && state.selectionMode) {
       return AppBar(
         leading: IconButton(
           onPressed: () => _viewModel.onIntent(const ExitBookshelfSelectionIntent()),
@@ -237,7 +239,9 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
         actions: <Widget>[
           TextButton.icon(
             onPressed: () => _viewModel.onIntent(
-              const SelectAllBookshelfBooksIntent(),
+              SelectAllBookshelfBooksIntent(
+                onLocal ? state.localBooks.map((BookshelfBookItem item) => item.book.bookUrl) : state.books.map((BookshelfBookItem item) => item.book.bookUrl),
+              ),
             ),
             icon: const Icon(Icons.select_all),
             label: const Text('全选'),
@@ -296,7 +300,8 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
           ),
           tooltip: '切换列表或网格',
         ),
-        IconButton(onPressed: () => _handleTopAction(2), icon: Icon(_pageProgress < 0.5 && state.refreshing ? Icons.stop_circle_outlined : Icons.refresh), tooltip: _pageProgress < 0.5 && state.refreshing ? '停止刷新' : '刷新'),
+        if (!onLocal)
+          IconButton(onPressed: () => _handleTopAction(2), icon: Icon(_pageProgress < 0.5 && state.refreshing ? Icons.stop_circle_outlined : Icons.refresh), tooltip: _pageProgress < 0.5 && state.refreshing ? '停止刷新' : '刷新'),
       ],
     );
   }
@@ -357,7 +362,7 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
           AppRoute.bookInfo,
           arguments: BookInfoRouteArguments(
             group: BookSearchResultGroup(
-              key: '${book.name.length}:${book.name}${book.author}',
+              key: bookSearchResultGroupKey(searchBook),
               books: <SearchBook>[searchBook],
             ),
             selectedBook: searchBook,
@@ -409,16 +414,29 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
               '${diagnosticTransitionSpec.sourceRect != null}',
         );
       }
-      await Navigator.of(context).pushNamed<void>(
-        AppRoute.reader,
-        arguments: ReaderRouteArguments(
-          bookUrl: book.bookUrl,
-          initialBook: book,
-          initialIsInBookshelf: isInBookshelf,
-          transitionSpec: transitionSpec,
-          entry: entry,
-        ),
-      );
+      if (book.isImage) {
+        await Navigator.of(context).pushNamed<void>(
+          AppRoute.readingRouteFor(book),
+          arguments: MangaReaderRouteArguments(
+            bookUrl: book.bookUrl,
+            initialBook: book,
+            initialIsInBookshelf: isInBookshelf,
+            transitionSpec: transitionSpec,
+            entry: entry,
+          ),
+        );
+      } else {
+        await Navigator.of(context).pushNamed<void>(
+          AppRoute.readingRouteFor(book),
+          arguments: ReaderRouteArguments(
+            bookUrl: book.bookUrl,
+            initialBook: book,
+            initialIsInBookshelf: isInBookshelf,
+            transitionSpec: transitionSpec,
+            entry: entry,
+          ),
+        );
+      }
     } finally {
       _openingReader = false;
     }
@@ -661,6 +679,11 @@ final class _BookshelfRouteState extends State<BookshelfRoute> {
                     ReadingHistoryScreen(
                       state: historyState,
                       onIntent: _historyViewModel.onIntent,
+                    ),
+                    BookshelfScreen(
+                      state: state,
+                      onIntent: _viewModel.onIntent,
+                      local: true,
                     ),
                   ],
                 ),

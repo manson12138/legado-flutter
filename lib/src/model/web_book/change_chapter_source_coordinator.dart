@@ -1,5 +1,6 @@
 import '../../api/http/http_contract.dart';
 import '../../api/js/script_context.dart';
+import '../../constant/book_type.dart';
 import '../../domain/model/book.dart';
 import '../../domain/model/book_chapter.dart';
 import '../../domain/model/book_search.dart';
@@ -102,7 +103,13 @@ final class ChangeChapterSourceCoordinator {
               /// 当前书源与当前书完全相同的结果不能作为单章换源目标。
               final bool isCurrentBook =
                   candidate.origin == book.origin && candidate.bookUrl == book.bookUrl;
-              return nameMatches && authorMatches && !isCurrentBook;
+              /// 单章正文也不得跨漫画、文本、音频或文件类型选择来源。
+              final bool contentTypeMatches =
+                  BookType.hasCompatibleContentType(book.type, candidate.type);
+              return nameMatches &&
+                  authorMatches &&
+                  contentTypeMatches &&
+                  !isCurrentBook;
             }).toList(growable: false);
             if (candidates.isNotEmpty) {
               onEvent(BookSearchResultsEvent(source: source, books: candidates));

@@ -41,6 +41,7 @@ final class BookshelfScreen extends StatelessWidget {
   const BookshelfScreen({
     required this.state,
     required this.onIntent,
+    this.local = false,
     super.key,
   });
 
@@ -48,6 +49,8 @@ final class BookshelfScreen extends StatelessWidget {
   final BookshelfUiState state;
   /// 用户操作统一入口。
   final ValueChanged<BookshelfIntent> onIntent;
+  /// 是否渲染独立本地书页签。
+  final bool local;
 
   /// 构建高度稳定的筛选区、书籍内容和选择态悬浮操作条。
   @override
@@ -58,13 +61,21 @@ final class BookshelfScreen extends StatelessWidget {
           child: Column(
             children: <Widget>[
               // 选择模式继续保留搜索、分组和排序区，避免内容高度突变导致书架跳动。
-              _BookshelfControls(state: state, onIntent: onIntent),
-              if (state.refreshing || state.refreshProgress.total > 0)
+              _BookshelfControls(
+                state: state,
+                onIntent: onIntent,
+                local: local,
+              ),
+              if (!local && (state.refreshing || state.refreshProgress.total > 0))
                 _BookshelfRefreshStatus(state: state, onIntent: onIntent),
               if (state.refreshFailures.isNotEmpty)
                 _BookshelfRefreshFailures(failures: state.refreshFailures),
               Expanded(
-                child: _BookshelfBody(state: state, onIntent: onIntent),
+                child: _BookshelfBody(
+                  state: state,
+                  onIntent: onIntent,
+                  local: local,
+                ),
               ),
             ],
           ),
@@ -77,6 +88,7 @@ final class BookshelfScreen extends StatelessWidget {
             child: _BookshelfSelectionActions(
               state: state,
               onIntent: onIntent,
+              local: local,
             ),
           ),
       ],
@@ -91,12 +103,15 @@ final class _BookshelfSelectionActions extends StatelessWidget {
   const _BookshelfSelectionActions({
     required this.state,
     required this.onIntent,
+    required this.local,
   });
 
   /// 当前选择数量和单选能力判断所需状态。
   final BookshelfUiState state;
   /// 批量操作 Intent 入口。
   final ValueChanged<BookshelfIntent> onIntent;
+  /// 本地书没有联网刷新和整书换源动作。
+  final bool local;
 
   /// 构建可横向滚动的高对比度操作面板，窄屏不会挤掉动作文字。
   @override
@@ -116,13 +131,14 @@ final class _BookshelfSelectionActions extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: <Widget>[
-                _BookshelfSelectionActionButton(
-                  icon: Icons.refresh,
-                  label: '刷新',
-                  onPressed: () => onIntent(
-                    const RefreshBookshelfIntent(),
+                if (!local)
+                  _BookshelfSelectionActionButton(
+                    icon: Icons.refresh,
+                    label: '刷新',
+                    onPressed: () => onIntent(
+                      const RefreshBookshelfIntent(),
+                    ),
                   ),
-                ),
                 _BookshelfSelectionActionButton(
                   icon: Icons.drive_file_move_outline,
                   label: '分组',
@@ -139,15 +155,16 @@ final class _BookshelfSelectionActions extends StatelessWidget {
                         )
                       : null,
                 ),
-                _BookshelfSelectionActionButton(
-                  icon: Icons.swap_horiz,
-                  label: '换源',
-                  onPressed: singleSelection
-                      ? () => onIntent(
-                          const OpenSelectedBookSourceChangeIntent(),
-                        )
-                      : null,
-                ),
+                if (!local)
+                  _BookshelfSelectionActionButton(
+                    icon: Icons.swap_horiz,
+                    label: '换源',
+                    onPressed: singleSelection
+                        ? () => onIntent(
+                            const OpenSelectedBookSourceChangeIntent(),
+                          )
+                        : null,
+                  ),
                 _BookshelfSelectionActionButton(
                   icon: Icons.delete_outline,
                   label: '删除',
@@ -220,11 +237,17 @@ final class _BookshelfSelectionActionButton extends StatelessWidget {
 /// 展示搜索、分组和排序控制。
 final class _BookshelfControls extends StatelessWidget {
   /// 创建控制区。
-  const _BookshelfControls({required this.state, required this.onIntent});
+  const _BookshelfControls({
+    required this.state,
+    required this.onIntent,
+    required this.local,
+  });
   /// 当前状态。
   final BookshelfUiState state;
   /// Intent 入口。
   final ValueChanged<BookshelfIntent> onIntent;
+  /// 是否展示本地书分类。
+  final bool local;
 
   /// 构建共享筛选控件。
   @override
@@ -243,7 +266,7 @@ final class _BookshelfControls extends StatelessWidget {
             initialValue: state.query,
             onChanged: (String value) => onIntent(ChangeBookshelfQueryIntent(value)),
             decoration: InputDecoration(
-              hintText: '搜索书架',
+              hintText: local ? '搜索本地书籍' : '搜索书架',
               prefixIcon: const Icon(Icons.search, size: 18),
               prefixIconConstraints: const BoxConstraints(minWidth: 38, minHeight: 38),
               contentPadding: const EdgeInsets.symmetric(
@@ -283,25 +306,42 @@ final class _BookshelfControls extends StatelessWidget {
           Row(
             children: <Widget>[
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: state.groups.map((BookshelfGroupItem item) {
-                      return Padding(
-                        padding: const EdgeInsets.only(right: SpacingToken.small),
-                        child: ChoiceChip(
-                          selected: item.group.groupId == state.selectedGroupId,
-                          label: Text('${item.group.groupName} ${item.bookCount}'),
-                          onSelected: (bool selected) {
-                            if (selected) {
-                              onIntent(SelectBookshelfGroupIntent(item.group.groupId));
-                            }
-                          },
+                child: (local ? state.localHasManga : state.hasManga)
+                    ? Row(
+                  children: BookshelfContentCategory.values.map(
+                    (BookshelfContentCategory category) {
+                      final BookshelfContentCategory selectedCategory = local
+                          ? state.selectedLocalCategory
+                          : state.selectedCategory;
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: SpacingToken.small),
+                          child: ChoiceChip(
+                            selected: category == selectedCategory,
+                            label: Center(
+                              child: Text(
+                                category == BookshelfContentCategory.books
+                                    ? '书籍'
+                                    : '漫画',
+                              ),
+                            ),
+                            onSelected: (bool selected) {
+                              if (selected) {
+                                onIntent(
+                                  SelectBookshelfContentCategoryIntent(
+                                    category: category,
+                                    local: local,
+                                  ),
+                                );
+                              }
+                            },
+                          ),
                         ),
                       );
-                    }).toList(growable: false),
-                  ),
-                ),
+                    },
+                  ).toList(growable: false),
+                )
+                    : const SizedBox.shrink(),
               ),
               IconButton(
                 onPressed: () => onIntent(const ToggleBookshelfSortOrderIntent()),
@@ -395,11 +435,17 @@ final class _BookshelfRefreshFailures extends StatelessWidget {
 /// 根据状态渲染加载、空、列表或网格。
 final class _BookshelfBody extends StatelessWidget {
   /// 创建书架主体。
-  const _BookshelfBody({required this.state, required this.onIntent});
+  const _BookshelfBody({
+    required this.state,
+    required this.onIntent,
+    required this.local,
+  });
   /// 当前状态。
   final BookshelfUiState state;
   /// Intent 入口。
   final ValueChanged<BookshelfIntent> onIntent;
+  /// 是否渲染本地书集合。
+  final bool local;
 
   /// 构建书架内容。
   @override
@@ -407,15 +453,65 @@ final class _BookshelfBody extends StatelessWidget {
     if (state.loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (state.errorMessage != null && state.books.isEmpty) {
+    final List<BookshelfBookItem> books = local ? state.localBooks : state.books;
+    if (state.errorMessage != null && books.isEmpty) {
       return Center(child: Text(state.errorMessage ?? '书架加载失败'));
     }
-    if (state.books.isEmpty) {
-      return Center(child: Text(state.query.trim().isEmpty ? '书架还是空的，请先从搜索详情加入书籍' : '没有匹配的书籍'));
+    if (books.isEmpty) {
+      if (local && state.query.trim().isEmpty && !state.localHasManga) {
+        return _LocalBookAddEntry(onIntent: onIntent);
+      }
+      if (state.query.trim().isNotEmpty) {
+        return const Center(child: Text('没有匹配的书籍'));
+      }
+      if (local || state.hasManga) {
+        return const Center(child: Text('当前分类还没有书籍'));
+      }
+      return const Center(child: Text('书架还是空的，请先从搜索详情加入书籍'));
     }
+    final BookshelfUiState visibleState = state.copyWith(books: books);
     return state.layoutMode == BookshelfLayoutMode.list
-        ? _BookshelfList(state: state, onIntent: onIntent)
-        : _BookshelfGrid(state: state, onIntent: onIntent);
+        ? _BookshelfList(state: visibleState, onIntent: onIntent)
+        : _BookshelfGrid(state: visibleState, onIntent: onIntent);
+  }
+}
+
+/// 本地书为空时使用默认封面提供第二个明确导入入口。
+final class _LocalBookAddEntry extends StatelessWidget {
+  /// 创建本地书添加入口。
+  const _LocalBookAddEntry({required this.onIntent});
+
+  /// 页面 Intent 入口。
+  final ValueChanged<BookshelfIntent> onIntent;
+
+  /// 构建可点击的默认封面和“去添加”提示。
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(RadiusToken.medium),
+        onTap: () => onIntent(const OpenBookshelfLocalBookImportIntent()),
+        child: Padding(
+          padding: const EdgeInsets.all(SpacingToken.large),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                width: 112,
+                height: 156,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(RadiusToken.medium),
+                ),
+                child: const Icon(Icons.add_to_photos_outlined, size: 42),
+              ),
+              const SizedBox(height: SpacingToken.medium),
+              const Text('去添加本地书籍'),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -450,6 +546,10 @@ final class _BookshelfList extends StatelessWidget {
             : item.book.totalChapterNum > 0
                 ? '共 ${item.book.totalChapterNum} 章'
                 : null;
+        /// 图片书籍在作者前展示明确漫画标识，普通文本书保持原排版。
+        final String authorLabel = item.book.isImage
+            ? '漫画 · ${item.book.author}'
+            : item.book.author;
         /// 本次按下时形成的一次性封面几何，不进入状态也不跨重建保存。
         ReaderTransitionSpec? transitionSpec;
         /// 当前可见列表项中封面 Builder 的短生命周期上下文。
@@ -504,7 +604,7 @@ final class _BookshelfList extends StatelessWidget {
                 },
               ),
               title: Text(item.book.name),
-              subtitle: Text('${item.book.author}\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
+              subtitle: Text('$authorLabel\n${item.book.durChapterTitle ?? item.book.latestChapterTitle ?? '尚未阅读'}'),
               isThreeLine: true,
               trailing: state.selectionMode
                   ? Checkbox(
@@ -580,6 +680,10 @@ final class _BookshelfGrid extends StatelessWidget {
             final double authorFontSize = titleFontSize - 1;
             /// 未读章节字号：比作者名小 2 号。
             final double unreadFontSize = authorFontSize - 2;
+            /// 图片书籍在网格作者行展示明确漫画标识。
+            final String authorLabel = item.book.isImage
+                ? '漫画 · ${item.book.author}'
+                : item.book.author;
             /// 封面底部的章节状态；全部读完时仍展示目录总章数。
             final String? chapterStatusText = item.unreadChapterCount > 0
                 ? '${item.unreadChapterCount} 章未读'
@@ -700,7 +804,7 @@ final class _BookshelfGrid extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                             Text(
-                              item.book.author,
+                              authorLabel,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(

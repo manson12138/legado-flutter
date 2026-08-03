@@ -14,7 +14,7 @@ final class ReadingProgress {
   final String bookUrl;
   /// 当前章节从零开始索引。
   final int chapterIndex;
-  /// 当前章节首个可见字符位置。
+  /// 当前章节内兼容位置；文本为字符偏移，漫画仅由漫画适配层写入图片索引。
   final int chapterPos;
   /// 最近阅读时间，Unix Epoch 毫秒。
   final int readTime;

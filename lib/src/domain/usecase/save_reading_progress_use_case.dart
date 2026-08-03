@@ -3,7 +3,7 @@ import '../gateway/reading_progress_gateway.dart';
 import '../model/reading_progress.dart';
 import 'use_case_guard.dart';
 
-/// 保存阅读章节和字符位置，对应 Android `BookDao.upProgress` 及完整进度更新调用点。
+/// 保存阅读章节和类型相关位置，对应 Android `BookDao.upProgress` 及完整进度更新调用点。
 final class SaveReadingProgressUseCase {
   /// 创建阅读进度保存 UseCase。
   const SaveReadingProgressUseCase(this._gateway);
@@ -20,7 +20,7 @@ final class SaveReadingProgressUseCase {
     }
     if (progress.chapterIndex < 0 || progress.chapterPos < 0) {
       return Future<AppResult<bool>>.value(
-        validationFailure<bool>('阅读章节和字符位置不能为负数'),
+        validationFailure<bool>('阅读章节和章节内位置不能为负数'),
       );
     }
     if (progress.readTime < 0 || progress.syncTime < 0) {

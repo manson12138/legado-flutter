@@ -6,6 +6,7 @@ import '../../domain/gateway/search_history_gateway.dart';
 import '../../domain/model/book_search.dart';
 import '../../domain/model/book_source.dart';
 import '../../domain/model/search_book.dart';
+import '../../constant/book_source_type.dart';
 import '../../app/search_preferences.dart';
 import '../../help/logging/app_logger.dart';
 import '../../model/web_book/book_search_coordinator.dart';
@@ -108,8 +109,15 @@ final class SearchViewModel {
         _retryFailures();
       case ToggleSearchSourceIntent(sourceUrl: final String sourceUrl):
         _toggleSourceSelection(sourceUrl);
+      case ToggleSearchSourceTypeIntent(manga: final bool manga):
+        _toggleSourceType(manga: manga);
       case SelectAllSearchSourcesIntent():
-        _emit(_state.copyWith(selectedSourceUrls: <String>{}, useAllSources: true));
+        _emit(_state.copyWith(
+          selectedSourceUrls: <String>{},
+          useAllSources: true,
+          booksTypeSelected: true,
+          mangaTypeSelected: true,
+        ));
       case ConfirmEnableAllSearchSourcesIntent():
         _confirmEnableAllSearchSources();
       case DismissEnableAllSearchSourcesIntent():
@@ -133,6 +141,8 @@ final class SearchViewModel {
             clearSelectedSourceGroup: selectedSourceGroup == null,
             sourceQuery: sourceQuery,
             onlySuccessfulSources: onlySuccessfulSources,
+            booksTypeSelected: false,
+            mangaTypeSelected: false,
           ),
         );
       case ChangeSearchSourceGroupIntent(group: final String? group):
@@ -462,6 +472,8 @@ final class SearchViewModel {
         clearSelectedSourceGroup: true,
         sourceQuery: '',
         onlySuccessfulSources: false,
+        booksTypeSelected: true,
+        mangaTypeSelected: true,
         clearPendingEnableAllSearchKeyword: true,
       ),
     );
@@ -654,7 +666,7 @@ final class SearchViewModel {
     }
   }
 
-  /// 按 Android 严格书名作者键合并来源，并按精确匹配和来源数排序。
+  /// 按严格书名、作者和主要内容类型合并来源，并按精确匹配和来源数排序。
   void _merge(List<SearchBook> books) {
     /// 【搜书诊断日志】合并前已有的结果组数量。
     final int previousGroupCount = _resultBooks.length;
@@ -662,9 +674,9 @@ final class SearchViewModel {
       if (!_matchesSearchMode(book)) {
         continue;
       }
-      /// 避免拼接碰撞的内部键。
-      final String key = '${book.name.length}:${book.name}${book.author}';
-      /// 当前同名作者来源列表。
+      /// 避免同名文本、漫画、音频和文件候选互相合并的内部键。
+      final String key = bookSearchResultGroupKey(book);
+      /// 当前同名作者且内容类型兼容的来源列表。
       final List<SearchBook> candidates = _resultBooks.putIfAbsent(key, () => <SearchBook>[]);
       if (!candidates.any((SearchBook value) => value.origin == book.origin && value.bookUrl == book.bookUrl)) {
         candidates.add(book);
@@ -768,7 +780,49 @@ final class SearchViewModel {
     if (!selected.add(sourceUrl)) {
       selected.remove(sourceUrl);
     }
-    _emit(_state.copyWith(selectedSourceUrls: selected, useAllSources: false));
+    _emit(_state.copyWith(
+      selectedSourceUrls: selected,
+      useAllSources: false,
+      booksTypeSelected: false,
+      mangaTypeSelected: false,
+    ));
+  }
+
+  /// 整批选择或取消一种内容类型的所有书源，两个按钮默认共同表达全部书源。
+  void _toggleSourceType({required bool manga}) {
+    final bool currentlySelected = manga
+        ? _state.mangaTypeSelected
+        : _state.booksTypeSelected;
+    final bool noQuickTypeSelected =
+        !_state.booksTypeSelected && !_state.mangaTypeSelected;
+    final Set<String> selected = !currentlySelected && noQuickTypeSelected
+        ? <String>{}
+        : _state.useAllSources
+            ? _state.sources.map((BookSource source) => source.bookSourceUrl).toSet()
+            : Set<String>.from(_state.selectedSourceUrls);
+    final Set<String> typeUrls = _state.sources.where((BookSource source) {
+      final bool isManga = source.bookSourceType == BookSourceType.image;
+      return manga ? isManga : !isManga;
+    }).map((BookSource source) => source.bookSourceUrl).toSet();
+    if (currentlySelected) {
+      selected.removeAll(typeUrls);
+    } else {
+      selected.addAll(typeUrls);
+    }
+    final bool booksSelected = manga
+        ? _state.booksTypeSelected
+        : !currentlySelected;
+    final bool mangaSelected = manga
+        ? !currentlySelected
+        : _state.mangaTypeSelected;
+    _emit(
+      _state.copyWith(
+        selectedSourceUrls: selected,
+        useAllSources: booksSelected && mangaSelected,
+        booksTypeSelected: booksSelected,
+        mangaTypeSelected: mangaSelected,
+      ),
+    );
   }
 
   /// 反选当前全部可用书源。

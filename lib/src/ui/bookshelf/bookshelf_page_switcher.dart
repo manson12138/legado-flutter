@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// 书架目的地中按横滑进度显示的固定双页页签。
+/// 书架目的地中按横滑进度显示的书架、历史和本地三页页签。
 final class BookshelfPageSwitcher extends StatelessWidget {
-  /// 创建书架和历史页签。
+  /// 创建书架、历史和本地页签。
   const BookshelfPageSwitcher({
     required this.pageProgress,
     required this.onSelected,
     super.key,
   });
 
-  /// 当前从书架（0）到历史（1）的手势动画进度。
+  /// 当前从书架（0）、历史（1）到本地（2）的手势动画进度。
   final double pageProgress;
 
   /// 用户点击目标页签后的回调。
@@ -18,12 +18,17 @@ final class BookshelfPageSwitcher extends StatelessWidget {
   /// 构建随手势连续过渡字号的纯文字页签。
   @override
   Widget build(BuildContext context) {
-    /// 将横滑进度限制为两个页签之间的有效区间。
-    final double progress = pageProgress.clamp(0.0, 1.0);
-    /// 书架文字从选中字号平滑缩小到未选中字。
-    final double bookshelfFontSize = 20 - 3 * progress;
-    /// 历史文字从未选中字平滑放大到选中字号。
-    final double historyFontSize = 17 + 3 * progress;
+    /// 将横滑进度限制为三个页签之间的有效区间。
+    final double progress = pageProgress.clamp(0.0, 2.0).toDouble();
+    /// 书架页签与当前横滑位置的接近程度。
+    final double bookshelfEmphasis =
+        (1.0 - (progress - 0).abs()).clamp(0.0, 1.0).toDouble();
+    /// 历史页签与当前横滑位置的接近程度。
+    final double historyEmphasis =
+        (1.0 - (progress - 1).abs()).clamp(0.0, 1.0).toDouble();
+    /// 本地页签与当前横滑位置的接近程度。
+    final double localEmphasis =
+        (1.0 - (progress - 2).abs()).clamp(0.0, 1.0).toDouble();
     return SizedBox(
       height: 40,
       child: Row(
@@ -31,16 +36,23 @@ final class BookshelfPageSwitcher extends StatelessWidget {
         children: <Widget>[
           _PageSegment(
             label: '书架',
-            emphasis: 1 - progress,
-            fontSize: bookshelfFontSize,
+            emphasis: bookshelfEmphasis,
+            fontSize: 17.0 + 3.0 * bookshelfEmphasis,
             onPressed: () => onSelected(0),
           ),
           const SizedBox(width: 16),
           _PageSegment(
             label: '历史',
-            emphasis: progress,
-            fontSize: historyFontSize,
+            emphasis: historyEmphasis,
+            fontSize: 17.0 + 3.0 * historyEmphasis,
             onPressed: () => onSelected(1),
+          ),
+          const SizedBox(width: 16),
+          _PageSegment(
+            label: '本地',
+            emphasis: localEmphasis,
+            fontSize: 17.0 + 3.0 * localEmphasis,
+            onPressed: () => onSelected(2),
           ),
         ],
       ),

@@ -137,6 +137,24 @@ final class BookshelfViewModel {
       case SelectBookshelfGroupIntent(groupId: final int groupId):
         _emit(_state.copyWith(selectedGroupId: groupId, selectionMode: false, selectedBookUrls: <String>{}));
         _rebuild();
+      case SelectBookshelfContentCategoryIntent(
+        category: final BookshelfContentCategory category,
+        local: final bool local,
+      ):
+        _emit(
+          local
+              ? _state.copyWith(
+                  selectedLocalCategory: category,
+                  selectionMode: false,
+                  selectedBookUrls: <String>{},
+                )
+              : _state.copyWith(
+                  selectedCategory: category,
+                  selectionMode: false,
+                  selectedBookUrls: <String>{},
+                ),
+        );
+        _rebuild();
       case ChangeBookshelfSortIntent(sortMode: final BookshelfSortMode sortMode):
         _emit(_state.copyWith(sortMode: sortMode));
         _rebuild();
@@ -150,8 +168,8 @@ final class BookshelfViewModel {
         _tapBook(bookUrl, transitionSpec: transitionSpec);
       case LongPressBookshelfBookIntent(bookUrl: final String bookUrl):
         _emit(_state.copyWith(selectionMode: true, selectedBookUrls: <String>{bookUrl}));
-      case SelectAllBookshelfBooksIntent():
-        _emit(_state.copyWith(selectedBookUrls: _state.books.map((BookshelfBookItem item) => item.book.bookUrl).toSet()));
+      case SelectAllBookshelfBooksIntent(bookUrls: final Set<String> bookUrls):
+        _emit(_state.copyWith(selectedBookUrls: bookUrls));
       case ExitBookshelfSelectionIntent():
         _exitSelection();
       case RefreshBookshelfIntent():
@@ -278,6 +296,9 @@ final class BookshelfViewModel {
         loading: true,
         groups: const <BookshelfGroupItem>[],
         books: const <BookshelfBookItem>[],
+        localBooks: const <BookshelfBookItem>[],
+        hasManga: false,
+        localHasManga: false,
         selectionMode: false,
         selectedBookUrls: const <String>{},
         refreshing: false,
@@ -335,22 +356,49 @@ final class BookshelfViewModel {
     final int effectiveGroupId = selectedGroupExists
         ? _state.selectedGroupId
         : BookGroup.idAll;
-    /// 当前分组书籍。
-    final List<Book> filtered = _allBooks.where((Book book) {
-      return _matchesGroup(book, effectiveGroupId) && _matchesQuery(book, _state.query);
-    }).toList(growable: false);
-    if (effectiveGroupId == BookGroup.idLocal) {
-      _logLocalFilterResult(filtered);
-    }
-    filtered.sort(_compareBooks);
-    /// 当前显示模型。
-    final List<BookshelfBookItem> items = filtered.map(_toItem).toList(growable: false);
+    /// 书架页只接收网络书，本地书不会同时出现在书架和本地两个页签。
+    final List<Book> networkBooks = _allBooks
+        .where((Book book) => book.origin != 'loc_book')
+        .toList(growable: false);
+    /// 本地页只接收本地导入书籍。
+    final List<Book> localBooks = _allBooks
+        .where((Book book) => book.origin == 'loc_book')
+        .toList(growable: false);
+    /// 对应页面是否真实存在漫画，用于决定是否显示书籍/漫画分类。
+    final bool hasManga = networkBooks.any((Book book) => book.isImage);
+    /// 本地页是否存在漫画。
+    final bool localHasManga = localBooks.any((Book book) => book.isImage);
+    /// 漫画消失后分类自动回退书籍，避免页面停在不可见空分类。
+    final BookshelfContentCategory networkCategory = hasManga
+        ? _state.selectedCategory
+        : BookshelfContentCategory.books;
+    final BookshelfContentCategory localCategory = localHasManga
+        ? _state.selectedLocalCategory
+        : BookshelfContentCategory.books;
+    /// 书架页当前可见书籍。
+    final List<Book> filtered = networkBooks.where((Book book) {
+      return _matchesContentCategory(book, networkCategory) &&
+          _matchesQuery(book, _state.query);
+    }).toList(growable: false)
+      ..sort(_compareBooks);
+    /// 本地页当前可见书籍。
+    final List<Book> filteredLocalBooks = localBooks.where((Book book) {
+      return _matchesContentCategory(book, localCategory) &&
+          _matchesQuery(book, _state.query);
+    }).toList(growable: false)
+      ..sort(_compareBooks);
+    _logLocalFilterResult(filteredLocalBooks);
     _emit(
       _state.copyWith(
         loading: !(_booksReady && _groupsReady),
         selectedGroupId: effectiveGroupId,
+        selectedCategory: networkCategory,
+        selectedLocalCategory: localCategory,
+        hasManga: hasManga,
+        localHasManga: localHasManga,
         groups: groups,
-        books: items,
+        books: filtered.map(_toItem).toList(growable: false),
+        localBooks: filteredLocalBooks.map(_toItem).toList(growable: false),
         selectedBookUrls: selected,
         selectionMode: selected.isNotEmpty && _state.selectionMode,
         clearError: true,
@@ -358,16 +406,8 @@ final class BookshelfViewModel {
     );
   }
 
-  /// 构建固定系统分组与数据库用户分组。
+  /// 构建批量移动仍需使用的数据库用户分组；系统分类不再进入页面筛选栏。
   List<BookshelfGroupItem> _buildGroups() {
-    /// 固定第一批系统分组。
-    final List<BookGroup> systemGroups = <BookGroup>[
-      const BookGroup(groupId: BookGroup.idAll, groupName: '全部'),
-      const BookGroup(groupId: BookGroup.idLocal, groupName: '本地'),
-      const BookGroup(groupId: BookGroup.idNetNone, groupName: '未分组'),
-      const BookGroup(groupId: BookGroup.idUnread, groupName: '未读'),
-      const BookGroup(groupId: BookGroup.idReading, groupName: '阅读中'),
-    ];
     /// 可显示用户分组。
     final List<BookGroup> visibleUserGroups = _userGroups.where((BookGroup group) {
       return group.show && group.groupId > 0;
@@ -377,11 +417,21 @@ final class BookshelfViewModel {
         final int order = left.order.compareTo(right.order);
         return order != 0 ? order : left.groupId.compareTo(right.groupId);
       });
-    return <BookGroup>[...systemGroups, ...visibleUserGroups].map((BookGroup group) {
+    return visibleUserGroups.map((BookGroup group) {
       /// 当前分组数量。
       final int count = _allBooks.where((Book book) => _matchesGroup(book, group.groupId)).length;
       return BookshelfGroupItem(group: group, bookCount: count);
     }).toList(growable: false);
+  }
+
+  /// 判断书籍是否属于当前“书籍/漫画”分类。
+  bool _matchesContentCategory(
+    Book book,
+    BookshelfContentCategory category,
+  ) {
+    return category == BookshelfContentCategory.manga
+        ? book.isImage
+        : !book.isImage;
   }
 
   /// 判断书籍是否属于系统或用户分组。
