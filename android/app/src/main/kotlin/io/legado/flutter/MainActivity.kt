@@ -46,6 +46,9 @@ class MainActivity : FlutterActivity() {
     /** M08.1 外部 TXT 文件关联桥；Activity 销毁时同步释放通道和文件线程。 */
     private var externalTxtOpenBridge: ExternalTxtOpenBridge? = null
 
+    /** Android APK 下载、校验和安装器桥；Activity 销毁时同步释放。 */
+    private var appUpdateBridge: AppUpdateBridge? = null
+
     /** 当前 Activity 生命周期内是否已经申请过通知权限，避免状态刷新重复弹窗。 */
     private var notificationPermissionRequested = false
 
@@ -62,6 +65,7 @@ class MainActivity : FlutterActivity() {
         registerDownloadBackgroundChannel(flutterEngine)
         registerPasswordEncryptionChannel(flutterEngine)
         registerAppPackageInfoChannel(flutterEngine)
+        appUpdateBridge = AppUpdateBridge(this, flutterEngine)
         /** 桥创建后立即消费冷启动 Intent；文件复制仍由桥的后台线程延后执行。 */
         externalTxtOpenBridge = ExternalTxtOpenBridge(this, flutterEngine).also { bridge ->
             bridge.handleIntent(intent)
@@ -155,6 +159,8 @@ class MainActivity : FlutterActivity() {
 
     /** Activity 销毁时解除外部 TXT 通道并停止其串行文件线程。 */
     override fun onDestroy() {
+        appUpdateBridge?.dispose()
+        appUpdateBridge = null
         externalTxtOpenBridge?.dispose()
         externalTxtOpenBridge = null
         super.onDestroy()

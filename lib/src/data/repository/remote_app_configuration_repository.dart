@@ -107,6 +107,8 @@ final class RemoteAppConfigurationRepository {
         versionName: _readOptionalString(statusValue, 'versionName'),
         latestVersionCode: _readOptionalInt(statusValue, 'latestVersionCode'),
         downloadUrl: _readOptionalString(statusValue, 'downloadUrl'),
+        downloadSha256: _readOptionalString(statusValue, 'downloadSha256'),
+        downloadByteSize: _readOptionalInt(statusValue, 'downloadByteSize'),
         changelog: _readOptionalString(statusValue, 'changelog'),
       );
     } on FormatException {
@@ -123,6 +125,7 @@ final class RemoteAppConfigurationRepository {
     return _config.hasInstalledVersionIdentity &&
         value['productId'] == _config.productId &&
         value['appVersionName'] == _config.appVersionName &&
+        value['platform'] == _config.platform &&
         value['channel'] == _config.channel;
   }
 
@@ -132,6 +135,7 @@ final class RemoteAppConfigurationRepository {
           'productId': _config.productId,
           'appVersionName': _config.appVersionName,
           'appVersionCode': _config.appVersionCode,
+          'platform': _config.platform,
           'channel': _config.channel,
           'checkedAt': DateTime.now().toUtc().millisecondsSinceEpoch,
           'status': <String, Object?>{
@@ -142,6 +146,8 @@ final class RemoteAppConfigurationRepository {
             'versionName': status.versionName,
             'latestVersionCode': status.latestVersionCode,
             'downloadUrl': status.downloadUrl,
+            'downloadSha256': status.downloadSha256,
+            'downloadByteSize': status.downloadByteSize,
             'changelog': status.changelog,
           },
         },

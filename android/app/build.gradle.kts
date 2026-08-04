@@ -73,3 +73,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // APK 只通过受限 FileProvider 临时授权给 Android 系统安装器。
+    implementation("androidx.core:core:1.13.1")
+}

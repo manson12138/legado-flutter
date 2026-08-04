@@ -22,6 +22,7 @@ import '../help/logging/app_log_manager.dart';
 import '../help/crash_reporting/crash_report_manager.dart';
 import '../api/remote_app/remote_app_service_config.dart';
 import '../platform/external_local_book_open_service.dart';
+import '../platform/android_apk_update_service.dart';
 
 /// 在 Flutter 首帧后创建完整业务组合根，避免原生启动页等待数据库、网络和阅读器对象装配。
 final class LegadoBootstrapApp extends StatefulWidget {
@@ -705,6 +706,21 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
   String? _dismissedVersion;
   /// 已写入展示日志的更新状态，避免 Widget 重建产生重复诊断日志。
   String? _loggedUpdatePresentation;
+
+  /// Android 专用 APK 下载与安装桥；iOS 只保留 TestFlight 外部跳转。
+  late final AndroidApkUpdateService _androidApkUpdateService;
+
+  @override
+  void initState() {
+    super.initState();
+    _androidApkUpdateService = AndroidApkUpdateService();
+  }
+
+  @override
+  void dispose() {
+    _androidApkUpdateService.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<AppAccessState>(
     valueListenable: widget.coordinator.state,
@@ -751,7 +767,7 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     ),
   );
 
-  /// 构建可暂缓的升级弹窗；服务端提供安全地址时展示可打开和复制的下载地址。
+  /// 构建可暂缓的升级弹窗；Android 下载 APK，iOS 只跳转 TestFlight。
   Widget _buildOptionalUpdate(BuildContext context, AppAccessState state, String changelog) => Stack(children: <Widget>[
     const ModalBarrier(dismissible: false, color: Color(0x66000000)),
     Center(child: AlertDialog(
@@ -762,15 +778,17 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text('已有新版本${state.versionName == null ? '' : ' ${state.versionName}'}可用。${changelog.isEmpty ? '' : '\n\n$changelog'}'),
-            if (_hasDownloadAddress(state.downloadUrl)) ...<Widget>[
-              const SizedBox(height: 16),
-              _buildDownloadAddress(context, state.downloadUrl),
-            ],
+            if (_isAndroid && state.downloadByteSize case final int byteSize)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text('安装包大小：${_formatByteSize(byteSize)}'),
+              ),
+            if (_isAndroid) _buildAndroidUpdateProgress(),
           ],
         ),
       ),
       actions: <Widget>[
-        if (_downloadUri(state.downloadUrl) != null) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
+        if (_downloadUri(state.downloadUrl) != null) _buildUpdateButton(state),
         TextButton(onPressed: () {
           widget.dependencies.logger.info(
             tag: appAccessCheckLogTag,
@@ -795,12 +813,14 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
         Text(state.message ?? '请更新到最新版本后再继续使用。', textAlign: TextAlign.center),
         if (state.versionName != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('推荐版本：${state.versionName}')),
         if (state.changelog case final String value when value.trim().isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(value, textAlign: TextAlign.center)),
-        if (_hasDownloadAddress(state.downloadUrl)) Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: _buildDownloadAddress(context, state.downloadUrl),
-        ),
+        if (_isAndroid && state.downloadByteSize case final int byteSize)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text('安装包大小：${_formatByteSize(byteSize)}'),
+          ),
+        if (_isAndroid) _buildAndroidUpdateProgress(),
         const SizedBox(height: 24),
-        if (_downloadUri(state.downloadUrl) != null) FilledButton(onPressed: () => _openDownload(state.downloadUrl), child: const Text('立即更新')),
+        if (_downloadUri(state.downloadUrl) != null) _buildUpdateButton(state),
         if (_downloadUri(state.downloadUrl) != null) const SizedBox(height: 8),
         FilledButton.tonal(onPressed: () => widget.coordinator.refresh(trigger: 'blocking_page_retry'), child: const Text('重新检查')),
         const SizedBox(height: 8),
@@ -809,9 +829,8 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     ))),
   );
 
-  /// 非空下载地址始终展示并允许复制，不能因跳转校验失败而隐藏服务端原值。
-  bool _hasDownloadAddress(String? rawUrl) =>
-      rawUrl?.trim().isNotEmpty == true;
+  /// 当前覆盖层是否运行在 Android；其他平台按 iOS/TestFlight 外链行为退化。
+  bool get _isAndroid => defaultTargetPlatform == TargetPlatform.android;
 
   /// 只把浏览器可处理的 HTTP 或 HTTPS 下载地址交给系统外部应用。
   Uri? _downloadUri(String? rawUrl) {
@@ -826,46 +845,93 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     return uri;
   }
 
-  /// 构建完整可见的下载地址；点击以外部浏览器打开，长按复制原始地址。
-  Widget _buildDownloadAddress(BuildContext context, String? rawUrl) {
-    final String address = rawUrl?.trim() ?? '';
-    if (address.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _openDownload(address),
-      onLongPress: () => _copyDownloadAddress(address),
-      child: Semantics(
-        button: true,
-        label: '下载地址，点击打开外部浏览器，长按复制',
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text('下载地址（点击打开，长按复制）', style: Theme.of(context).textTheme.labelMedium),
-              const SizedBox(height: 6),
-              Text(address, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
-            ],
+  /// 根据平台和 Android APK 元数据构建唯一更新动作。
+  Widget _buildUpdateButton(AppAccessState state) =>
+      ValueListenableBuilder<AndroidApkUpdateState>(
+        valueListenable: _androidApkUpdateService.state,
+        builder: (
+          BuildContext context,
+          AndroidApkUpdateState updateState,
+          Widget? child,
+        ) => FilledButton(
+          onPressed: updateState.isBusy ? null : () => _startUpdate(state),
+          child: Text(
+            _isAndroid
+                ? switch (updateState.stage) {
+                    AndroidApkUpdateStage.permissionRequired => '继续安装',
+                    AndroidApkUpdateStage.installing => '重新打开安装器',
+                    AndroidApkUpdateStage.failed => '重试更新',
+                    _ => '立即更新',
+                  }
+                : '前往 TestFlight',
           ),
         ),
-      ),
-    );
+      );
+
+  /// Android 展示下载、校验和权限状态；iOS 不创建 APK 进度入口。
+  Widget _buildAndroidUpdateProgress() =>
+      ValueListenableBuilder<AndroidApkUpdateState>(
+        valueListenable: _androidApkUpdateService.state,
+        builder: (
+          BuildContext context,
+          AndroidApkUpdateState updateState,
+          Widget? child,
+        ) {
+          if (updateState.stage == AndroidApkUpdateStage.idle) {
+            return const SizedBox.shrink();
+          }
+          return Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                if (updateState.isBusy)
+                  LinearProgressIndicator(value: updateState.progress),
+                if (updateState.message case final String message)
+                  Padding(
+                    padding: EdgeInsets.only(top: updateState.isBusy ? 8 : 0),
+                    child: Text(message),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
+
+  /// Android 元数据完整时走应用内续传，否则按手动外链打开；iOS 固定打开 TestFlight。
+  Future<void> _startUpdate(AppAccessState state) async {
+    final Uri? uri = _downloadUri(state.downloadUrl);
+    if (uri == null) {
+      return _openExternalUpdate(state.downloadUrl);
+    }
+    final String? sha256 = state.downloadSha256;
+    final int? byteSize = state.downloadByteSize;
+    if (_isAndroid &&
+        sha256 != null &&
+        byteSize != null &&
+        state.versionName != null) {
+      await _androidApkUpdateService.downloadAndInstall(
+        url: uri.toString(),
+        sha256: sha256,
+        byteSize: byteSize,
+        versionName: state.versionName ?? '',
+      );
+      return;
+    }
+    await _openExternalUpdate(uri.toString());
   }
 
+  /// 将 APK 字节数转换为稳定的一位小数 MiB 展示。
+  String _formatByteSize(int byteSize) =>
+      '${(byteSize / (1024 * 1024)).toStringAsFixed(1)} MiB';
+
   /// 委托系统浏览器处理升级地址；失败时保留当前阻断状态并反馈给用户。
-  Future<void> _openDownload(String? rawUrl) async {
+  Future<void> _openExternalUpdate(String? rawUrl) async {
     final Uri? uri = _downloadUri(rawUrl);
     if (uri == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('下载地址无效，请长按复制后手动打开')),
+          SnackBar(content: Text(_isAndroid ? '更新地址无效，请稍后重试' : 'TestFlight 地址无效，请稍后重试')),
         );
       }
       return;
@@ -874,22 +940,7 @@ final class _AppAccessOverlayState extends State<_AppAccessOverlay> {
     if (!mounted || launched) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('无法打开升级地址，请稍后重试')));
-  }
-
-  /// 将弹窗中完整展示的下载地址复制到系统剪贴板，并反馈操作结果。
-  Future<void> _copyDownloadAddress(String rawUrl) async {
-    final String address = rawUrl.trim();
-    if (address.isEmpty) {
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: address));
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('下载地址已复制')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_isAndroid ? '无法打开更新地址，请稍后重试' : '无法打开 TestFlight，请稍后重试')));
   }
 }
 

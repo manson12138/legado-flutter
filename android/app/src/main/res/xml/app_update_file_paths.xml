@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 只暴露更新缓存子目录，不能授权整个 cache 或应用数据目录。 -->
+    <cache-path
+        name="verified_app_updates"
+        path="app_updates/" />
+</paths>

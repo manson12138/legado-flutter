@@ -27,6 +27,7 @@ final class RemoteAppApi {
     'productId': '${_config.productId}',
     'versionName': _config.appVersionName,
     'versionCode': '${_config.appVersionCode}',
+    'platform': _config.platform,
     'channel': _config.channel,
   });
 
@@ -38,6 +39,21 @@ final class RemoteAppApi {
     if (accessValue is! Map<Object?, Object?> || accessValue['allowed'] is! bool || updateValue is! Map<Object?, Object?> || updateValue['hasUpdate'] is! bool) {
       throw const UnifiedHttpException(HttpFailureKind.decode, '应用启动配置缺少准入或升级状态');
     }
+    final String? downloadSha256 = updateValue['downloadSha256'] is String
+        ? (updateValue['downloadSha256'] as String).trim().toLowerCase()
+        : null;
+    final int? downloadByteSize = updateValue['downloadByteSize'] is num
+        ? (updateValue['downloadByteSize'] as num).toInt()
+        : null;
+    if ((downloadSha256 == null) != (downloadByteSize == null) ||
+        (downloadSha256 != null &&
+            !RegExp(r'^[0-9a-f]{64}$').hasMatch(downloadSha256)) ||
+        (downloadByteSize != null && downloadByteSize <= 0)) {
+      throw const UnifiedHttpException(
+        HttpFailureKind.decode,
+        '应用启动配置的安装包校验信息无效',
+      );
+    }
     return RemoteAppBootstrapStatus(
       allowed: accessValue['allowed'] as bool,
       accessMessage: accessValue['message'] is String ? accessValue['message'] as String : null,
@@ -46,6 +62,8 @@ final class RemoteAppApi {
       versionName: updateValue['latestVersion'] is String ? updateValue['latestVersion'] as String : null,
       latestVersionCode: updateValue['latestVersionCode'] is num ? (updateValue['latestVersionCode'] as num).toInt() : null,
       downloadUrl: updateValue['downloadUrl'] is String ? updateValue['downloadUrl'] as String : null,
+      downloadSha256: downloadSha256,
+      downloadByteSize: downloadByteSize,
       changelog: updateValue['changelog'] is String ? updateValue['changelog'] as String : null,
     );
   }
@@ -971,7 +989,7 @@ final class RemoteCrashReportReceipt {
 
 final class RemoteAppBootstrapStatus {
   /// 创建准入与升级状态。
-  const RemoteAppBootstrapStatus({required this.allowed, required this.hasUpdate, required this.forceUpdate, this.accessMessage, this.versionName, this.latestVersionCode, this.downloadUrl, this.changelog});
+  const RemoteAppBootstrapStatus({required this.allowed, required this.hasUpdate, required this.forceUpdate, this.accessMessage, this.versionName, this.latestVersionCode, this.downloadUrl, this.downloadSha256, this.downloadByteSize, this.changelog});
   /// 服务端是否允许当前版本继续运行。
   final bool allowed;
   /// 准入拒绝时可展示的服务端文案。
@@ -986,6 +1004,10 @@ final class RemoteAppBootstrapStatus {
   final int? latestVersionCode;
   /// 服务端提供的升级下载地址；调用方必须先校验为安全外部链接。
   final String? downloadUrl;
+  /// Android 服务端 APK 的小写 SHA-256；手动外链和 iOS TestFlight 为空。
+  final String? downloadSha256;
+  /// Android 服务端 APK 的精确字节数；手动外链和 iOS TestFlight 为空。
+  final int? downloadByteSize;
   /// 服务端提供的版本更新说明。
   final String? changelog;
 }

@@ -13,7 +13,7 @@
 使用现有 SQLite `caches` 表新增一个 JSON 缓存键，不新增表、字段或远端 API：
 
 - 当前客户端身份：`productId`、实际安装包 `appVersionName`、`channel`。`appVersionCode` 继续随缓存保存并发送给服务端，但 Android versionCode 与 iOS build number 不参与跨平台缓存身份判断。
-- 已确认状态：`allowed`、`accessMessage`、`hasUpdate`、`forceUpdate`、`versionName`、`latestVersionCode`、`downloadUrl`、`changelog`。
+- 已确认状态：`allowed`、`accessMessage`、`hasUpdate`、`forceUpdate`、`versionName`、`latestVersionCode`、`downloadUrl`、`downloadSha256`、`downloadByteSize`、`changelog`。
 - 缓存记录时间，仅用于诊断和未来治理；本次不因时间过期自动放行已确认的阻断。
 
 该状态与账号无关，而与 App 版本和服务端准入规则相关；登出不得清除。密码、Token、完整 bootstrap 正文及任何私密数据不得写入此缓存或日志。
@@ -32,7 +32,7 @@
        -> 失败：保留已恢复状态；无缓存则不阻断
 ```
 
-当持久化记录的 `productId`、实际安装包 `versionName` 或 `channel` 与当前安装不一致时，必须忽略并删除该记录：新语义版本不能被旧版本的强制升级或拒绝状态永久阻断。Android versionCode 与 iOS build number 允许独立变化，不参与判断。只有服务端成功返回 `allowed=true` 且 `forceUpdate=false` 时，才允许覆盖、解除此前阻断。
+当持久化记录的 `productId`、实际安装包 `versionName`、`platform` 或 `channel` 与当前安装不一致时，必须忽略并删除该记录：新语义版本或另一平台的更新地址不能影响当前安装。Android versionCode 与 iOS build number 允许独立变化，不参与判断。只有服务端成功返回 `allowed=true` 且 `forceUpdate=false` 时，才允许覆盖、解除此前阻断。
 
 实际 `versionName` 由项目自有窄 MethodChannel 在 `runApp` 前一次性读取 Android `PackageManager` 中的当前安装包 `versionName` 或 iOS `CFBundleShortVersionString`，并覆盖仅供网络降级使用的 `dart-define` 后备版本名。该实现不依赖 Android `BuildConfig`，也不引入第三方插件或额外 Gradle artifact。若平台元数据读取失败或返回空版本名，本次启动不得恢复旧准入缓存，而应删除缓存并等待网络重新确认，避免后备常量误认成当前安装包身份。
 

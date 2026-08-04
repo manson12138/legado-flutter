@@ -11,7 +11,7 @@ import 'remote_app_bootstrapper.dart';
 /// 应用准入状态，只有服务端明确拒绝才阻断界面。
 final class AppAccessState {
   /// 创建应用准入状态。
-  const AppAccessState({this.isRestoring = false, this.isChecking = false, this.hasConfirmedStatus = false, this.isAllowed = true, this.hasUpdate = false, this.forceUpdate = false, this.message, this.versionName, this.latestVersionCode, this.downloadUrl, this.changelog});
+  const AppAccessState({this.isRestoring = false, this.isChecking = false, this.hasConfirmedStatus = false, this.isAllowed = true, this.hasUpdate = false, this.forceUpdate = false, this.message, this.versionName, this.latestVersionCode, this.downloadUrl, this.downloadSha256, this.downloadByteSize, this.changelog});
   /// 是否正在恢复当前安装包已确认的本地准入状态。
   final bool isRestoring;
   /// 是否正在请求服务端状态。
@@ -32,6 +32,10 @@ final class AppAccessState {
   final int? latestVersionCode;
   /// 经服务端配置的外部升级地址。
   final String? downloadUrl;
+  /// Android 服务端 APK 的校验摘要；iOS TestFlight 和手动外链为空。
+  final String? downloadSha256;
+  /// Android 服务端 APK 的精确字节数。
+  final int? downloadByteSize;
   /// 服务端版本更新说明。
   final String? changelog;
   /// 是否需要不可绕过地阻断应用业务界面。
@@ -177,6 +181,8 @@ final class AppAccessCoordinator with WidgetsBindingObserver {
         versionName: status.versionName,
         latestVersionCode: status.latestVersionCode,
         downloadUrl: status.downloadUrl,
+        downloadSha256: status.downloadSha256,
+        downloadByteSize: status.downloadByteSize,
         changelog: status.changelog,
       );
 
@@ -193,6 +199,8 @@ final class AppAccessCoordinator with WidgetsBindingObserver {
         versionName: state.value.versionName,
         latestVersionCode: state.value.latestVersionCode,
         downloadUrl: state.value.downloadUrl,
+        downloadSha256: state.value.downloadSha256,
+        downloadByteSize: state.value.downloadByteSize,
         changelog: state.value.changelog,
       );
 }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../platform/app_package_info_service.dart';
 
 /// 远端 App 服务的集中配置；所有值均可通过 `--dart-define` 覆盖。
@@ -10,6 +12,7 @@ final class RemoteAppServiceConfig {
     required this.productId,
     required this.appVersionName,
     required this.appVersionCode,
+    required this.platform,
     required this.channel,
     required this.hmacSecret,
     required this.passwordKeyInvalidBusinessCodes,
@@ -24,6 +27,7 @@ final class RemoteAppServiceConfig {
     productId: const int.fromEnvironment('REMOTE_APP_PRODUCT_ID', defaultValue: 1),
     appVersionName: const String.fromEnvironment('LEGADO_APP_VERSION_NAME', defaultValue: '1.0.1'),
     appVersionCode: const int.fromEnvironment('LEGADO_APP_VERSION_CODE', defaultValue: 10),
+    platform: Platform.isIOS ? 'ios' : 'android',
     channel: const String.fromEnvironment('REMOTE_APP_CHANNEL', defaultValue: 'official'),
     hmacSecret: const String.fromEnvironment('REMOTE_APP_HMAC_SECRET', defaultValue: 'dev-app-signature-change-me'),
     passwordKeyInvalidBusinessCodes: _parseBusinessCodes(
@@ -53,6 +57,7 @@ final class RemoteAppServiceConfig {
       productId: environment.productId,
       appVersionName: installedPackageInfo.versionName,
       appVersionCode: installedPackageInfo.versionCode,
+      platform: environment.platform,
       channel: environment.channel,
       hmacSecret: environment.hmacSecret,
       passwordKeyInvalidBusinessCodes:
@@ -74,6 +79,8 @@ final class RemoteAppServiceConfig {
   final String appVersionName;
   /// 当前构建号。
   final int appVersionCode;
+  /// 服务端按该平台返回 Android APK 或 iOS TestFlight 更新地址。
+  final String platform;
   /// 是否已经从当前 Android/iOS 安装包读取到可信的语义版本身份。
   final bool hasInstalledVersionIdentity;
   /// 发布渠道。
