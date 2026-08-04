@@ -35,10 +35,12 @@ final class ReaderRepository
     this._bookContentProcessDao,
     this._replaceRuleDao,
     this._preferencesStore, {
+    required int Function() currentUserId,
     required void Function(String bookUrl, String chapterUrl)
         onChapterContentChanged,
     required void Function(String bookUrl) onBookContentChanged,
-  }) : _onChapterContentChanged = onChapterContentChanged,
+  }) : _currentUserId = currentUserId,
+       _onChapterContentChanged = onChapterContentChanged,
        _onBookContentChanged = onBookContentChanged,
        _displayConfigMigrator =
            VersionedAppPreferenceMigrator(_preferencesStore);
@@ -64,6 +66,9 @@ final class ReaderRepository
   /// 替换规则 DAO。
   final ReplaceRuleDao _replaceRuleDao;
 
+  /// 返回当前游客或登录账号的本地作用域 ID。
+  final int Function() _currentUserId;
+
   /// 原始单章正文写入或删除成功后通知应用级处理结果失效。
   final void Function(String bookUrl, String chapterUrl)
       _onChapterContentChanged;
@@ -82,7 +87,11 @@ final class ReaderRepository
     int chapterIndex,
   ) {
     return guardDataStream<List<BookContentProcess>>(
-      _bookContentProcessDao.watchForChapter(bookUrl, chapterIndex),
+      _bookContentProcessDao.watchForChapter(
+        _currentUserId(),
+        bookUrl,
+        chapterIndex,
+      ),
     );
   }
 
@@ -91,7 +100,10 @@ final class ReaderRepository
   Future<int> nextOrder(String bookUrl) {
     return guardDataOperation<int>(() async {
       /// 当前最大排序值。
-      final int maximum = await _bookContentProcessDao.maxOrder(bookUrl);
+      final int maximum = await _bookContentProcessDao.maxOrder(
+        _currentUserId(),
+        bookUrl,
+      );
       return maximum + 1;
     });
   }
@@ -100,7 +112,7 @@ final class ReaderRepository
   @override
   Future<void> upsert(BookContentProcess process) {
     return guardDataOperation<void>(
-      () => _bookContentProcessDao.upsert(process),
+      () => _bookContentProcessDao.upsert(_currentUserId(), process),
     );
   }
 
@@ -109,6 +121,7 @@ final class ReaderRepository
   Future<void> setEnabled(String id, bool enabled) {
     return guardDataOperation<void>(
       () => _bookContentProcessDao.setEnabled(
+        _currentUserId(),
         id,
         enabled,
         DateTime.now().millisecondsSinceEpoch,
@@ -121,6 +134,7 @@ final class ReaderRepository
   Future<void> delete(String id) {
     return guardDataOperation<void>(
       () => _bookContentProcessDao.markDeleted(
+        _currentUserId(),
         id,
         DateTime.now().millisecondsSinceEpoch,
       ),
@@ -131,27 +145,35 @@ final class ReaderRepository
   @override
   Stream<List<Bookmark>> watchByBook(String bookName, String bookAuthor) {
     return guardDataStream<List<Bookmark>>(
-      _bookmarkDao.watchByBook(bookName, bookAuthor),
+      _bookmarkDao.watchByBook(_currentUserId(), bookName, bookAuthor),
     );
   }
 
   /// 保存书签。
   @override
   Future<void> saveBookmark(Bookmark bookmark) {
-    return guardDataOperation<void>(() => _bookmarkDao.upsert(bookmark));
+    return guardDataOperation<void>(
+      () => _bookmarkDao.upsert(_currentUserId(), bookmark),
+    );
   }
 
   /// 删除书签。
   @override
   Future<void> deleteBookmark(int time) {
-    return guardDataOperation<void>(() => _bookmarkDao.deleteByTime(time));
+    return guardDataOperation<void>(
+      () => _bookmarkDao.deleteByTime(_currentUserId(), time),
+    );
   }
 
   /// 读取当前书籍生效的正文替换规则。
   @override
   Future<List<ReplaceRule>> getEnabledContentRules(String bookName, String origin) {
     return guardDataOperation<List<ReplaceRule>>(
-      () => _replaceRuleDao.getEnabledForContent(bookName, origin),
+      () => _replaceRuleDao.getEnabledForContent(
+        _currentUserId(),
+        bookName,
+        origin,
+      ),
     );
   }
 

@@ -14,9 +14,12 @@ final class BookGroupDao {
   final LegadoDatabase _database;
 
   /// 按显示顺序读取全部系统和用户分组。
-  Future<List<BookGroup>> getAll(int userId) async {
-    /// 已打开的数据库连接。
-    final Database database = await _database.database;
+  Future<List<BookGroup>> getAll(
+    int userId, {
+    DatabaseExecutor? executor,
+  }) async {
+    /// 当前查询使用的数据库或备份只读事务。
+    final DatabaseExecutor queryExecutor = executor ?? await _database.database;
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.bookGroups,
@@ -24,7 +27,7 @@ final class BookGroupDao {
       argumentCount: 1,
     );
     /// 全部分组数据库行。
-    final List<Map<String, Object?>> rows = await database.query(
+    final List<Map<String, Object?>> rows = await queryExecutor.query(
       DatabaseTables.bookGroups,
       where: 'userId = ?',
       whereArgs: <Object?>[userId],

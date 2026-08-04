@@ -64,6 +64,9 @@ const String readerSimulationPageTurnDebugLogMarker =
 /// 服务器书源同步流程的统一诊断 Tag；不记录 Token、书源内容或远端地址。
 const String remoteBookSourceSyncLogTag = 'REMOTE_BOOK_SOURCE_SYNC';
 
+/// 账号备份控制和二进制传输共用的脱敏日志 Tag。
+const String remoteAccountBackupLogTag = 'ACCOUNT_BACKUP';
+
 /// 游客 URL/邀请码书源导入的统一诊断 Tag；不记录输入、凭证、地址或书源正文。
 const String guestBookSourceImportLogTag = 'GUEST_BOOK_SOURCE_IMPORT';
 

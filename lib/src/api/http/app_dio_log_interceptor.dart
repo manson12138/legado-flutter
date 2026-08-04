@@ -48,6 +48,11 @@ final class AppDioLogInterceptor extends Interceptor {
     /// 当前请求是否属于不能输出地址或正文的书源导入链路。
     final bool isSensitiveBookSourceImport =
         _isSensitiveBookSourceImportRequest(options);
+    /// 账号备份请求包含一次性 URL、上传凭据或用户备份正文。
+    final bool isAccountBackup = _isAccountBackupRequest(options);
+    /// 当前请求是否只允许输出结构摘要。
+    final bool hideSensitiveTransport =
+        isSensitiveBookSourceImport || isAccountBackup;
     /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(options);
     /// 当前请求的稳定业务前缀。
@@ -56,15 +61,15 @@ final class AppDioLogInterceptor extends Interceptor {
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_request\n'
           'method=${options.method}\n'
-          'target=${_formatRequestTarget(options.uri, hideAddress: isSensitiveBookSourceImport)}\n'
+          'target=${_formatRequestTarget(options.uri, hideAddress: hideSensitiveTransport)}\n'
           'connectTimeoutMs=${options.connectTimeout?.inMilliseconds ?? -1}\n'
           'sendTimeoutMs=${options.sendTimeout?.inMilliseconds ?? -1}\n'
           'receiveTimeoutMs=${options.receiveTimeout?.inMilliseconds ?? -1}\n'
           'followRedirects=${options.followRedirects}\n'
           'maxRedirects=${options.maxRedirects}\n'
           'responseType=${options.responseType.name}\n'
-          'headers=${isSensitiveBookSourceImport ? _formatRequestHeaderSummary(options.headers) : _formatJson(_sanitizeMap(options.headers))}\n'
-          'body=${isSensitiveBookSourceImport ? _formatBodySummary(options.data, options.contentType) : _isAuthenticationPayloadRequest(options) ? '<redacted authentication body>' : _formatRequestBody(options.data, options.contentType)}',
+          'headers=${hideSensitiveTransport ? _formatRequestHeaderSummary(options.headers) : _formatJson(_sanitizeMap(options.headers))}\n'
+          'body=${hideSensitiveTransport ? _formatBodySummary(options.data, options.contentType) : _isAuthenticationPayloadRequest(options) ? '<redacted authentication body>' : _formatRequestBody(options.data, options.contentType)}',
     );
     handler.next(options);
   }
@@ -77,6 +82,11 @@ final class AppDioLogInterceptor extends Interceptor {
     /// 当前请求是否属于不能输出地址或正文的书源导入链路。
     final bool isSensitiveBookSourceImport =
         _isSensitiveBookSourceImportRequest(request);
+    /// 账号备份响应可能包含一次性上传或下载凭据。
+    final bool isAccountBackup = _isAccountBackupRequest(request);
+    /// 当前响应是否只允许输出结构摘要。
+    final bool hideSensitiveTransport =
+        isSensitiveBookSourceImport || isAccountBackup;
     /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(request);
     /// 【扫码诊断日志】当前请求的稳定业务前缀。
@@ -85,13 +95,13 @@ final class AppDioLogInterceptor extends Interceptor {
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_response\n'
           'method=${request.method}\n'
-          'target=${_formatRequestTarget(response.realUri, hideAddress: isSensitiveBookSourceImport)}\n'
+          'target=${_formatRequestTarget(response.realUri, hideAddress: hideSensitiveTransport)}\n'
           'status=${response.statusCode ?? 0}\n'
           'durationMs=${_durationMilliseconds(request)}\n'
           'redirectCount=${response.redirects.length}\n'
           'contentType=${response.headers.value('content-type') ?? 'none'}\n'
-          'headers=${isSensitiveBookSourceImport ? _formatResponseHeaderSummary(response.headers.map) : _formatJson(_sanitizeResponseHeaders(response.headers.map))}\n'
-          'body=${isSensitiveBookSourceImport ? _formatBodySummary(response.data, response.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response.data, response.headers.value('content-type'))}',
+          'headers=${hideSensitiveTransport ? _formatResponseHeaderSummary(response.headers.map) : _formatJson(_sanitizeResponseHeaders(response.headers.map))}\n'
+          'body=${hideSensitiveTransport ? _formatBodySummary(response.data, response.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response.data, response.headers.value('content-type'))}',
     );
     handler.next(response);
   }
@@ -108,6 +118,11 @@ final class AppDioLogInterceptor extends Interceptor {
     /// 当前请求是否属于不能输出地址或正文的书源导入链路。
     final bool isSensitiveBookSourceImport =
         _isSensitiveBookSourceImportRequest(request);
+    /// 账号备份异常可能携带一次性地址或上传凭据。
+    final bool isAccountBackup = _isAccountBackupRequest(request);
+    /// 当前异常是否只允许输出结构摘要。
+    final bool hideSensitiveTransport =
+        isSensitiveBookSourceImport || isAccountBackup;
     /// 当前请求使用的 Logcat Tag。
     final String requestLogTag = _requestLogTag(request);
     /// 【扫码诊断日志】当前请求的稳定业务前缀。
@@ -116,7 +131,7 @@ final class AppDioLogInterceptor extends Interceptor {
       tag: requestLogTag,
       message: '${requestLogPrefix}stage=http_transport_error\n'
           'method=${request.method}\n'
-          'target=${_formatRequestTarget(request.uri, hideAddress: isSensitiveBookSourceImport)}\n'
+          'target=${_formatRequestTarget(request.uri, hideAddress: hideSensitiveTransport)}\n'
           'dioType=${error.type.name}\n'
           'cause=${_formatTransportError(transportError)}\n'
           'responsePresent=${response != null}\n'
@@ -128,10 +143,10 @@ final class AppDioLogInterceptor extends Interceptor {
           'followRedirects=${request.followRedirects}\n'
           'maxRedirects=${request.maxRedirects}\n'
           'redirectCount=${response?.redirects.length ?? 0}\n'
-          'responseHeaders=${isSensitiveBookSourceImport ? _formatResponseHeaderSummary(response?.headers.map ?? const <String, List<String>>{}) : _formatJson(_sanitizeResponseHeaders(response?.headers.map ?? const <String, List<String>>{}))}\n'
-          'responseBody=${isSensitiveBookSourceImport ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
+          'responseHeaders=${hideSensitiveTransport ? _formatResponseHeaderSummary(response?.headers.map ?? const <String, List<String>>{}) : _formatJson(_sanitizeResponseHeaders(response?.headers.map ?? const <String, List<String>>{}))}\n'
+          'responseBody=${hideSensitiveTransport ? _formatBodySummary(response?.data, response?.headers.value('content-type')) : _isAuthenticationPayloadRequest(request) ? '<redacted authentication body>' : _formatResponseBody(response?.data, response?.headers.value('content-type'))}',
       // 敏感书源导入请求不附加可能包含地址或凭证的原始异常文本。
-      error: isSensitiveBookSourceImport ? null : transportError ?? error,
+      error: hideSensitiveTransport ? null : transportError ?? error,
       stackTrace: error.stackTrace,
     );
     handler.next(error);
@@ -144,6 +159,12 @@ final class AppDioLogInterceptor extends Interceptor {
         request.extra[networkRequestLogContextExtraKey];
     return context == bookSourceQrScanLogTag ||
         context == guestBookSourceImportLogTag;
+  }
+
+  /// 判断请求是否属于账号备份控制或二进制传输链路。
+  bool _isAccountBackupRequest(RequestOptions request) {
+    return request.extra[networkRequestLogContextExtraKey] ==
+        remoteAccountBackupLogTag;
   }
 
   /// 判断请求是否属于二维码添加书源业务。
@@ -170,6 +191,9 @@ final class AppDioLogInterceptor extends Interceptor {
 
   /// 根据业务上下文选择稳定的 Logcat Tag。
   String _requestLogTag(RequestOptions request) {
+    if (_isAccountBackupRequest(request)) {
+      return remoteAccountBackupLogTag;
+    }
     if (_isBookSourceQrRequest(request)) {
       return bookSourceQrLogTag;
     }
@@ -181,6 +205,9 @@ final class AppDioLogInterceptor extends Interceptor {
 
   /// 返回用于串联书源导入全链路的稳定前缀。
   String _requestLogPrefix(RequestOptions request) {
+    if (_isAccountBackupRequest(request)) {
+      return '$remoteAccountBackupLogTag ';
+    }
     if (_isBookSourceQrRequest(request)) {
       return '$bookSourceQrScanLogTag ';
     }

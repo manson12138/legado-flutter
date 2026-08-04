@@ -40,6 +40,7 @@ import '../data/local/preferences/app_preferences_store.dart';
 import '../data/local/secure_auth_session_store.dart';
 import '../data/model/book_source_import_decoder.dart';
 import '../data/repository/adult_content_repository.dart';
+import '../data/repository/account_backup_repository.dart';
 import '../data/repository/book_repository.dart';
 import '../data/repository/book_group_repository.dart';
 import '../data/repository/book_cover_candidate_repository.dart';
@@ -54,6 +55,7 @@ import '../data/repository/authentication_repository.dart';
 import '../platform/password_encryption_platform_service.dart';
 import '../platform/local_book_cover_service.dart';
 import '../domain/gateway/adult_content_gateway.dart';
+import '../domain/gateway/account_backup_gateway.dart';
 import '../domain/gateway/bookmark_gateway.dart';
 import '../domain/gateway/book_cover_candidate_gateway.dart';
 import '../domain/gateway/book_content_process_gateway.dart';
@@ -160,6 +162,7 @@ final class AppDependencies {
     required this.appAccessCoordinator,
     required this.remoteAppConfigurationRepository,
     required this.authenticationGateway,
+    required this.accountBackupGateway,
     required this.remoteBookSourceSyncService,
     required this.guestBookSourceImportService,
     required this.bookshelfLayoutPreferences,
@@ -431,9 +434,32 @@ final class AppDependencies {
       bookContentProcessDao,
       replaceRuleDao,
       preferencesStore,
+      currentUserId: currentUserScope.requireUserId,
       onChapterContentChanged:
           readerProcessedContentCache.invalidateChapter,
       onBookContentChanged: readerProcessedContentCache.invalidateBook,
+    );
+    /// 当前账号逻辑备份生成边界；服务器接口开放前只生成本地临时文件，不发起上传。
+    final AccountBackupGateway accountBackupGateway = AccountBackupRepository(
+      bookDao: bookDao,
+      bookGroupDao: bookGroupDao,
+      readingHistoryDao: readingHistoryDao,
+      bookmarkDao: bookmarkDao,
+      bookContentProcessDao: bookContentProcessDao,
+      replaceRuleDao: replaceRuleDao,
+      preferencesStore: preferencesStore,
+      currentUserId: currentUserScope.requireUserId,
+      remoteAppConfig: remoteAppConfig,
+      remoteAppApi: remoteAppApi,
+      authenticationGateway: authenticationRepository,
+      database: database,
+      onAccountDataRestored: () async {
+        readerProcessedContentCache.clear();
+        bookshelfHistoryStartupPreloader.invalidate();
+        await readerRepository.preloadDisplayConfig();
+        await standardBookSourceService.loadSearchInteractionSetting();
+      },
+      logger: logger,
     );
     /// 主界面首帧后只用既有原始正文缓存预热最近阅读书籍当前章。
     final ReaderProcessedContentStartupPreloader
@@ -634,6 +660,7 @@ final class AppDependencies {
       appAccessCoordinator: appAccessCoordinator,
       remoteAppConfigurationRepository: remoteAppConfigurationRepository,
       authenticationGateway: authenticationRepository,
+      accountBackupGateway: accountBackupGateway,
       remoteBookSourceSyncService: remoteBookSourceSyncService,
       guestBookSourceImportService: guestBookSourceImportService,
       bookshelfLayoutPreferences:
@@ -768,6 +795,9 @@ final class AppDependencies {
   final RemoteAppConfigurationRepository remoteAppConfigurationRepository;
   /// 当前 App 用户认证边界；token 始终由数据层保留在内存。
   final AuthenticationGateway authenticationGateway;
+
+  /// 当前账号的逻辑备份文件生成边界；上传能力等待服务器接口后再开放。
+  final AccountBackupGateway accountBackupGateway;
 
   /// App 登录及服务端书源同步服务。
   final RemoteBookSourceSyncService remoteBookSourceSyncService;

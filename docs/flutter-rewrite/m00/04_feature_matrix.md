@@ -1,6 +1,6 @@
 # M00 功能矩阵
 
-最后静态核对：2026-08-02。核对依据为当前 Flutter 源码、M4～M11 实施记录和 Android 只读参考；未运行构建、测试、分析、格式化或应用启动。
+最后静态核对：2026-08-04。核对依据为当前 Flutter 源码、M4～M11 实施记录和 Android 只读参考；未运行构建、测试、分析、格式化或应用启动。
 
 ## 状态口径
 
@@ -29,7 +29,8 @@
 | 书籍详情 | `BookInfoActivity`、`BookInfoScreen` | 渐进详情、目录摘要/完整目录、入架、备注、分组、允许更新、分享复制、移出书架、整书换源、更新目录、清离线正文、封面预览与更换 | 详情内阅读时长时间线、相关书、书源变量、Web 文件/压缩包、同步等仍未接入 | `PARTIAL` |
 | 目录 | `TocActivity` | 分页目录抓取、URL 去重、连续索引、持久化、正倒序显示、启动后台尾部增量更新及定期全量校准 | 真实动态目录、超长目录和增量检查点待真机/书源验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 书架与阅读历史 | `MainScreen`、`BookShelfItem`、`ReadRecord` | 书架/历史双页、列表/网格、分组、六种排序、选择态、批量刷新/移动/删除/换源、章节角标、独立历史快照 | 历史详情时间线和跨设备恢复未实现；长列表、后台刷新和账号切换待验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
-| 用户数据隔离 | Android 账号相关数据边界 | 游客 `userId=-1` 与同设备账号隔离书架、分组、目录、历史、进度、下载附属状态和搜索历史 | 游客数据不迁移到账号；无服务端书架/历史同步 | `IMPLEMENTED_PENDING_VERIFICATION` |
+| 用户数据隔离 | Android 账号相关数据边界 | 游客 `userId=-1` 与同设备账号隔离书架、分组、目录、历史、进度、书签、正文标注、替换规则、下载附属状态和搜索历史 | 游客数据不迁移到账号；Schema v12 以前无法确认归属的书签/标注/规则留在游客作用域 | `IMPLEMENTED_PENDING_VERIFICATION` |
+| 登录账号版本化备份 | Android 备份与 WebDAV 的账号快照子集 | API v2 初始化/原始 PUT/完成、列表/latest、短期下载、严格归档校验、当前账号替换式恢复事务和删除已接入；排除本地书、正文、缓存、队列、凭据和书源 | 尚无 UI 入口；真实服务端、事务回滚、跨设备与双平台恢复待用户验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 文本阅读器 | `ReadBookScreen`、`ReadBookViewModel`、`ReadBook.kt` | 连续滚动、上下/左右分页、覆盖/滑动/无动画/仿真、稳定字符锚点、设置、书签、全文搜索、替换、图片、选区、高亮/下划线、边缘退出、相邻章预取和处理后正文 LRU | 长时稳定、极端章节、横竖屏恢复、仿真视觉及双端平台行为待验证；TTS/自动翻页不在此实现 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 整书换源 | 详情、书架、阅读器换源入口 | 重新搜索启用书源、候选详情/目录预览、原子主键与目录迁移、进度/分组/封面/备注/阅读设置迁移、路由替换 | 事务回滚、章节映射、取消及杀进程恢复待真实书源验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 单章换源 | `ChangeChapterSourceSheet` | 候选目录模糊匹配、正文预览和目标章永久缓存替换；刷新当前章可恢复原源正文 | 中文数字章节兜底、失败/取消数据安全待样本验证 | `IMPLEMENTED_PENDING_VERIFICATION` |
@@ -55,7 +56,7 @@
 |---|---|---|
 | 系统 TTS、HTTP TTS、后台朗读、媒体控制 | 阅读器后续能力面板仅登记边界 | `NOT_STARTED` |
 | 自动翻页 | 阅读器后续能力面板仅登记边界 | `NOT_STARTED` |
-| 备份、WebDAV、跨设备书架/进度/书签同步 | 当前只有本机游客/账号隔离 | `NOT_STARTED` |
+| WebDAV 与逐条双向同步 | 已实现服务端版本化备份快照，但不等同 WebDAV 或实时/逐条冲突合并 | `NOT_STARTED` |
 | 阅读内容编辑 | 只有选区书签、高亮和下划线；网络/本地正文写回边界未实现 | `NOT_STARTED` |
 | 相关书、书源变量、详情 Web 文件 | 详情页保留入口或说明，业务链未接入 | `NOT_STARTED` |
 | 高级阅读样式 | 自定义字体文件、背景图片、宽屏双页、淡入等动画、样式导入导出仍不完整 | `PARTIAL` |
@@ -63,14 +64,14 @@
 | 漫画 | 步骤 0 已通过；步骤 1～10 已写入：类型映射、候选隔离、三入口分流、安全图片解析、统一 Cookie/Header/Referer 图片仓储、条漫与三种单页方向、缩放、漫画语义进度、生命周期、三章窗口、固定双 worker 图片预取、64 MiB 解码预算，以及章节重试/刷新、书源登录完成后单次刷新、图片兼容整书换源和新主键路由替换；按用户要求统一留到最后验证，Android/iOS 首版验收尚未执行 | `IMPLEMENTED_PENDING_VERIFICATION` |
 | 音频、RSS、Web 服务、AI | 不属于当前文本小说主流程 | `DEFERRED` |
 
-## Flutter Schema v11 覆盖
+## Flutter Schema v12 覆盖
 
 | 表或存储 | 当前职责 | 状态说明 |
 |---|---|---|
 | `books`、`book_groups`、`chapters` | 用户级书架、分组、目录和进度 | 已进入真实业务链，待用户验证 |
 | `book_sources`、`cookies`、`caches` | 书源、Cookie 和兼容键值数据 | 已进入真实业务链；规则/登录结果受 M4 门禁约束 |
 | `searchBooks` | 封面搜索派生候选缓存 | 已用于封面搜索 |
-| `bookmarks`、`replace_rules`、`book_content_processes` | 书签、替换规则、高亮与下划线 | 已进入阅读器，待双端交互验证 |
+| `bookmarks`、`replace_rules`、`book_content_processes` | 按 `userId` 隔离的书签、替换规则、高亮与下划线 | Schema v12 已补齐账号作用域，待升级和双端交互验证 |
 | `download_tasks`、`download_book_states` | 下载队列、失败摘要和下载专用自动换源状态 | 已进入下载协调器，待后台恢复验证 |
 | `reading_history_books`、`reading_history_chapters` | 与书架成员独立的用户级阅读历史快照 | 已进入书架历史双页 |
 | `book_source_candidates` | 搜索点击时的同书多源候选快照 | 表、DAO、Repository、Gateway 已存在，但当前没有业务接线 |

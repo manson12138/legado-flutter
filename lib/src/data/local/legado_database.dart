@@ -19,7 +19,7 @@ final class LegadoDatabase {
   static const String databaseName = 'legado_flutter.db';
 
   /// 当前全新数据库版本；M2 不包含旧 App Room 迁移。
-  static const int schemaVersion = 11;
+  static const int schemaVersion = 12;
 
   /// 表级变更通知器，由事务提交成功后触发。
   final DatabaseChangeNotifier changeNotifier;
@@ -167,6 +167,9 @@ final class LegadoDatabase {
         }
         if (oldVersion < 11) {
           await _createSchemaV11(upgradedDatabase);
+        }
+        if (oldVersion < 12) {
+          await _addUserScopeToReaderAssetsV12(upgradedDatabase);
         }
       },
     );
@@ -357,6 +360,7 @@ final class LegadoDatabase {
 
     schemaBatch.execute('''
       CREATE TABLE bookmarks (
+        userId INTEGER NOT NULL DEFAULT -1,
         time INTEGER NOT NULL,
         bookName TEXT NOT NULL,
         bookAuthor TEXT NOT NULL DEFAULT '',
@@ -369,8 +373,8 @@ final class LegadoDatabase {
       )
     ''');
     schemaBatch.execute(
-      'CREATE INDEX index_bookmarks_bookName_bookAuthor '
-      'ON bookmarks (bookName, bookAuthor)',
+      'CREATE INDEX index_bookmarks_user_bookName_bookAuthor '
+      'ON bookmarks (userId, bookName, bookAuthor)',
     );
 
     schemaBatch.execute('''
@@ -399,6 +403,7 @@ final class LegadoDatabase {
     schemaBatch.execute('''
       CREATE TABLE replace_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        userId INTEGER NOT NULL DEFAULT -1,
         name TEXT NOT NULL DEFAULT '',
         `group` TEXT,
         pattern TEXT NOT NULL DEFAULT '',
@@ -414,7 +419,8 @@ final class LegadoDatabase {
       )
     ''');
     schemaBatch.execute(
-      'CREATE INDEX index_replace_rules_id ON replace_rules (id)',
+      'CREATE INDEX index_replace_rules_user_order '
+      'ON replace_rules (userId, sortOrder)',
     );
 
     await schemaBatch.commit(noResult: true);
@@ -754,6 +760,7 @@ final class LegadoDatabase {
     await database.execute('''
       CREATE TABLE IF NOT EXISTS book_content_processes (
         id TEXT NOT NULL,
+        userId INTEGER NOT NULL DEFAULT -1,
         bookUrl TEXT NOT NULL,
         chapterIndex INTEGER,
         kind TEXT NOT NULL,
@@ -776,15 +783,74 @@ final class LegadoDatabase {
     ''');
     await database.execute(
       'CREATE INDEX IF NOT EXISTS index_content_process_book_chapter_enabled_order '
-      'ON book_content_processes (bookUrl, chapterIndex, enabled, sortOrder)',
+      'ON book_content_processes (userId, bookUrl, chapterIndex, enabled, sortOrder)',
     );
     await database.execute(
       'CREATE INDEX IF NOT EXISTS index_content_process_book_kind '
-      'ON book_content_processes (bookUrl, kind)',
+      'ON book_content_processes (userId, bookUrl, kind)',
     );
     await database.execute(
       'CREATE INDEX IF NOT EXISTS index_content_process_ai_artifact '
       'ON book_content_processes (aiArtifactId)',
+    );
+  }
+
+  /// 为书签、正文标注和替换规则补齐账号作用域；无法确认归属的旧记录保留在游客作用域。
+  Future<void> _addUserScopeToReaderAssetsV12(Database database) async {
+    logOperation(operation: 'ALTER_TABLE', table: 'reader_user_assets');
+    await _addColumnIfMissing(
+      database,
+      table: 'bookmarks',
+      column: 'userId',
+      definition: 'INTEGER NOT NULL DEFAULT -1',
+    );
+    await _addColumnIfMissing(
+      database,
+      table: 'book_content_processes',
+      column: 'userId',
+      definition: 'INTEGER NOT NULL DEFAULT -1',
+    );
+    await _addColumnIfMissing(
+      database,
+      table: 'replace_rules',
+      column: 'userId',
+      definition: 'INTEGER NOT NULL DEFAULT -1',
+    );
+    final Batch migrationBatch = database.batch();
+    migrationBatch.execute('DROP INDEX IF EXISTS index_bookmarks_bookName_bookAuthor');
+    migrationBatch.execute(
+      'CREATE INDEX IF NOT EXISTS index_bookmarks_user_bookName_bookAuthor '
+      'ON bookmarks (userId, bookName, bookAuthor)',
+    );
+    migrationBatch.execute(
+      'CREATE INDEX IF NOT EXISTS index_replace_rules_user_order '
+      'ON replace_rules (userId, sortOrder)',
+    );
+    migrationBatch.execute(
+      'CREATE INDEX IF NOT EXISTS index_content_process_user_book_chapter '
+      'ON book_content_processes (userId, bookUrl, chapterIndex, status, sortOrder)',
+    );
+    await migrationBatch.commit(noResult: true);
+  }
+
+  /// 仅在旧表缺少目标列时执行追加，兼容从早期 Schema 一次升级到当前版本。
+  Future<void> _addColumnIfMissing(
+    Database database, {
+    required String table,
+    required String column,
+    required String definition,
+  }) async {
+    final List<Map<String, Object?>> columns = await database.rawQuery(
+      'PRAGMA table_info($table)',
+    );
+    final bool alreadyExists = columns.any(
+      (Map<String, Object?> row) => row['name'] == column,
+    );
+    if (alreadyExists) {
+      return;
+    }
+    await database.execute(
+      'ALTER TABLE $table ADD COLUMN $column $definition',
     );
   }
 

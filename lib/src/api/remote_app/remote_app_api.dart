@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
@@ -555,6 +556,266 @@ final class RemoteAppApi {
     return RemoteCrashReportReceipt(receiptId: data['receiptId'] as String, retentionDays: (data['retentionDays'] as num).toInt(), duplicate: data['duplicate'] as bool);
   }
 
+  /// 初始化或幂等恢复当前账号的备份上传会话。
+  Future<RemoteAccountBackupUpload> initializeAccountBackup(
+    String token,
+    Map<String, Object?> payload,
+  ) async {
+    final Object? data = await _signedAccountBackupPostData(
+      '/api/v1/backups/uploads',
+      token,
+      payload,
+    );
+    if (data is! Map<Object?, Object?>) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传初始化响应无效');
+    }
+    return RemoteAccountBackupUpload.fromJson(data, baseUri: _config.baseUri);
+  }
+
+  /// 使用 Bearer 与一次性上传凭据发送原始 `.pnbak` 字节。
+  Future<void> uploadAccountBackupContent({
+    required String token,
+    required RemoteAccountBackupUpload upload,
+    required Uint8List bytes,
+  }) async {
+    if (upload.state == 'READY') {
+      return;
+    }
+    final Uri? uploadUri = upload.uploadUri;
+    if (uploadUri == null) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传地址缺失');
+    }
+    final Object? data = await _executeEnvelope(HttpRequest(
+      uri: uploadUri,
+      method: HttpRequestMethod.put,
+      headers: <String, String>{
+        ...upload.uploadHeaders,
+        'Authorization': 'Bearer $token',
+      },
+      body: BytesHttpRequestBody(bytes, contentType: 'application/octet-stream'),
+      connectTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(minutes: 3),
+      receiveTimeout: const Duration(seconds: 60),
+      totalTimeout: const Duration(minutes: 4),
+      followRedirects: false,
+      acceptHttpErrorStatus: true,
+      cookieMode: HttpCookieMode.disabled,
+      logContext: remoteAccountBackupLogTag,
+    ));
+    if (data is! Map<Object?, Object?> || data['uploaded'] != true) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份文件上传响应无效');
+    }
+  }
+
+  /// 完成上传并要求服务端返回已经进入 `READY` 的备份元数据。
+  Future<RemoteAccountBackupMetadata> completeAccountBackup({
+    required String token,
+    required String uploadId,
+    required String clientBackupId,
+    required int byteSize,
+    required String sha256Value,
+  }) async {
+    final String endpointPath = '/api/v1/backups/uploads/${Uri.encodeComponent(uploadId)}/complete';
+    final Object? data = await _signedAccountBackupPostData(
+      endpointPath,
+      token,
+      <String, Object?>{
+        'clientBackupId': clientBackupId,
+        'byteSize': byteSize,
+        'sha256': sha256Value,
+      },
+    );
+    if (data is! Map<Object?, Object?>) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份完成响应无效');
+    }
+    final RemoteAccountBackupMetadata metadata =
+        RemoteAccountBackupMetadata.fromJson(data);
+    if (metadata.state != 'READY') {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '服务端未确认备份完成');
+    }
+    return metadata;
+  }
+
+  /// 按服务端完成时间倒序读取当前账号的备份列表。
+  Future<RemoteAccountBackupPage> fetchAccountBackups(
+    String token, {
+    String? beforeId,
+    int limit = 20,
+  }) async {
+    if (limit < 1 || limit > 50) {
+      throw ArgumentError.value(limit, 'limit', '备份分页大小必须为 1～50');
+    }
+    final Map<String, String> query = <String, String>{'limit': '$limit'};
+    if (beforeId case final String value when value.trim().isNotEmpty) {
+      query['beforeId'] = value.trim();
+    }
+    final Object? data = await _signedAccountBackupGetData(
+      '/api/v1/backups',
+      token,
+      query,
+    );
+    if (data is! Map<Object?, Object?>) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份列表响应无效');
+    }
+    return RemoteAccountBackupPage.fromJson(data);
+  }
+
+  /// 获取当前账号最近完成的一份备份；从未备份时返回空。
+  Future<RemoteAccountBackupMetadata?> fetchLatestAccountBackup(
+    String token,
+  ) async {
+    final Object? data = await _signedAccountBackupGetData(
+      '/api/v1/backups/latest',
+      token,
+      const <String, String>{},
+    );
+    if (data == null) {
+      return null;
+    }
+    if (data is! Map<Object?, Object?>) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '最新备份响应无效');
+    }
+    return RemoteAccountBackupMetadata.fromJson(data);
+  }
+
+  /// 创建只读短期下载地址。
+  Future<RemoteAccountBackupDownload> createAccountBackupDownload(
+    String token,
+    String backupId,
+  ) async {
+    final String endpointPath = '/api/v1/backups/${Uri.encodeComponent(backupId)}/download';
+    final Object? data = await _signedAccountBackupPostData(
+      endpointPath,
+      token,
+      const <String, Object?>{},
+    );
+    if (data is! Map<Object?, Object?>) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份下载地址响应无效');
+    }
+    return RemoteAccountBackupDownload.fromJson(data, baseUri: _config.baseUri);
+  }
+
+  /// 从短期只读地址下载原始备份字节；调用方必须继续校验大小和 SHA-256。
+  Future<Uint8List> downloadAccountBackupContent(
+    RemoteAccountBackupDownload download,
+  ) async {
+    final HttpResponse response = await _httpClient.execute(HttpRequest(
+      uri: download.downloadUri,
+      headers: const <String, String>{'Accept': 'application/octet-stream'},
+      connectTimeout: const Duration(seconds: 60),
+      receiveTimeout: const Duration(minutes: 3),
+      totalTimeout: const Duration(minutes: 4),
+      followRedirects: false,
+      cookieMode: HttpCookieMode.disabled,
+      logContext: remoteAccountBackupLogTag,
+    ));
+    return response.bytes;
+  }
+
+  /// 幂等删除当前账号的一份服务端备份。
+  Future<void> deleteAccountBackup(String token, String backupId) async {
+    final String endpointPath = '/api/v1/backups/${Uri.encodeComponent(backupId)}';
+    final Object? data = await _signedAccountBackupDeleteData(
+      endpointPath,
+      token,
+    );
+    if (data is! Map<Object?, Object?> ||
+        data['deleted'] != true ||
+        data['backupId'] != backupId) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份删除响应无效');
+    }
+  }
+
+  /// 发送账号备份专用 HMAC + Bearer JSON POST，并保留服务端业务错误信封。
+  Future<Object?> _signedAccountBackupPostData(
+    String path,
+    String token,
+    Map<String, Object?> payload,
+  ) async {
+    final String body = jsonEncode(payload);
+    final Map<String, String> headers = _signedHeaders(
+      method: 'POST',
+      path: path,
+      body: body,
+      token: token,
+    );
+    headers['Content-Type'] = 'application/json';
+    return _executeEnvelope(HttpRequest(
+      uri: _config.baseUri.replace(path: path),
+      method: HttpRequestMethod.post,
+      headers: headers,
+      body: TextHttpRequestBody(body, contentType: 'application/json'),
+      acceptHttpErrorStatus: true,
+      cookieMode: HttpCookieMode.disabled,
+      logContext: remoteAccountBackupLogTag,
+    ));
+  }
+
+  /// 发送账号备份专用 HMAC + Bearer GET；查询参数不进入 v2 签名原文。
+  Future<Object?> _signedAccountBackupGetData(
+    String path,
+    String token,
+    Map<String, String> query,
+  ) async {
+    final Map<String, String> headers = _signedHeaders(
+      method: 'GET',
+      path: path,
+      body: '',
+      token: token,
+    );
+    return _executeEnvelope(HttpRequest(
+      uri: _config.baseUri.replace(path: path, queryParameters: query),
+      headers: headers,
+      acceptHttpErrorStatus: true,
+      cookieMode: HttpCookieMode.disabled,
+      logContext: remoteAccountBackupLogTag,
+    ));
+  }
+
+  /// 发送账号备份专用 HMAC + Bearer DELETE；该接口没有请求体。
+  Future<Object?> _signedAccountBackupDeleteData(
+    String path,
+    String token,
+  ) async {
+    final Map<String, String> headers = _signedHeaders(
+      method: 'DELETE',
+      path: path,
+      body: '',
+      token: token,
+    );
+    return _executeEnvelope(HttpRequest(
+      uri: _config.baseUri.replace(path: path),
+      method: HttpRequestMethod.delete,
+      headers: headers,
+      acceptHttpErrorStatus: true,
+      cookieMode: HttpCookieMode.disabled,
+      logContext: remoteAccountBackupLogTag,
+    ));
+  }
+
+  /// 创建账号备份控制接口使用的 App HMAC 与 Bearer Header。
+  Map<String, String> _signedHeaders({
+    required String method,
+    required String path,
+    required String body,
+    required String token,
+  }) {
+    final String timestamp = '${DateTime.now().millisecondsSinceEpoch ~/ 1000}';
+    final String nonce = base64UrlEncode(
+      List<int>.generate(18, (_) => Random.secure().nextInt(256)),
+    ).replaceAll('=', '');
+    final String signature = Hmac(sha256, utf8.encode(_config.hmacSecret))
+        .convert(utf8.encode('$method$path$timestamp$nonce$body'))
+        .toString();
+    return <String, String>{
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $token',
+      'X-App-Timestamp': timestamp,
+      'X-App-Nonce': nonce,
+      'X-App-Signature': signature,
+    };
+  }
+
   /// 发送同时需要 App HMAC 与登录会话的 JSON POST 请求。
   Future<void> _signedPost(String path, String token, Map<String, Object?> payload) async {
     await _signedPostData(path, token, payload);
@@ -773,6 +1034,457 @@ final class RemoteAppApi {
     return RemoteAppBusinessFailureKind.unknown;
   }
 }
+
+/// 初始化接口返回的受控上传会话。
+final class RemoteAccountBackupUpload {
+  /// 创建经过严格解码的上传会话。
+  RemoteAccountBackupUpload({
+    required this.uploadId,
+    required this.backupId,
+    required this.state,
+    required this.uploadUri,
+    required Map<String, String> uploadHeaders,
+    required this.expiresAt,
+    required this.maximumByteSize,
+    required this.userQuotaBytes,
+    required this.retainedVersionLimit,
+  }) : uploadHeaders = Map<String, String>.unmodifiable(uploadHeaders);
+
+  /// 从不可信统一响应 data 中解码上传会话。
+  factory RemoteAccountBackupUpload.fromJson(
+    Map<Object?, Object?> json, {
+    required Uri baseUri,
+  }) {
+    final String backupId = _requiredBackupString(json, 'backupId');
+    final String state = _requiredBackupString(json, 'state');
+    if (state != 'UPLOADING' && state != 'READY') {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传状态无效');
+    }
+    final String? uploadId = _optionalBackupString(json, 'uploadId');
+    final Uri? uploadUri;
+    final Map<String, String> uploadHeaders;
+    final DateTime? expiresAt;
+    if (state == 'UPLOADING') {
+      if (json['uploadMethod'] != 'PUT' || uploadId == null) {
+        throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传会话字段无效');
+      }
+      uploadUri = _decodeBackupTransferUri(
+        json['uploadUrl'],
+        baseUri: baseUri,
+        fieldName: 'uploadUrl',
+        requireSameOrigin: true,
+      );
+      uploadHeaders = _decodeBackupUploadHeaders(json['uploadHeaders']);
+      expiresAt = _requiredBackupDateTime(json, 'expiresAt');
+    } else {
+      uploadUri = null;
+      uploadHeaders = const <String, String>{};
+      expiresAt = null;
+    }
+    final int? maximumByteSize = _optionalBackupInt(json, 'maximumByteSize');
+    final int? userQuotaBytes = _optionalBackupInt(json, 'userQuotaBytes');
+    final int? retainedVersionLimit =
+        _optionalBackupInt(json, 'retainedVersionLimit');
+    if ((maximumByteSize != null && maximumByteSize <= 0) ||
+        (userQuotaBytes != null && userQuotaBytes < 0) ||
+        (retainedVersionLimit != null && retainedVersionLimit <= 0)) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传限制字段无效');
+    }
+    return RemoteAccountBackupUpload(
+      uploadId: uploadId,
+      backupId: backupId,
+      state: state,
+      uploadUri: uploadUri,
+      uploadHeaders: uploadHeaders,
+      expiresAt: expiresAt,
+      maximumByteSize: maximumByteSize,
+      userQuotaBytes: userQuotaBytes,
+      retainedVersionLimit: retainedVersionLimit,
+    );
+  }
+
+  /// 服务端上传会话标识；幂等命中 READY 时允许省略。
+  final String? uploadId;
+
+  /// 最终备份标识。
+  final String backupId;
+
+  /// `UPLOADING` 或 `READY`。
+  final String state;
+
+  /// 一次性二进制 PUT 地址；READY 时为空。
+  final Uri? uploadUri;
+
+  /// 只允许 Content-Type 与 X-Upload-Token 的上传 Header。
+  final Map<String, String> uploadHeaders;
+
+  /// 上传会话到期时间；READY 时为空。
+  final DateTime? expiresAt;
+
+  /// 服务端当前单文件上限。
+  final int? maximumByteSize;
+
+  /// 当前用户备份总配额。
+  final int? userQuotaBytes;
+
+  /// 服务端保留的历史版本数量。
+  final int? retainedVersionLimit;
+}
+
+/// 服务端 READY 备份的安全元数据。
+final class RemoteAccountBackupMetadata {
+  /// 创建备份元数据。
+  RemoteAccountBackupMetadata({
+    required this.backupId,
+    required this.state,
+    required this.formatVersion,
+    required this.byteSize,
+    required this.sha256,
+    required this.createdAt,
+    required this.completedAt,
+    required this.appVersionName,
+    required this.appVersionCode,
+    required this.databaseSchemaVersion,
+    required this.platform,
+    required Map<String, int> itemCounts,
+  }) : itemCounts = Map<String, int>.unmodifiable(itemCounts);
+
+  /// 从列表、latest 或完成接口的不同字段子集解码元数据。
+  factory RemoteAccountBackupMetadata.fromJson(Map<Object?, Object?> json) {
+    final String state = _optionalBackupString(json, 'state') ?? 'READY';
+    if (state != 'READY') {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份元数据状态无效');
+    }
+    final int formatVersion = _requiredBackupInt(json, 'formatVersion');
+    final int byteSize = _requiredBackupInt(json, 'byteSize');
+    final String digest = _requiredBackupString(json, 'sha256');
+    if (formatVersion != 1 || byteSize <= 0 || !_isSha256(digest)) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份元数据完整性字段无效');
+    }
+    return RemoteAccountBackupMetadata(
+      backupId: _requiredBackupString(json, 'backupId'),
+      state: state,
+      formatVersion: formatVersion,
+      byteSize: byteSize,
+      sha256: digest,
+      createdAt: _optionalBackupDateTime(json, 'createdAt'),
+      completedAt: _requiredBackupDateTime(json, 'completedAt'),
+      appVersionName: _optionalBackupString(json, 'appVersionName'),
+      appVersionCode: _optionalBackupInt(json, 'appVersionCode'),
+      databaseSchemaVersion: _optionalBackupInt(json, 'databaseSchemaVersion'),
+      platform: _optionalBackupString(json, 'platform'),
+      itemCounts: _decodeBackupItemCounts(json['itemCounts']),
+    );
+  }
+
+  /// 服务端备份标识。
+  final String backupId;
+
+  /// 固定为 READY。
+  final String state;
+
+  /// 客户端备份格式版本。
+  final int formatVersion;
+
+  /// 备份对象真实大小。
+  final int byteSize;
+
+  /// 备份对象 SHA-256。
+  final String sha256;
+
+  /// 客户端创建时间；latest 响应允许省略。
+  final DateTime? createdAt;
+
+  /// 服务端完成时间。
+  final DateTime completedAt;
+
+  /// 创建备份的应用版本名；部分响应允许省略。
+  final String? appVersionName;
+
+  /// 创建备份的应用构建号；部分响应允许省略。
+  final int? appVersionCode;
+
+  /// 创建备份时的数据库版本；部分响应允许省略。
+  final int? databaseSchemaVersion;
+
+  /// 创建备份的平台；部分响应允许省略。
+  final String? platform;
+
+  /// 服务端保存的数据集计数摘要。
+  final Map<String, int> itemCounts;
+}
+
+/// 服务端备份游标分页结果。
+final class RemoteAccountBackupPage {
+  /// 创建严格解码后的分页结果。
+  RemoteAccountBackupPage({
+    required List<RemoteAccountBackupMetadata> items,
+    required this.nextCursor,
+    required this.hasMore,
+    required this.totalReadyCount,
+    required this.usedQuotaBytes,
+    required this.userQuotaBytes,
+  }) : items = List<RemoteAccountBackupMetadata>.unmodifiable(items);
+
+  /// 从不可信列表响应解码分页结果。
+  factory RemoteAccountBackupPage.fromJson(Map<Object?, Object?> json) {
+    final Object? itemsValue = json['items'];
+    if (itemsValue is! List<Object?> || json['hasMore'] is! bool) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份分页字段无效');
+    }
+    final List<RemoteAccountBackupMetadata> items = <RemoteAccountBackupMetadata>[];
+    for (final Object? itemValue in itemsValue) {
+      if (itemValue is! Map<Object?, Object?>) {
+        throw const UnifiedHttpException(HttpFailureKind.decode, '备份列表项目无效');
+      }
+      items.add(RemoteAccountBackupMetadata.fromJson(itemValue));
+    }
+    final String? nextCursor = _optionalBackupString(json, 'nextCursor');
+    final bool hasMore = json['hasMore'] as bool;
+    if (hasMore && nextCursor == null) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份下一页游标缺失');
+    }
+    return RemoteAccountBackupPage(
+      items: items,
+      nextCursor: nextCursor,
+      hasMore: hasMore,
+      totalReadyCount: _requiredNonNegativeBackupInt(json, 'totalReadyCount'),
+      usedQuotaBytes: _requiredNonNegativeBackupInt(json, 'usedQuotaBytes'),
+      userQuotaBytes: _requiredNonNegativeBackupInt(json, 'userQuotaBytes'),
+    );
+  }
+
+  /// 当前页备份。
+  final List<RemoteAccountBackupMetadata> items;
+
+  /// 下一页不透明游标。
+  final String? nextCursor;
+
+  /// 是否仍有下一页。
+  final bool hasMore;
+
+  /// 当前账号 READY 备份总数。
+  final int totalReadyCount;
+
+  /// 当前账号已用备份容量。
+  final int usedQuotaBytes;
+
+  /// 当前账号备份总配额。
+  final int userQuotaBytes;
+}
+
+/// 服务端签发的短期备份下载凭据。
+final class RemoteAccountBackupDownload {
+  /// 创建经过地址和完整性校验的下载凭据。
+  const RemoteAccountBackupDownload({
+    required this.backupId,
+    required this.downloadUri,
+    required this.expiresAt,
+    required this.byteSize,
+    required this.sha256,
+  });
+
+  /// 从不可信下载地址响应解码短期凭据。
+  factory RemoteAccountBackupDownload.fromJson(
+    Map<Object?, Object?> json, {
+    required Uri baseUri,
+  }) {
+    final int byteSize = _requiredBackupInt(json, 'byteSize');
+    final String digest = _requiredBackupString(json, 'sha256');
+    if (byteSize <= 0 || !_isSha256(digest)) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份下载完整性字段无效');
+    }
+    return RemoteAccountBackupDownload(
+      backupId: _requiredBackupString(json, 'backupId'),
+      downloadUri: _decodeBackupTransferUri(
+        json['downloadUrl'],
+        baseUri: baseUri,
+        fieldName: 'downloadUrl',
+        requireSameOrigin: false,
+      ),
+      expiresAt: _requiredBackupDateTime(json, 'expiresAt'),
+      byteSize: byteSize,
+      sha256: digest,
+    );
+  }
+
+  /// 服务端备份标识。
+  final String backupId;
+
+  /// 默认五分钟有效的只读地址。
+  final Uri downloadUri;
+
+  /// 下载地址到期时间。
+  final DateTime expiresAt;
+
+  /// 下载后必须匹配的字节数。
+  final int byteSize;
+
+  /// 下载后必须匹配的 SHA-256。
+  final String sha256;
+}
+
+/// 读取必填非空字符串备份字段。
+String _requiredBackupString(Map<Object?, Object?> json, String key) {
+  final Object? value = json[key];
+  if (value is! String || value.trim().isEmpty || value.length > 2048) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value.trim();
+}
+
+/// 读取可选非空字符串备份字段。
+String? _optionalBackupString(Map<Object?, Object?> json, String key) {
+  final Object? value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is! String || value.trim().isEmpty || value.length > 2048) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value.trim();
+}
+
+/// 读取必填整数备份字段。
+int _requiredBackupInt(Map<Object?, Object?> json, String key) {
+  final Object? value = json[key];
+  if (value is! num || !value.isFinite || value.toInt() != value) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value.toInt();
+}
+
+/// 读取可选整数备份字段。
+int? _optionalBackupInt(Map<Object?, Object?> json, String key) {
+  if (json[key] == null) {
+    return null;
+  }
+  return _requiredBackupInt(json, key);
+}
+
+/// 读取必填非负整数备份字段。
+int _requiredNonNegativeBackupInt(Map<Object?, Object?> json, String key) {
+  final int value = _requiredBackupInt(json, key);
+  if (value < 0) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value;
+}
+
+/// 读取必填 ISO-8601 备份时间。
+DateTime _requiredBackupDateTime(Map<Object?, Object?> json, String key) {
+  final DateTime? value = _optionalBackupDateTime(json, key);
+  if (value == null) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value;
+}
+
+/// 读取可选 ISO-8601 备份时间并统一转换为 UTC。
+DateTime? _optionalBackupDateTime(Map<Object?, Object?> json, String key) {
+  final String? source = _optionalBackupString(json, key);
+  if (source == null) {
+    return null;
+  }
+  final DateTime? value = DateTime.tryParse(source);
+  if (value == null) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $key 无效');
+  }
+  return value.toUtc();
+}
+
+/// 解码只允许非负整数值的数据集数量摘要。
+Map<String, int> _decodeBackupItemCounts(Object? value) {
+  if (value == null) {
+    return const <String, int>{};
+  }
+  if (value is! Map<Object?, Object?> || value.length > 32) {
+    throw const UnifiedHttpException(HttpFailureKind.decode, '备份数据计数无效');
+  }
+  final Map<String, int> counts = <String, int>{};
+  for (final MapEntry<Object?, Object?> entry in value.entries) {
+    if (entry.key is! String || entry.value is! num) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份数据计数无效');
+    }
+    final String key = entry.key as String;
+    final num number = entry.value as num;
+    if (key.isEmpty || key.length > 64 || !number.isFinite || number.toInt() != number || number < 0) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份数据计数无效');
+    }
+    counts[key] = number.toInt();
+  }
+  return counts;
+}
+
+/// 解码服务端指定的二进制上传 Header，并拒绝任意额外凭据。
+Map<String, String> _decodeBackupUploadHeaders(Object? value) {
+  if (value is! Map<Object?, Object?>) {
+    throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传 Header 无效');
+  }
+  final Map<String, String> headers = <String, String>{};
+  for (final MapEntry<Object?, Object?> entry in value.entries) {
+    if (entry.key is! String || entry.value is! String) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传 Header 无效');
+    }
+    final String key = entry.key as String;
+    final String headerValue = entry.value as String;
+    final String lowerKey = key.toLowerCase();
+    if ((lowerKey != 'content-type' && lowerKey != 'x-upload-token') ||
+        headerValue.isEmpty ||
+        headerValue.length > 4096) {
+      throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传 Header 不受支持');
+    }
+    headers[key] = headerValue;
+  }
+  String? contentType;
+  String? uploadToken;
+  for (final MapEntry<String, String> entry in headers.entries) {
+    if (entry.key.toLowerCase() == 'content-type') {
+      contentType = entry.value;
+    }
+    if (entry.key.toLowerCase() == 'x-upload-token') {
+      uploadToken = entry.value;
+    }
+  }
+  if (contentType?.toLowerCase() != 'application/octet-stream' ||
+      uploadToken == null ||
+      uploadToken.isEmpty) {
+    throw const UnifiedHttpException(HttpFailureKind.decode, '备份上传凭据缺失');
+  }
+  return headers;
+}
+
+/// 限制服务端下发的上传下载地址，HTTP 只允许回到当前配置主机。
+Uri _decodeBackupTransferUri(
+  Object? value, {
+  required Uri baseUri,
+  required String fieldName,
+  required bool requireSameOrigin,
+}) {
+  if (value is! String || value.length > 4096) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $fieldName 无效');
+  }
+  final Uri? uri = Uri.tryParse(value);
+  if (uri == null ||
+      !uri.isAbsolute ||
+      uri.userInfo.isNotEmpty ||
+      uri.hasFragment ||
+      (requireSameOrigin &&
+          (uri.scheme != baseUri.scheme ||
+              uri.host != baseUri.host ||
+              uri.port != baseUri.port)) ||
+      (!requireSameOrigin &&
+          uri.scheme != 'https' &&
+          !(uri.scheme == 'http' &&
+              uri.host == baseUri.host &&
+              uri.port == baseUri.port))) {
+    throw UnifiedHttpException(HttpFailureKind.decode, '备份字段 $fieldName 地址无效');
+  }
+  return uri;
+}
+
+/// 判断字符串是否为 64 位小写 SHA-256 十六进制摘要。
+bool _isSha256(String value) => RegExp(r'^[0-9a-f]{64}$').hasMatch(value);
 
 /// 远端 App 业务失败的安全分类；不包含服务端原始正文。
 enum RemoteAppBusinessFailureKind {

@@ -17,6 +17,7 @@ final class BookContentProcessDao {
 
   /// 按创建顺序读取指定章节全部未软删除标注。
   Future<List<BookContentProcess>> getForChapter(
+    int userId,
     String bookUrl,
     int chapterIndex,
   ) async {
@@ -25,14 +26,15 @@ final class BookContentProcessDao {
     _database.logOperation(
       operation: 'SELECT',
       table: DatabaseTables.bookContentProcesses,
-      where: 'bookUrl = ? AND chapterIndex = ? AND status != 3',
-      argumentCount: 2,
+      where: 'userId = ? AND bookUrl = ? AND chapterIndex = ? AND status != 3',
+      argumentCount: 3,
     );
     /// 当前章节按稳定顺序读取的数据库行。
     final List<Map<String, Object?>> rows = await database.query(
       DatabaseTables.bookContentProcesses,
-      where: 'bookUrl = ? AND chapterIndex = ? AND status != ?',
+      where: 'userId = ? AND bookUrl = ? AND chapterIndex = ? AND status != ?',
       whereArgs: <Object?>[
+        userId,
         bookUrl,
         chapterIndex,
         BookContentProcess.deletedStatus,
@@ -44,6 +46,7 @@ final class BookContentProcessDao {
 
   /// 观察指定章节标注；相关表提交后重新查询。
   Stream<List<BookContentProcess>> watchForChapter(
+    int userId,
     String bookUrl,
     int chapterIndex,
   ) async* {
@@ -56,7 +59,7 @@ final class BookContentProcessDao {
       observedTables,
     );
     while (true) {
-      yield await getForChapter(bookUrl, chapterIndex);
+      yield await getForChapter(userId, bookUrl, chapterIndex);
       observedRevision = await _database.changeNotifier.waitForTableChange(
         observedTables,
         observedRevision,
@@ -65,20 +68,21 @@ final class BookContentProcessDao {
   }
 
   /// 读取同一本书当前最大的标注排序值。
-  Future<int> maxOrder(String bookUrl) async {
+  Future<int> maxOrder(int userId, String bookUrl) async {
     /// 已打开的共享数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'SELECT_MAX',
       table: DatabaseTables.bookContentProcesses,
-      where: 'bookUrl = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND bookUrl = ?',
+      argumentCount: 2,
     );
     /// SQLite 聚合查询结果。
     final List<Map<String, Object?>> rows = await database.rawQuery(
       'SELECT COALESCE(MAX(sortOrder), 0) AS maxOrder '
-      'FROM ${DatabaseTables.bookContentProcesses} WHERE bookUrl = ?',
-      <Object?>[bookUrl],
+      'FROM ${DatabaseTables.bookContentProcesses} '
+      'WHERE userId = ? AND bookUrl = ?',
+      <Object?>[userId, bookUrl],
     );
     if (rows.isEmpty) {
       return 0;
@@ -89,7 +93,7 @@ final class BookContentProcessDao {
   }
 
   /// 以稳定主键新增或替换一条正文标注。
-  Future<void> upsert(BookContentProcess process) async {
+  Future<void> upsert(int userId, BookContentProcess process) async {
     /// 已打开的共享数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
@@ -99,7 +103,7 @@ final class BookContentProcessDao {
     );
     await database.insert(
       DatabaseTables.bookContentProcesses,
-      _toMap(process),
+      <String, Object?>{'userId': userId, ..._toMap(process)},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _database.changeNotifier.notifyTables(
@@ -108,14 +112,19 @@ final class BookContentProcessDao {
   }
 
   /// 更新一条标注的启用状态。
-  Future<void> setEnabled(String id, bool enabled, int updatedAt) async {
+  Future<void> setEnabled(
+    int userId,
+    String id,
+    bool enabled,
+    int updatedAt,
+  ) async {
     /// 已打开的共享数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'UPDATE',
       table: DatabaseTables.bookContentProcesses,
-      where: 'id = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND id = ?',
+      argumentCount: 2,
     );
     await database.update(
       DatabaseTables.bookContentProcesses,
@@ -123,8 +132,8 @@ final class BookContentProcessDao {
         'enabled': enabled ? 1 : 0,
         'updatedAt': updatedAt,
       },
-      where: 'id = ?',
-      whereArgs: <Object?>[id],
+      where: 'userId = ? AND id = ?',
+      whereArgs: <Object?>[userId, id],
     );
     _database.changeNotifier.notifyTables(
       <String>{DatabaseTables.bookContentProcesses},
@@ -132,14 +141,14 @@ final class BookContentProcessDao {
   }
 
   /// 将一条标注软删除，保留同步和冲突处理所需事实。
-  Future<void> markDeleted(String id, int updatedAt) async {
+  Future<void> markDeleted(int userId, String id, int updatedAt) async {
     /// 已打开的共享数据库连接。
     final Database database = await _database.database;
     _database.logOperation(
       operation: 'SOFT_DELETE',
       table: DatabaseTables.bookContentProcesses,
-      where: 'id = ?',
-      argumentCount: 1,
+      where: 'userId = ? AND id = ?',
+      argumentCount: 2,
     );
     await database.update(
       DatabaseTables.bookContentProcesses,
@@ -147,12 +156,34 @@ final class BookContentProcessDao {
         'status': BookContentProcess.deletedStatus,
         'updatedAt': updatedAt,
       },
-      where: 'id = ?',
-      whereArgs: <Object?>[id],
+      where: 'userId = ? AND id = ?',
+      whereArgs: <Object?>[userId, id],
     );
     _database.changeNotifier.notifyTables(
       <String>{DatabaseTables.bookContentProcesses},
     );
+  }
+
+  /// 读取当前账号全部未软删除用户标注，供逻辑备份导出使用。
+  Future<List<BookContentProcess>> getAllActive(
+    int userId, {
+    DatabaseExecutor? executor,
+  }) async {
+    /// 当前查询使用的数据库或备份只读事务。
+    final DatabaseExecutor queryExecutor = executor ?? await _database.database;
+    _database.logOperation(
+      operation: 'SELECT',
+      table: DatabaseTables.bookContentProcesses,
+      where: 'userId = ? AND status != 3 orderBy=createdAt ASC',
+      argumentCount: 2,
+    );
+    final List<Map<String, Object?>> rows = await queryExecutor.query(
+      DatabaseTables.bookContentProcesses,
+      where: 'userId = ? AND status != ?',
+      whereArgs: <Object?>[userId, BookContentProcess.deletedStatus],
+      orderBy: 'createdAt ASC',
+    );
+    return rows.map(_fromMap).toList(growable: false);
   }
 
   /// 把领域正文标注转换为 Android 兼容数据库列。

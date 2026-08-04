@@ -4,7 +4,7 @@
 >
 > 本文件是导航索引，不替代强制规则、源码事实、阶段验收记录或用户当前回合的明确要求。
 >
-> 最后静态核对：2026-08-02。未运行编译、测试、分析、格式化或应用启动。
+> 最后静态核对：2026-08-04。未运行编译、测试、分析、格式化或应用启动。
 
 ## 1. AI 使用顺序
 
@@ -40,7 +40,7 @@
 | Android minSdk | `26` |
 | iOS Bundle Identifier | `io.legado.flutter` |
 | iOS Deployment Target | `16.0` |
-| 独立数据库 | `legado_flutter.db`，当前 Schema v11；书架、分组、目录、阅读历史、进度、下载附属状态和目录更新检查点按游客或登录账号作用域隔离 |
+| 独立数据库 | `legado_flutter.db`，当前 Schema v12；书架、分组、目录、阅读历史、进度、书签、正文标注、替换规则、下载附属状态和目录更新检查点按游客或登录账号作用域隔离 |
 | 覆盖安装与版本基线 | [`../../VERSION.md`](../../VERSION.md)：晚间打包时对照 applicationId、签名、`versionCode` / `versionName`、SQLite Schema 与其他持久化数据，判断能否覆盖安装并保留数据 |
 | 原 Android 参考实现 | 位于**同级兄弟仓库** `legado-with-MD3`（不在本仓库内）的 `app/src/main/java/io/legado/app/`；本索引第 6 节“Android 对照”列的路径均相对该兄弟仓库 |
 | 重写文档主目录 | `docs/flutter-rewrite/` |
@@ -438,7 +438,7 @@ ReaderScreen
 
 ## 8. 数据层索引
 
-当前 Schema v11 的核心表定义位于 `data/local/legado_database.dart`：
+当前 Schema v12 的核心表定义位于 `data/local/legado_database.dart`：
 
 | 表 | DAO | 领域入口 / Repository |
 |---|---|---|
@@ -448,11 +448,11 @@ ReaderScreen
 | `chapters` | `BookChapterDao` | `ChapterGateway` / `BookRepository`；复合外键 `(userId, bookUrl)` 指向同一用户书架 |
 | `reading_history_books`、`reading_history_chapters` | `ReadingHistoryDao` | `ReadingHistoryGateway` / `ReadingHistoryRepository` / `RecordReadingHistoryUseCase` / `DeleteReadingHistoryUseCase`；分别以 `(userId, bookUrl)` 和 `(userId, url, bookUrl)` 隔离，批量删除书籍时目录外键级联 |
 | `searchBooks` | `SearchBookDao` | 当前为数据层缓存能力，修改前确认真实调用方 |
-| `bookmarks` | `BookmarkDao` | `BookmarkGateway` / `ReaderRepository` |
-| `book_content_processes` | `BookContentProcessDao` | `BookContentProcessGateway` / `ReaderRepository` / `SaveBookContentProcessUseCase` |
+| `bookmarks` | `BookmarkDao` | `BookmarkGateway` / `ReaderRepository`；Schema v12 增加 `userId` 作用域 |
+| `book_content_processes` | `BookContentProcessDao` | `BookContentProcessGateway` / `ReaderRepository` / `SaveBookContentProcessUseCase`；Schema v12 增加 `userId` 作用域 |
 | `cookies` | `CookieDao` | `LegadoCookieManager` |
 | `caches` | `CacheDao` | `ReaderCacheGateway`、`SearchHistoryGateway`（按用户派生键隔离搜索词，旧固定键单飞删除）、JS cache API、`AnalyticsRecorder` 授权/事件桶、`SourceSuccessRateReporter` 聚合桶 |
-| `replace_rules` | `ReplaceRuleDao` | `ReplaceRuleGateway` / `ReaderRepository` |
+| `replace_rules` | `ReplaceRuleDao` | `ReplaceRuleGateway` / `ReaderRepository`；Schema v12 增加 `userId` 作用域 |
 | `download_tasks`、`download_book_states` | `DownloadTaskDao` | `DownloadGateway` / `DownloadRepository` / App 级 `DownloadCoordinator`；按用户复合键持久化任务归因、批次评分和自动换源锁定，会话切换取消旧调度代次 |
 | `toc_refresh_checkpoints` | `TocRefreshCheckpointDao` | `BookshelfHistoryAutoRefreshService`；按 `(userId, bookUrl)` 保存分页锚点、已访问页集合、末章锚点和完整校准时间，损坏或不匹配时回退全量刷新 |
 
@@ -541,6 +541,7 @@ P0 集中验收入口：[`P0_PENDING_VERIFICATION_CHECKLIST.md`](./P0_PENDING_VE
 | M11 当前 Feature 与门禁记录 | [`m11/README.md`](./m11/README.md) |
 | 漫画图片书源搜索、加入书架、阅读分流、图片解析、缓存、进度和双平台验收步骤 | [`m11/manga/README.md`](./m11/manga/README.md)：步骤 0 已通过，步骤 1～10 已写入并统一待最终验证；公开基础样本、固定输入、三端记录表和脱敏边界见 [`m11/manga/01_sample_and_acceptance_baseline.md`](./m11/manga/01_sample_and_acceptance_baseline.md) |
 | App 后端 API 接入范围、HMAC 决策、P0 启动/过滤基础设施与后续实施顺序；2026-07-23 App API 文档的登录、日志、版本和更新契约差异；根目录 `app_build_secrets.json` 是 Android 构建脚本和 iOS Xcode Build Phase 共用的 Dart HMAC 编译参数来源，`tool/encode_app_build_secrets.dart` 与 `ios/scripts/xcode_backend_with_app_build_secrets.sh` 负责为 Xcode 转换并注入 `DART_DEFINES` | [`m11/backend_api_integration/01_implementation_plan.md`](./m11/backend_api_integration/01_implementation_plan.md)、[`05_app_api_20260723_gap_analysis.md`](./m11/backend_api_integration/05_app_api_20260723_gap_analysis.md) |
+| 登录账号备份文件的服务端 API v2、上传状态机、存储、SHA-256、幂等、配额、历史版本、下载删除和隐私边界；Flutter 已在 [`RemoteAppApi`](../../lib/src/api/remote_app/remote_app_api.dart)、[`AccountBackupGateway`](../../lib/src/domain/gateway/account_backup_gateway.dart)、[`AccountBackupArtifact / AccountBackupRecord`](../../lib/src/domain/model/account_backup.dart)、[`AccountBackupRepository`](../../lib/src/data/repository/account_backup_repository.dart) 和 `AppDependencies.accountBackupGateway` 接入本地 `.pnbak` 快照、初始化/原始 PUT/完成确认、分页/latest、短期下载、严格归档校验、当前账号替换式恢复事务、幂等删除与脱敏日志；逻辑已写入待用户运行验证，UI 入口待后续接线 | [`m11/backend_api_integration/14_account_backup_server_api_design.md`](./m11/backend_api_integration/14_account_backup_server_api_design.md) |
 | App 用户注册登录、RSA-OAEP 密码传输、邀请码、权限读取、内存会话与导出 API 契约缺口；安全持久化 Token、启动/前台自动恢复与双 Token 迁移设计 | [`m11/backend_api_integration/02_authentication_and_api_gap_plan.md`](./m11/backend_api_integration/02_authentication_and_api_gap_plan.md)、[`04_authentication_rsa_oaep_upgrade_design.md`](./m11/backend_api_integration/04_authentication_rsa_oaep_upgrade_design.md)、[`06_persistent_auth_session_design.md`](./m11/backend_api_integration/06_persistent_auth_session_design.md)、[`07_dual_token_session_migration_design.md`](./m11/backend_api_integration/07_dual_token_session_migration_design.md) |
 | App 准入轮询、拒绝阻断、Android 退出与升级弹窗的平台差异；已确认状态在 `caches` 持久化并按当前安装包版本恢复 | [`m11/backend_api_integration/03_app_access_and_update_plan.md`](./m11/backend_api_integration/03_app_access_and_update_plan.md)、[`m11/backend_api_integration/11_persistent_app_access_and_update_state_design.md`](./m11/backend_api_integration/11_persistent_app_access_and_update_state_design.md) |
 | 已确认 App 准入拒绝、强制/普通升级状态的本地持久化、相同版本离线恢复阻断及新版本缓存失效规则 | [`m11/backend_api_integration/11_persistent_app_access_and_update_state_design.md`](./m11/backend_api_integration/11_persistent_app_access_and_update_state_design.md) |
